@@ -3,20 +3,14 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   ArrowRight,
-  ChevronRight,
-  ChevronsUpDown,
+  Check as Tick,
+  ChevronDown,
   Database,
   FlaskConical,
-  Hash,
-  ListChecks,
   MessageSquareQuote,
   MessagesSquare,
-  Minus,
   Play,
   Plus,
-  RefreshCw,
-  ScrollText,
-  Tag,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { agentKey } from "../../app/agent";
@@ -41,7 +35,6 @@ import { ServiceDown } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
 import { Menu } from "../../ui/Menu";
 import { Sheet } from "../../ui/Sheet";
-import { Switch } from "../../ui/Switch";
 
 const MAX = 300; // conversations one launch takes at most (api/launches.py, LaunchCommand)
 const OPTIONS: { id: Mode; icon: typeof Database; description: string; live: boolean }[] = [
@@ -64,9 +57,6 @@ const OPTIONS: { id: Mode; icon: typeof Database; description: string; live: boo
     live: true,
   },
 ];
-
-/** The colour of each way's tile: the recorded answers dark, the live agent blue, the simulations orange. */
-const WAY_TINT: Record<Mode, string> = { dataset: "bg-fg", questions: "bg-run", simulations: "bg-warn" };
 
 /** What the form remembers between visits, per agent and check: a choice that is gone falls back to the current one. */
 type Draft = {
@@ -118,114 +108,46 @@ function ruleChoices(versions: JudgeVersion[], selectedId: string | null): Judge
 const versionWord = (v: JudgeVersion, all: JudgeVersion[]) =>
   all.some((other) => other.setId === v.setId && other.id !== v.id) ? ` · версия ${v.version}` : "";
 
-/** The coloured square of a row, as a setting's icon: what the row is about at a glance. */
-function Tile({ icon: Icon, tint }: { icon: typeof Database; tint: string }) {
-  return (
-    <span aria-hidden className={cn("grid size-7 shrink-0 place-items-center rounded-[8px] text-white", tint)}>
-      <Icon className="size-4" strokeWidth={2.2} />
-    </span>
-  );
-}
-
 /**
- * A white rounded list on the grey page; the line between its rows starts after the tiles, as in a list of settings.
- * Nothing is clipped at its edge: a row's menu opens over the rows below.
+ * A word of the sentence that is chosen: the word itself, dotted under, a small chevron when it opens a list; a light
+ * ground only under the pointer. Opened or typed in, it stays a word of the line.
  */
-const LIST =
-  "rounded-block bg-canvas shadow-[0_1px_2px_rgb(0_0_0/0.04)] ring-1 ring-line [&>*+*]:relative [&>*+*]:before:pointer-events-none [&>*+*]:before:absolute [&>*+*]:before:left-14 [&>*+*]:before:right-0 [&>*+*]:before:top-0 [&>*+*]:before:h-px [&>*+*]:before:bg-line [&>*+*]:before:content-['']";
+const WORD =
+  "inline-flex items-center gap-0.5 rounded-md px-1 align-baseline font-medium text-fg transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60";
+const DOTTED = "underline decoration-fg-4 decoration-dotted decoration-[1.5px] underline-offset-[7px]";
 
-/** A group of rows on the grey page: its name over it, a line under it that explains it. */
-function Group({ title, note, children }: { title?: string; note?: ReactNode; children: ReactNode }) {
-  return (
-    <section className="mt-7 first:mt-0">
-      {title && <h3 className="mb-2 px-4 text-small text-fg-3">{title}</h3>}
-      <div className={LIST}>{children}</div>
-      {note && <div className="mt-2 px-4 text-small text-fg-3">{note}</div>}
-    </section>
-  );
-}
+/** A word to be added: what the sentence still lacks, in the colour of a link. */
+const LACK =
+  "inline-flex items-center gap-1 rounded-control px-1.5 py-0.5 align-baseline font-medium text-run transition-colors hover:bg-run/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60";
 
-/** One row of a group: its tile and name, a line under the name, what is chosen on the right. */
-function Row({
-  tile,
-  title,
-  sub,
-  children,
-}: {
-  tile: ReactNode;
-  title: ReactNode;
-  sub?: ReactNode;
-  children?: ReactNode;
-}) {
+/** A word that opens a list of choices: its value and a small chevron. */
+function Word({ children }: { children: ReactNode }) {
   return (
-    <div className="flex min-h-[52px] items-center gap-3 px-4 py-2.5">
-      {tile}
-      <div className="min-w-0 flex-1">
-        <p className="text-read text-fg">{title}</p>
-        {sub && <p className="text-small text-fg-3">{sub}</p>}
-      </div>
-      {children && <div className="flex min-w-0 shrink-0 items-center justify-end gap-2">{children}</div>}
-    </div>
-  );
-}
-
-/** The chosen value of a row that opens a list to choose from, as a pop-up button reads. */
-function Picked({ children }: { children: ReactNode }) {
-  return (
-    <span className="flex max-w-[16rem] items-center gap-1 text-read text-fg-3 hover:text-fg">
-      <span className="min-w-0 truncate">{children}</span>
-      <ChevronsUpDown aria-hidden className="size-3.5 shrink-0" />
+    <span className={WORD}>
+      <span className={DOTTED}>{children}</span>
+      <ChevronDown aria-hidden className="size-4 text-fg-3" />
     </span>
   );
 }
 
-/** A number with − and +, typed in as well: by ten, within what one launch takes. */
-function Stepper({
-  value,
-  shown,
-  most,
-  onType,
-  onSet,
-  onBlur,
-}: {
-  value: number;
-  shown: string;
-  most: number;
-  onType: (text: string) => void;
-  onSet: (n: number) => void;
-  onBlur: () => void;
-}) {
-  const button =
-    "grid size-7 place-items-center rounded-[8px] text-fg-2 transition-colors hover:bg-canvas hover:text-fg disabled:opacity-30";
+/** One way to check as a chip to switch on and off: dark with a tick when on, a «+» when off, dashed when it cannot run. */
+function WayChip({ id, on, off, onToggle }: { id: Mode; on: boolean; off: boolean; onToggle: () => void }) {
+  const Icon = on ? Tick : Plus;
   return (
-    <div className="flex items-center rounded-control bg-fg/[0.06] p-0.5">
-      <button
-        type="button"
-        aria-label="Меньше"
-        className={button}
-        disabled={value <= 1}
-        onClick={() => onSet(Math.max(1, value - 10))}
-      >
-        <Minus className="size-3.5" />
-      </button>
-      <input
-        aria-label="Сколько разговоров проверить"
-        inputMode="numeric"
-        value={shown}
-        onChange={(e) => onType(e.target.value.replace(/\D/g, "").slice(0, 3))}
-        onBlur={onBlur}
-        className="w-12 bg-transparent text-center text-read tabular-nums text-fg focus:outline-none"
-      />
-      <button
-        type="button"
-        aria-label="Больше"
-        className={button}
-        disabled={value >= most}
-        onClick={() => onSet(Math.min(most, value + 10))}
-      >
-        <Plus className="size-3.5" />
-      </button>
-    </div>
+    <button
+      type="button"
+      aria-pressed={on}
+      disabled={off}
+      onClick={onToggle}
+      className={cn(
+        "inline-flex h-9 items-center gap-1.5 rounded-full px-3.5 text-body transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60",
+        on ? "bg-fg text-canvas" : "text-fg-2 ring-1 ring-inset ring-line-strong hover:bg-hover hover:text-fg",
+        off && "cursor-default text-fg-4 ring-dashed hover:bg-transparent hover:text-fg-4",
+      )}
+    >
+      <Icon aria-hidden className="size-3.5" strokeWidth={on ? 3 : 2} />
+      {MODE_NAME[id]}
+    </button>
   );
 }
 
@@ -378,38 +300,95 @@ export function LaunchPage({ check }: { check: Check }) {
   };
 
   const collecting = !!state?.job.running && state.job.kind === "tone-criteria";
-  const [more, setMore] = useState(false);
-  // What the launch waits for, said beside its button; the row of what is missing gives the way to it.
+  const [versioning, setVersioning] = useState(!!draft.version);
+  // What the launch waits for, said beside its button; the word that is missing in the sentence gives the way to it.
   const why = state?.job.running && !collecting ? "Сейчас идёт другая задача этого агента." : ready ? null : missing;
-  const by = rules
-    ? `по ${subset ? `${subset.length} из ${criteria.length}` : criteria.length} ${plural(
-        subset ? subset.length : criteria.length,
-        "критерию",
-        "критериям",
-        "критериям",
-      )} «${rules.name}»`
-    : fromCode
-      ? extractedBefore && replan
-        ? "по критериям, которые заново извлечём из кода агента"
-        : "по критериям из кода агента"
-      : null;
-  const plan =
-    dataset && conversations
-      ? `Проверим ${count(conversations, "разговор", "разговора", "разговоров")} из «${shownName(dataset)}»${
-          by ? ` ${by}` : ""
-        }.`
-      : "Выберите разговоры, правила и что проверить.";
-  const action =
-    "rounded-sm text-read text-run hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60";
+  const rulesMenu = [
+    ...(check === "code" && codeSources(state).length > 0
+      ? [
+          {
+            key: "code",
+            label: "Критерии из кода агента",
+            sub: "Из инструкций и инструментов агента",
+            on: rulesId === "",
+            run: () => setJudgeId(""),
+          },
+        ]
+      : []),
+    ...ruleChoices(versions, rulesId).map((v) => ({
+      key: v.id,
+      label: `${v.name}${versionWord(v, versions)}`,
+      sub: count(v.criteria.length, "критерий", "критерия", "критериев"),
+      on: v.id === rulesId,
+      run: () => setJudgeId(v.id),
+    })),
+    ...(extractedBefore && rulesId === ""
+      ? [
+          {
+            key: "replan",
+            label: "Извлечь критерии заново",
+            sub: "Если у агента изменились инструкции или инструменты",
+            on: replan,
+            run: () => setReplan((on) => !on),
+          },
+        ]
+      : []),
+    ...(check === "tone" ? [{ key: "doc", label: "Собрать из документа", run: () => setCollect(true) }] : []),
+    {
+      key: "edit",
+      label: "Изменить правила",
+      run: () => void navigate(criterionLink(check, null, { rules: "1" })),
+    },
+  ];
+  const lackOfRules =
+    judges.data && !rulesReady && !fromCode ? (
+      check === "tone" ? (
+        collecting ? (
+          <span className={cn(LACK, "text-fg-3 hover:bg-transparent")}>собираем критерии…</span>
+        ) : (
+          <button type="button" onClick={() => setCollect(true)} className={LACK}>
+            <Plus aria-hidden className="size-4" />
+            правилам общения
+          </button>
+        )
+      ) : (
+        <Link to={`${SECTIONS.agent}?return=code`} className={LACK}>
+          <Plus aria-hidden className="size-4" />
+          критериям из кода агента
+        </Link>
+      )
+    ) : null;
+  const hint =
+    library && !dataset ? (
+      <span className="flex flex-wrap items-center gap-3">
+        Проверка идёт по выгрузке чата с настоящими разговорами.
+        <UploadButton variant="outline" label="Загрузить выгрузку" />
+      </span>
+    ) : lackOfRules ? (
+      check === "tone" ? (
+        collecting ? (
+          "Модель собирает критерии из документа — потом можно запускать."
+        ) : (
+          "Критерии соберутся из правил общения банка: документ или текст."
+        )
+      ) : (
+        <>
+          Критерии соберутся из кода агента, когда он подключён. Или{" "}
+          <Link to={criterionLink("code", null, { rules: "1" })} className="text-run hover:underline">
+            выберите готовый набор правил
+          </Link>
+          .
+        </>
+      )
+    ) : null;
   return (
-    <div className="flex min-h-full flex-col bg-inset">
+    <div>
       <Header title={CHECK_NAME[check]} tabs={<StageTabs stage={check} />} />
       {offline && !state ? (
         <ServiceDown />
       ) : (
-        <div className="w-full max-w-[720px] px-4 pb-16 pt-8 lg:px-10">
-          <h2 className="px-4 text-page font-semibold text-fg">Новая проверка</h2>
-          <p className="mt-1.5 px-4 text-read text-fg-3">{plan}</p>
+        <div className="max-w-[880px] px-4 pb-16 pt-8 lg:px-10">
+          <h2 className="text-page font-semibold text-fg">Новая проверка</h2>
           {failed && (
             <div className="mt-6">
               <LoadFailed
@@ -422,273 +401,181 @@ export function LaunchPage({ check }: { check: Check }) {
               />
             </div>
           )}
-          <fieldset disabled={blocked} className="mt-8">
-            <Group
-              title="Разговоры"
-              note={
-                !library
-                  ? null
-                  : !dataset
-                    ? "Проверка идёт по выгрузке чата с настоящими разговорами."
-                    : total > MAX
-                      ? `За раз — до ${MAX} разговоров.`
-                      : null
-              }
-            >
-              <Row tile={<Tile icon={Database} tint="bg-run" />} title="Датасет">
-                {!library ? null : !dataset ? (
-                  <UploadButton variant="outline" label="Загрузить" />
-                ) : library.datasets.length > 1 ? (
+          <fieldset disabled={blocked}>
+            {/* The launch said as one sentence; each of its words that can be chosen is chosen right in it. */}
+            <p className="mt-6 max-w-[40ch] text-title leading-[2.75rem] text-fg-2 sm:max-w-none">
+              Проверим{" "}
+              {dataset ? (
+                <input
+                  aria-label="Сколько разговоров проверить"
+                  inputMode="numeric"
+                  value={wanted > most && most > 0 ? String(most) : size}
+                  onChange={(e) => setSize(e.target.value.replace(/\D/g, "").slice(0, 3))}
+                  onBlur={() => setSize(String(conversations || Math.min(100, most) || draft.size))}
+                  style={{ width: `${Math.max(2, (wanted > most ? String(most) : size).length) + 0.6}ch` }}
+                  className="inline-block border-b-[1.5px] border-dotted border-fg-4 bg-transparent text-center font-medium tabular-nums text-fg transition-colors hover:border-fg-3 focus:border-solid focus:border-fg focus:outline-none"
+                />
+              ) : null}{" "}
+              {plural(conversations || 0, "разговор", "разговора", "разговоров")} из{" "}
+              {!library ? (
+                "…"
+              ) : !dataset ? (
+                <span className="text-fg-3">выгрузки чата</span>
+              ) : library.datasets.length > 1 ? (
+                <Menu
+                  items={library.datasets.map((d) => ({
+                    key: d.id,
+                    label: shownName(d),
+                    sub: datasetFacts(d).join(" · "),
+                    on: d.id === dataset.id,
+                    run: () => setDatasetId(d.id),
+                  }))}
+                  trigger={<Word>«{shownName(dataset)}»</Word>}
+                />
+              ) : (
+                <span className="font-medium text-fg">«{shownName(dataset)}»</span>
+              )}
+              <br />
+              по{" "}
+              {!judges.data ? (
+                "…"
+              ) : lackOfRules ? (
+                lackOfRules
+              ) : rules ? (
+                <>
+                  {check === "tone" && criteria.length > 1 ? (
+                    <button type="button" onClick={() => setPicking(true)} className={WORD}>
+                      <span className={DOTTED}>
+                        {subset ? `${subset.length} из ${criteria.length}` : criteria.length}{" "}
+                        {plural(subset ? subset.length : criteria.length, "критерию", "критериям", "критериям")}
+                      </span>
+                      <ChevronDown aria-hidden className="size-4 text-fg-3" />
+                    </button>
+                  ) : (
+                    <span className="font-medium text-fg">
+                      {criteria.length} {plural(criteria.length, "критерию", "критериям", "критериям")}
+                    </span>
+                  )}{" "}
+                  из правил{" "}
                   <Menu
-                    align="right"
-                    items={library.datasets.map((d) => ({
-                      key: d.id,
-                      label: shownName(d),
-                      sub: datasetFacts(d).join(" · "),
-                      on: d.id === dataset.id,
-                      run: () => setDatasetId(d.id),
-                    }))}
+                    items={rulesMenu}
                     trigger={
-                      <Picked>
-                        {shownName(dataset)} · {total}
-                      </Picked>
+                      <Word>
+                        «{rules.name}
+                        {versionWord(rules, versions)}»
+                      </Word>
                     }
                   />
+                </>
+              ) : (
+                <Menu
+                  items={rulesMenu}
+                  trigger={
+                    <Word>
+                      {extractedBefore && replan ? "критериям, извлечённым заново из кода" : "критериям из кода агента"}
+                    </Word>
+                  }
+                />
+              )}
+            </p>
+            {hint && <div className="mt-3 text-body text-fg-3">{hint}</div>}
+
+            <div className="mt-8 flex flex-wrap gap-2">
+              {OPTIONS.map(({ id, live: needsAgent }) => (
+                <WayChip
+                  key={id}
+                  id={id}
+                  on={chosen.includes(id)}
+                  off={needsAgent && !reachable.length}
+                  onToggle={() => setModes((all) => (all.includes(id) ? all.filter((m) => m !== id) : [...all, id]))}
+                />
+              ))}
+            </div>
+            <p className="mt-3 max-w-[70ch] text-body text-fg-3">
+              {OPTIONS.filter((o) => chosen.includes(o.id))
+                .map((o) => o.description)
+                .join(" ")}
+              {!reachable.length && (
+                <>
+                  {chosen.length ? " " : ""}
+                  Вопросы агенту и симуляции — когда он подключён.{" "}
+                  <Link to={`${SECTIONS.agent}?return=${check}`} className="text-run hover:underline">
+                    Подключить
+                  </Link>
+                </>
+              )}
+              {chosen.includes("simulations") &&
+                " Если сценариев ещё нет, сначала найдём ошибки в выбранных разговорах."}
+            </p>
+            {live && way && (
+              <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-body text-fg-3">
+                {reachable.length > 1 ? (
+                  <label className="flex items-center gap-2">
+                    Агент
+                    <Select value={way.id} onChange={(e) => setTarget(e.target.value)} className="h-8 w-auto">
+                      {reachable.map((t) => (
+                        <option value={t.id} key={t.id}>
+                          {t.name}
+                        </option>
+                      ))}
+                    </Select>
+                  </label>
                 ) : (
-                  <span className="truncate text-read text-fg-3">
-                    {shownName(dataset)} · {total}
+                  <span>
+                    Агент: {way.name}
+                    {way.where ? ` · ${way.where}` : ""}
                   </span>
                 )}
-              </Row>
-              {dataset && (
-                <Row
-                  tile={<Tile icon={Hash} tint="bg-fg/60" />}
-                  title="Сколько проверить"
-                  sub={`из ${count(total, "разговора", "разговоров", "разговоров")}`}
-                >
-                  <Stepper
-                    value={conversations || 1}
-                    // The count kept from before is shown as what this dataset allows: 12, not 100, of 12.
-                    shown={wanted > most && most > 0 ? String(most) : size}
-                    most={most}
-                    onType={setSize}
-                    onSet={(n) => setSize(String(n))}
-                    onBlur={() => setSize(String(conversations || Math.min(100, most) || draft.size))}
-                  />
-                </Row>
-              )}
-            </Group>
+                <Link to={`${SECTIONS.agent}?return=${check}`} className="text-run hover:underline">
+                  Проверить связь
+                </Link>
+              </p>
+            )}
 
-            <Group
-              title="Правила"
-              note={
-                judges.data && !rulesReady ? (
-                  check === "tone" ? (
-                    collecting ? (
-                      "Модель собирает критерии из документа — потом можно запускать."
-                    ) : (
-                      "Критерии соберутся из правил общения банка: документ или текст."
-                    )
-                  ) : (
-                    <>
-                      Критерии соберутся из кода агента, когда он подключён. Или{" "}
-                      <Link to={criterionLink("code", null, { rules: "1" })} className="text-run hover:underline">
-                        выберите готовый набор правил
-                      </Link>
-                      .
-                    </>
-                  )
-                ) : fromCode ? (
-                  "Критерии соберутся из инструкций и инструментов агента."
-                ) : null
-              }
-            >
-              <Row tile={<Tile icon={ScrollText} tint="bg-mark-strong" />} title="Правила">
-                {!judges.data ? null : !rulesReady && !fromCode ? (
-                  check === "tone" ? (
-                    collecting ? (
-                      <span className="text-read text-fg-3">Собираем…</span>
-                    ) : (
-                      <button type="button" onClick={() => setCollect(true)} className={action}>
-                        Добавить
-                      </button>
-                    )
-                  ) : (
-                    <Link to={`${SECTIONS.agent}?return=code`} className={action}>
-                      Подключить код
-                    </Link>
-                  )
-                ) : (
-                  <Menu
-                    align="right"
-                    items={[
-                      ...(check === "code" && codeSources(state).length > 0
-                        ? [
-                            {
-                              key: "code",
-                              label: "Критерии из кода агента",
-                              sub: "Из инструкций и инструментов",
-                              on: rulesId === "",
-                              run: () => setJudgeId(""),
-                            },
-                          ]
-                        : []),
-                      ...ruleChoices(versions, rulesId).map((v) => ({
-                        key: v.id,
-                        label: `${v.name}${versionWord(v, versions)}`,
-                        sub: count(v.criteria.length, "критерий", "критерия", "критериев"),
-                        on: v.id === rulesId,
-                        run: () => setJudgeId(v.id),
-                      })),
-                      ...(check === "tone"
-                        ? [{ key: "doc", label: "Собрать из документа", run: () => setCollect(true) }]
-                        : []),
-                      {
-                        key: "edit",
-                        label: "Изменить правила",
-                        run: () => void navigate(criterionLink(check, null, { rules: "1" })),
-                      },
-                    ]}
-                    trigger={
-                      <Picked>{rules ? `${rules.name}${versionWord(rules, versions)}` : "Из кода агента"}</Picked>
-                    }
+            <div className="mt-10 flex flex-wrap items-center gap-x-5 gap-y-3">
+              <Button
+                size="lg"
+                variant="primary"
+                icon={Play}
+                loading={busy}
+                disabled={!ready || blocked}
+                onClick={start}
+              >
+                Запустить проверку
+              </Button>
+              {versioning ? (
+                <label className="flex items-center gap-2 text-body text-fg-3">
+                  версия агента
+                  <input
+                    autoFocus={!version}
+                    value={version}
+                    onChange={(e) => setVersion(e.target.value)}
+                    maxLength={80}
+                    placeholder="например, v2.4"
+                    className="w-40 border-b border-line-strong bg-transparent pb-0.5 text-body text-fg placeholder:text-fg-4 focus:border-fg focus:outline-none"
                   />
-                )}
-              </Row>
-              {check === "tone" && rules && criteria.length > 1 && (
+                </label>
+              ) : (
                 <button
                   type="button"
-                  onClick={() => setPicking(true)}
-                  className="block w-full text-left first:rounded-t-block last:rounded-b-block hover:bg-hover"
+                  onClick={() => setVersioning(true)}
+                  className="inline-flex items-center gap-1 text-body text-fg-3 hover:text-fg"
                 >
-                  <Row tile={<Tile icon={ListChecks} tint="bg-mark-strong/80" />} title="Критерии">
-                    <span className="flex items-center gap-1 text-read text-fg-3">
-                      {subset ? `${subset.length} из ${criteria.length}` : `Все ${criteria.length}`}
-                      <ChevronRight aria-hidden className="size-4" />
-                    </span>
-                  </Row>
+                  <Plus aria-hidden className="size-3.5" />
+                  версия агента
                 </button>
               )}
-            </Group>
-
-            <Group
-              title="Что проверить"
-              note={
-                live && way ? (
-                  <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
-                    {reachable.length > 1 ? (
-                      <label className="flex items-center gap-2">
-                        Агент
-                        <Select value={way.id} onChange={(e) => setTarget(e.target.value)} className="h-8 w-auto">
-                          {reachable.map((t) => (
-                            <option value={t.id} key={t.id}>
-                              {t.name}
-                            </option>
-                          ))}
-                        </Select>
-                      </label>
-                    ) : (
-                      <span>
-                        Агент: {way.name}
-                        {way.where ? ` · ${way.where}` : ""}
-                      </span>
-                    )}
-                    <Link to={`${SECTIONS.agent}?return=${check}`} className="text-run hover:underline">
-                      Проверить связь
-                    </Link>
-                  </span>
-                ) : (
-                  "У каждого режима будет свой итог."
-                )
-              }
-            >
-              {OPTIONS.map(({ id, icon, description, live: needsAgent }) => {
-                const off = needsAgent && !reachable.length;
-                const on = chosen.includes(id);
-                return (
-                  <Row
-                    key={id}
-                    tile={<Tile icon={icon} tint={off ? "bg-fg/25" : WAY_TINT[id]} />}
-                    title={<span className={off ? "text-fg-3" : undefined}>{MODE_NAME[id]}</span>}
-                    sub={
-                      off ? (
-                        <>
-                          Нужно подключение к агенту.{" "}
-                          <Link to={`${SECTIONS.agent}?return=${check}`} className="text-run hover:underline">
-                            Настроить
-                          </Link>
-                        </>
-                      ) : id === "simulations" && on ? (
-                        "Если сценариев ещё нет, сначала найдём ошибки в выбранных разговорах."
-                      ) : (
-                        description
-                      )
-                    }
-                  >
-                    <Switch
-                      checked={on}
-                      disabled={off}
-                      label={MODE_NAME[id]}
-                      hideLabel
-                      onChange={() =>
-                        setModes((all) => (all.includes(id) ? all.filter((m) => m !== id) : [...all, id]))
-                      }
-                    />
-                  </Row>
-                );
-              })}
-            </Group>
-
-            <section className="mt-7">
-              <button
-                type="button"
-                aria-expanded={more}
-                onClick={() => setMore((on) => !on)}
-                className="flex items-center gap-1 px-4 text-small text-fg-3 hover:text-fg"
-              >
-                <ChevronRight aria-hidden className={cn("size-3.5 transition-transform", more && "rotate-90")} />
-                Дополнительно
-              </button>
-              {more && (
-                <div className={cn("mt-2", LIST)}>
-                  <Row tile={<Tile icon={Tag} tint="bg-fg/60" />} title="Версия агента" sub="Чтобы отличать прогоны">
-                    <input
-                      value={version}
-                      onChange={(e) => setVersion(e.target.value)}
-                      maxLength={80}
-                      aria-label="Версия агента"
-                      placeholder="не указана"
-                      className="w-40 bg-transparent text-right text-read text-fg placeholder:text-fg-4 focus:outline-none"
-                    />
-                  </Row>
-                  {extractedBefore && (
-                    <Row
-                      tile={<Tile icon={RefreshCw} tint="bg-fg/60" />}
-                      title="Извлечь критерии заново"
-                      sub="Если у агента изменились инструкции или инструменты"
-                    >
-                      <Switch checked={replan} label="Извлечь критерии заново" hideLabel onChange={setReplan} />
-                    </Row>
-                  )}
-                </div>
-              )}
-            </section>
+              {why && <p className="min-w-0 basis-full text-body text-fg-3">{why}</p>}
+            </div>
+            {error && (
+              <p role="alert" className="mt-3 text-body text-bad">
+                {error}
+              </p>
+            )}
           </fieldset>
-
-          <div className="mt-8 flex flex-wrap-reverse items-center justify-end gap-x-5 gap-y-3 px-4">
-            {why && <p className="min-w-0 flex-1 basis-56 text-body text-fg-3">{why}</p>}
-            <Button size="lg" variant="primary" icon={Play} loading={busy} disabled={!ready || blocked} onClick={start}>
-              Запустить проверку
-            </Button>
-          </div>
-          {error && (
-            <p role="alert" className="mt-3 px-4 text-right text-body text-bad">
-              {error}
-            </p>
-          )}
           <Link
             to={historyLink(check)}
-            className="mt-10 inline-flex flex-wrap items-center gap-x-1.5 px-4 text-body text-fg-2 hover:text-fg hover:underline"
+            className="mt-12 inline-flex flex-wrap items-center gap-x-1.5 text-body text-fg-2 hover:text-fg hover:underline"
           >
             {last ? (
               <>
