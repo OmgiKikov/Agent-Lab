@@ -1,6 +1,7 @@
 """The inputs a result actually used, kept with the result rather than read from today's UI selection."""
 
 from .. import storage
+from ..domain import judges
 from ..domain.comparison import comparison, fingerprint
 from . import agent_context
 
@@ -25,9 +26,14 @@ def snapshot(check: str) -> dict:
 
 
 def attach(result: dict, record: dict, check: str) -> None:
+    """The inputs a check used, kept with its result and its record in the history. The record's line in the list of
+    saved checks (record['check']) names the rules by their set and version; their text and the agent's context stay in
+    the result."""
     meta = snapshot(check)
     result.update(meta)
-    record['check'].update(meta)
+    record['check'].update({key: value for key, value in meta.items() if key != 'agentContext'})
+    if 'judge' in meta:
+        record['check']['judge'] = judges.brief(meta['judge'])
     record['result'].update(meta)
     context = meta.get('agentContext') or {}
     if check == 'code' and (context.get('tools') or context.get('idpIndex')):

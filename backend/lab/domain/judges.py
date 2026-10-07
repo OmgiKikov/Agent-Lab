@@ -32,6 +32,11 @@ BUILTINS = {
 }
 
 
+def brief(version: dict) -> dict:
+    """A version of rules as a list names it: which set and which version, without its policy and criteria."""
+    return {key: version[key] for key in ('id', 'setId', 'name', 'version') if key in version}
+
+
 def source(kind: str, name: str, policy: str) -> dict:
     key = 'tone-of-voice' if kind == 'tone' else 'accuracy-judge'
     return {

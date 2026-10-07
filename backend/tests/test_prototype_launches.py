@@ -410,6 +410,67 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(record['status'], 'done')
         self.assertEqual(record['agentVersion'], 'v-first')
 
+    async def test_lists_carry_what_they_show_and_the_whole_records_keep_the_rest(self):
+        """The line of a launch and of its saved check name the rules by their set and version and count the results;
+        the rules' text, the agent's context and the examples behind the counts stay in the launch and the check."""
+        agent_context.save({'tools': ['getLkkTariff']})
+
+        async def judged(rules, shown, *args, **kwargs):
+            text = next(row['text'] for row in shown if row['role'] == 'AGENT')
+            rows = [
+                {
+                    'ruleId': r['id'],
+                    'rule': r['text'],
+                    'status': 'FAIL',
+                    'reason': 'Ответ без обращения на вы.',
+                    'agentQuote': text,
+                    'title': 'Нет обращения на вы',
+                }
+                for r in rules
+            ]
+            return judge.Verdict(rows, 'FAIL', 'test-model', 'test-judge')
+
+        given = {
+            'check': 'tone',
+            'datasetId': self.dataset['id'],
+            'judgeId': self.rules['id'],
+            'count': 1,
+            'target': 'local-http',
+            'agentVersion': 'v-lines',
+            'modes': ['dataset'],
+        }
+        with (
+            patch('lab.roles.judge.log_verdict', new=AsyncMock(side_effect=judged)),
+            patch('lab.flows.severity.propose', new=AsyncMock(return_value=None)),
+        ):
+            response = await self.client.post('/api/launches', json=given)
+            self.assertEqual(response.status_code, 200, response.text)
+            for _ in range(200):
+                if not self.jobs.state['running']:
+                    break
+                await asyncio.sleep(0.01)
+        named = {key: self.rules[key] for key in ('id', 'setId', 'name', 'version')}
+        line = (await self.client.get('/api/launches')).json()['launches'][0]
+        whole = (await self.client.get(f'/api/launches/{response.json()["id"]}')).json()
+        self.assertEqual(whole['status'], 'done', whole)
+        self.assertEqual(line['judge'], named)
+        self.assertEqual((line['agentVersion'], line['dataset']), (whole['agentVersion'], whole['dataset']))
+        self.assertEqual(set(line) & {'agentContext', 'inputs'}, set())
+        counted = {'failed': 1, 'measured': 1, 'unmeasured': 0, 'passed': 0}
+        self.assertEqual(line['modes']['dataset']['metric'], counted)
+        self.assertEqual(whole['judge']['policy'], self.rules['policy'])
+        self.assertEqual(whole['agentContext']['tools'], ['getLkkTariff'])
+        self.assertTrue(whole['modes']['dataset']['metric']['patterns'])
+        check_id = whole['modes']['dataset']['checkId']
+        saved = (await self.client.get('/api/history/tone')).json()['checks'][0]
+        self.assertEqual(saved['id'], check_id)
+        self.assertEqual(saved['judge'], named)
+        self.assertEqual(saved['agentVersion'], 'v-lines')
+        self.assertNotIn('agentContext', saved)
+        opened = (await self.client.get(f'/api/history/tone/{check_id}')).json()
+        self.assertEqual(opened['result']['judge']['criteria'], self.rules['criteria'])
+        self.assertEqual(opened['result']['agentContext']['tools'], ['getLkkTariff'])
+
 
 class IdpTests(unittest.TestCase):
     def test_changed_knowledge_cannot_be_reported_as_an_agent_improvement(self):
