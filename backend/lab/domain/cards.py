@@ -447,6 +447,10 @@ def customer(value: dict, dialogue: dict, agent: dict, episode: dict | None = No
         reactions.append(
             {key: r[key] for key in ('trigger', 'actions', 'agentN', 'agentQuote', 'n', 'quote')} | {'reveals': reveals}
         )
+    # What the log leaves open about an identifier is the identifier's own (identifiers): its value comes from the bank.
+    labels = [_stems(x['label']) for x in agent['identifiers']]
+    established = [x for x in kept['notEstablished'] if not any(label and label <= _stems(x) for label in labels)]
+    dropped['notEstablished'] += len(kept['notEstablished']) - len(established)
     texts = [m['content'] for m in messages[start - 1 : end] if m['role'] == 'user']
     quoted = {x['quote'] for x in kept['reactions']}
     samples = [t for t in texts[1:] if not MASK.search(t) and len(t) <= 160 and t not in quoted][:2]
@@ -467,7 +471,7 @@ def customer(value: dict, dialogue: dict, agent: dict, episode: dict | None = No
             'row': meta.get('row'),
         },
         'knowledge': knowledge,
-        'notEstablished': [clean(x) for x in kept['notEstablished']],
+        'notEstablished': [clean(x) for x in established],
         'observations': observations,
         'reactions': reactions,
         'identifiers': identifiers(kept, agent),

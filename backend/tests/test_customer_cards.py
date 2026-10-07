@@ -220,7 +220,11 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
                     'quote': 'Нет кнопки Меню',
                 },
             ],
-            'notEstablished': ['Модель терминала ######.'],
+            'notEstablished': [
+                'Модель терминала ######.',
+                'Неизвестно, знаешь ли ты номер своего терминала.',
+                'Неизвестно, знаешь ли ты ИНН и реквизиты своей организации.',
+            ],
         }
         episode = {'start': 1, 'end': 7, 'task': 'разобраться, почему не проходит сверка итогов', 'object': 'сверка'}
         card = cards.customer(value, {'id': 'd', 'messages': messages}, support.agent(), episode)
@@ -259,6 +263,9 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('#', situation)
         self.assertIn('Модель терминала ….', situation)
         self.assertEqual(card['checks']['masksFilled'], 2)
+        # What the log leaves open about an identifier is not said twice: its value comes from the bank's data.
+        self.assertEqual(card['notEstablished'], ['Модель терминала ….'])
+        self.assertEqual(card['checks']['dropped']['notEstablished'], 2)
 
     def test_the_brief_is_checked_for_the_agents_words_the_criteria_and_a_goal_ahead_of_the_customer(self):
         messages = [
