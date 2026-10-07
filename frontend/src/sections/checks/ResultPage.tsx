@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
-import { FileText, RotateCcw } from "lucide-react";
-import { conversationsLink, launchLink, type Check } from "../../app/links";
+import { useSearchParams } from "react-router-dom";
+import { FileText } from "lucide-react";
+import { conversationsLink, type Check } from "../../app/links";
 import { resultOf } from "../../lab/checks";
 import { useCriteria } from "../../lab/criteria";
 import { longDay } from "../../lab/format";
@@ -27,13 +27,12 @@ const PART = { bad: "fail", ok: "pass", none: "none" } as const;
  * «Итог» of a check: the real conversations of the export as this check judged them — one number, the conversations
  * with a serious error and whose decision that is, and how it stands to the check's previous check; then the
  * problems it is made of, serious first, then most frequent, each beside its previous count, and the criteria whose
- * errors are no longer found. «Проверить снова» opens the shared launch configuration. The explicit ?assess=1 link
- * keeps the advanced accuracy workflow for re-extracting criteria or resuming an earlier standalone check.
+ * errors are no longer found. A new check is the header's «Новая проверка»; the explicit ?assess=1 link keeps the
+ * advanced accuracy workflow for re-extracting criteria or resuming an earlier standalone check.
  */
 export function ResultPage({ check }: { check: Check }) {
   const { state, offline } = useLabState();
   const [params, setParams] = useSearchParams();
-  const navigate = useNavigate();
   const { data, list, error, retry } = useCriteria(check);
   const result = resultOf(state, check);
   const compare = useComparison(check);
@@ -110,23 +109,12 @@ export function ResultPage({ check }: { check: Check }) {
       </div>,
     );
 
-  const busy = !!state.job.running;
   return page(
     <div className="max-w-[1040px] px-4 pb-24 pt-8 lg:px-10 lg:pt-12">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-read text-fg-3">
         <span>
           {state.logs.file ? `«${state.logs.file}» · ` : ""}проверено {longDay(log.finishedAt)}
         </span>
-        <button
-          type="button"
-          onClick={() => navigate(launchLink(check))}
-          disabled={!state.logs.total || busy}
-          title="Выбрать данные, правила и режимы новой проверки"
-          className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-small font-medium text-fg-3 transition-colors hover:bg-hover hover:text-fg disabled:pointer-events-none disabled:opacity-40"
-        >
-          <RotateCcw aria-hidden className="size-3.5" />
-          Проверить снова
-        </button>
       </div>
       <StageResult
         className="mt-4"

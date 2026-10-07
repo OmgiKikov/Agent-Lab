@@ -251,9 +251,12 @@ export function LaunchReport() {
             return (
               <section key={mode} className="flex flex-col rounded-block border border-line p-5">
                 <h3 className="text-read font-semibold text-fg">{MODE_NAME[mode as Mode]}</h3>
-                <div className="mt-2">
-                  <LaunchStatus status={result.status} />
-                </div>
+                {/* A finished mode needs no tag: its number says it. */}
+                {result.status !== "done" && (
+                  <div className="mt-2">
+                    <LaunchStatus status={result.status} />
+                  </div>
+                )}
                 {m ? (
                   <StageResult
                     size="display"
