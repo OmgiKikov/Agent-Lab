@@ -17,6 +17,7 @@ import { MODE_NAME, type Mode } from "../../lab/launches";
 import { codeSources } from "../../lab/tone";
 import type { Check } from "../../lab/types";
 import { Button } from "../../ui/Button";
+import { useConnectionMemory } from "../agent/Connection";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
 
@@ -132,10 +133,13 @@ export function LaunchPage({ check }: { check: Check }) {
   const most = Math.min(MAX, total);
   const wanted = Number.parseInt(size, 10);
   const conversations = total && wanted > 0 ? Math.min(wanted, most) : 0;
-  const reachable = state?.targets.filter((t) => t.ready) ?? [];
+  // A way the agent can be asked on: set up, and for «На этом компьютере» (whose address is there by default) only when
+  // the person chose it in «Агент» — otherwise a launch would ask an address nobody may answer on.
+  const chosenWay = useConnectionMemory().way;
+  const reachable = state?.targets.filter((t) => t.ready && (t.id !== "local-http" || chosenWay === t.id)) ?? [];
   const chosen = modes.filter((m) => m === "dataset" || reachable.length > 0);
   const live = chosen.some((m) => m !== "dataset");
-  const way = reachable.find((t) => t.id === target) ?? reachable[0];
+  const way = reachable.find((t) => t.id === target) ?? reachable.find((t) => t.id === chosenWay) ?? reachable[0];
 
   useEffect(() => {
     try {
