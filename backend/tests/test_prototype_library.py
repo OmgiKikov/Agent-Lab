@@ -178,6 +178,27 @@ class JudgeLibraryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(later['version'], 2)
         self.assertGreater(later['createdAt'], made)
 
+    async def test_an_updated_document_under_the_same_name_is_the_next_version_of_its_set(self):
+        """The bank's document of rules is updated and its criteria collected again under the same name: the set it
+        made gets its next version, never a second set of that name; rules under another name make a set of their
+        own."""
+        first = rules.source('tone', 'tov.docx', 'Всегда обращайтесь к клиенту на вы.')
+        storage.documents.save('sources.json', [first])
+        draft = {
+            'revision': 'r1',
+            'createdAt': storage.now(),
+            'sourceSha256': first['sha256'],
+            'criteria': [criterion()],
+        }
+        v1 = storage.judges.capture_tone(draft, first)
+        updated = rules.source('tone', 'tov.docx', 'Всегда обращайтесь к клиенту на вы. Не используйте жаргон.')
+        v2 = storage.judges.capture_tone(draft | {'criteria': [criterion('Не используйте жаргон.')]}, updated)
+        self.assertEqual((v2['setId'], v2['version'], v2['name']), (v1['setId'], 2, 'tov.docx'))
+        other = rules.source('tone', 'Правила чата', 'Отвечайте коротко и по делу, без канцелярита.')
+        v3 = storage.judges.capture_tone(draft | {'criteria': [criterion('Коротко.')]}, other)
+        self.assertNotEqual(v3['setId'], v1['setId'])
+        self.assertEqual(v3['version'], 1)
+
     async def test_failed_rule_save_is_atomic_and_export_is_the_selected_version(self):
         policy = 'Всегда обращайтесь к клиенту на вы.'
         mine = judges.save('tone', 'Наши правила', policy, [criterion()], None, None)

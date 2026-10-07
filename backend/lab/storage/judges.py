@@ -62,16 +62,17 @@ def save(
 
 
 def capture_tone(draft: dict, policy: dict, *, adopted: bool = False) -> dict:
-    """Generated or clarified criteria also enter the library, as a new version of the set in force for the same rules,
-    else of a set of their own. A version is dated when it is saved; criteria made before the library and adopted into
-    it (adopted) keep the day they were made."""
+    """Generated or clarified criteria also enter the library: as a new version of the set in force when they come from
+    its rules or from its document updated under the same name, else as a set of their own. A version is dated when it
+    is saved; criteria made before the library and adopted into it (adopted) keep the day they were made."""
     current = active('tone')
     if current and current['criteria'] == draft['criteria'] and current['policy'] == policy['content']:
         return current
-    own = current and current['policy'] == policy['content']
+    name = policy.get('origin') or 'Правила общения'
+    own = current and (current['policy'] == policy['content'] or current['name'] == name)
     value = save(
         'tone',
-        current['name'] if own else policy.get('origin') or 'Правила общения',
+        current['name'] if own else name,
         policy['content'],
         draft['criteria'],
         set_id=current['setId'] if own else None,
