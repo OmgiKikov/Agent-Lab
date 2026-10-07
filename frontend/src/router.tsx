@@ -174,7 +174,7 @@ const productRoutes = [
       { path: "accuracy/criteria", element: <CriteriaPage key="code" check="code" /> },
       { path: "accuracy/history", element: <HistoryPage key="code" check="code" /> },
       { path: "accuracy/problems/:id", element: <ProblemPage key="code" stage="code" /> },
-      // The simulations: synthetic customers play scenarios built from one check's errors; its criteria judge them.
+      // The simulations: synthetic customers play scenarios built from the export; one check's criteria judge them.
       { path: "simulations", element: <SimResultPage /> },
       { path: "simulations/runs", element: <RunListPage /> },
       { path: "simulations/scenarios", element: <ScenariosPage /> },

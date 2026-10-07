@@ -6,7 +6,7 @@ import { api } from "../../lab/api";
 import { count, plural } from "../../lab/format";
 import { BY_CRITERIA } from "../../lab/checks";
 import { DEFAULT_PERSONA } from "../../lab/look";
-import { FROM_LOG, pickOf, type Pick } from "../../lab/runs";
+import { pickOf, type Pick } from "../../lab/runs";
 import type { LabState } from "../../lab/types";
 import { useLabState } from "../../lab/LabProvider";
 import { SECTIONS } from "../../app/links";
@@ -157,7 +157,12 @@ export function PlayDialog({
             onChange={setPick}
             options={[
               { value: "all", label: "Все", count: cards.length },
-              { value: "errors", label: "Из ошибок", count: cards.filter((c) => c.origin === FROM_LOG).length },
+              {
+                value: "representative",
+                label: "Представительный",
+                count: pickOf(cards, "representative", chosen).length,
+              },
+              { value: "stress", label: "Стрессовый", count: pickOf(cards, "stress", chosen).length },
               { value: "chosen", label: "Выбранные", count: chosen.size },
             ]}
           />

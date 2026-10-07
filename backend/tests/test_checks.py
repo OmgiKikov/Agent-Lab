@@ -227,9 +227,7 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.answer(None, 't1r1', check='accuracy')).status_code, 422)
 
     async def build_cards(self, body=None):
-        async def build(
-            topic, dialogue, sets, general=(), reproduces=(), scenario=None, start=None, end=None, agent=None
-        ):
+        async def build(topic, dialogue, sets, general=(), scenario=None, start=None, end=None, agent=None):
             return {
                 'id': f'{topic["title"]}:{dialogue["id"]}',
                 'topic': topic['title'],
@@ -248,7 +246,7 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
                 await self.wait_job()
         return response
 
-    async def test_scenarios_are_built_from_the_errors_of_one_check(self):
+    async def test_scenarios_are_built_for_the_criteria_of_one_check(self):
         self.assertEqual((await self.build_cards()).status_code, 200)
         self.assertEqual(
             self.jobs.state['error'], 'Сценарии собираются по критериям проверки. Сначала проверьте разговоры.'

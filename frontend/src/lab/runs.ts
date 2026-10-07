@@ -3,8 +3,6 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
 import type { Card, LabRun, LabState } from "./types";
 
-export const FROM_LOG = "Ошибка из лога";
-
 /**
  * A run with its conversations; fetched again whenever the service reports that it changed. Its revision grows with
  * every change, so a run judged again with the same totals is fetched again too: other verdicts, reasons and quotes.
@@ -42,11 +40,11 @@ export const runTitle = (run: LabRun) =>
 
 export const isRunning = (run: LabRun) => run.status === "running";
 
-/** The scenarios a new run may play: all, the ones built from errors in the logs, or chosen by hand. */
-export type Pick = "all" | "errors" | "chosen";
+/** The scenarios a new run may play: all, one set, or chosen by hand. */
+export type Pick = "all" | "representative" | "stress" | "chosen";
 export const pickOf = (cards: Card[], pick: Pick, chosen: Set<string>) =>
   pick === "all"
     ? cards
-    : pick === "errors"
-      ? cards.filter((c) => c.origin === FROM_LOG)
-      : cards.filter((c) => chosen.has(c.id));
+    : pick === "chosen"
+      ? cards.filter((c) => chosen.has(c.id))
+      : cards.filter((c) => c.sets?.includes(pick));

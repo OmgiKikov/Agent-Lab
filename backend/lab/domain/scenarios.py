@@ -1,36 +1,30 @@
-"""Scenarios: the customers of real conversations as tests, chosen into three sets. Pure functions.
+"""Scenarios: the customers of real conversations as tests, chosen into two sets. Pure functions.
 
 A scenario (a card) is the customer of one logged episode of the agent's domain (domain/cards.py), the business
 scenario of the catalog it belongs to (domain/catalog.py), its frozen criteria (the grounded rules of its topic,
-observable in the agent's replies or its system calls) and its test data for the mocked bank's systems. A card from an
-error names the criteria the agent failed in that conversation (reproduces): the scenario is a test of that error.
-Its result in every run of the deck's check stands beside the others; nothing here says whether the agent got better
-or worse.
+observable in the agent's replies or its system calls) and its test data for the mocked bank's systems. Its result in
+every run of the deck's check stands beside the others; nothing here says whether the agent got better or worse.
 
 Sets are never averaged together:
 - representative: a sample stratified by the catalog's scenarios, at least one card each; a card stands for N_h/n_h;
-- regression: conversations where the check found an error, one per criterion the agent failed, then a second;
 - stress: rare combinations from the export's service columns; their prevalence is not the point.
 """
 
 import hashlib
 import json
 import random
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Sequence
 
 from . import quotes
 from .metric import FINISHED
 from .personas import DEFAULT
 from .tone import for_judging
 
-LIMIT = 30  # conversations from errors
-PER_ERROR = 2  # conversations per criterion the agent failed
 REPRESENTATIVE = 24  # the representative sample before every scenario of the catalog gets its one card
 STRESS = 6
 SEED = 20261002  # the same stress sample for the same export
-# Why a card exists, by its first set: an error the check found in a real conversation, a sampled episode, a rare one.
-FROM_LOG = 'Ошибка из лога'
-SETS = {'regression': FROM_LOG, 'representative': 'Представительный набор', 'stress': 'Стрессовый набор'}
+# Why a card exists, by its first set: a sampled episode or a rare one.
+SETS = {'representative': 'Представительный набор', 'stress': 'Стрессовый набор'}
 # Applies to every scenario: instructions must come from the knowledge base, not be invented.
 FOLLOWS_KNOWLEDGE = {
     'id': 'g-knowledge',
@@ -58,40 +52,6 @@ ANSWERS_THE_QUESTION = {
     ),
     'quote': 'Твоя главная задача — найти и чётко выдать инструкции для самостоятельного выполнения клиентом',
 }
-
-
-def failed_in(result: dict) -> list[str]:
-    """The criteria the agent failed in one conversation of a check's result, in the order of its verdicts."""
-    return [row['ruleId'] for row in result.get('rules') or [] if row.get('status') == 'FAIL' and row.get('ruleId')]
-
-
-def pick(analysis: dict, known: Collection[str]) -> list[tuple[dict, str, str, list[str]]]:
-    """The conversations with errors to build scenarios from, with the criteria the agent failed in each. Per topic,
-    every criterion the agent failed gets its own conversation, the most frequent error first; then every criterion
-    its second conversation. A conversation is used once and keeps every criterion it failed. The rounds run across all
-    topics, so a cut at LIMIT keeps one scenario per error before any second one.
-    known: the conversations of the export; each pick names its conversation by id."""
-    topics = []
-    for topic in analysis['topics']:
-        if not any(r['observation'] == 'reply' for r in topic['rules']):
-            continue
-        results = [r for r in analysis['results'] if r['topicId'] == topic['id'] and str(r['dialogueId']) in known]
-        failing = {
-            rule['id']: [r for r in results if r['status'] == 'FAIL' and rule['id'] in failed_in(r)]
-            for rule in topic['rules']
-            if rule['observation'] in ('reply', 'tool')
-        }
-        topics.append((topic, sorted((found for found in failing.values() if found), key=len, reverse=True)))
-    used: set[str] = set()
-    picked = []
-    for _ in range(PER_ERROR):
-        for topic, ordered in topics:
-            for found in ordered:
-                result = next((r for r in found if str(r['dialogueId']) not in used), None)
-                if result is not None:
-                    used.add(str(result['dialogueId']))
-                    picked.append((topic, str(result['dialogueId']), FROM_LOG, failed_in(result)))
-    return picked[:LIMIT]
 
 
 def stress(
@@ -155,16 +115,12 @@ def card(
     customer: dict,
     criteria: list[dict],
     sets: Sequence[str],
-    reproduces: Sequence[str],
     world: dict | None,
     scenario: dict | None = None,
 ) -> dict:
     """The card of one conversation: customer is its customer part (cards.customer: the task, what the customer knows,
     the manner, the opening and the brief the simulator reads as situation); scenario, the business scenario of the
-    catalog its episode is in. reproduces: the criteria the agent failed in it (pick); the card keeps the ones it
-    checks, so a criterion the scenario cannot observe is never said to be reproduced by it. Its id is the hash of its
-    content."""
-    checked = {criterion['id'] for criterion in criteria}
+    catalog its episode is in. Its id is the hash of its content."""
     found = {
         'eligible': True,
         'topic': topic['title'],
@@ -174,7 +130,6 @@ def card(
         'sets': list(sets),
         'origin': SETS[sets[0]],
         'sourceDialogueId': str(dialogue['id']),
-        'reproduces': list(dict.fromkeys(rule_id for rule_id in reproduces if rule_id in checked)),
         'scenario': scenario,
         'world': world,
     }
@@ -208,33 +163,6 @@ def deck(built: list[dict], manifests: dict, weights: dict[str, float], failed: 
 def _named(criterion: dict, fallback: str) -> str:
     """A criterion's short name; one without a name is named by what it requires."""
     return (criterion.get('name') or '').strip() or criterion.get('text') or fallback
-
-
-def reproduced(card: dict, source: dict | None) -> list[dict]:
-    """The criteria the scenario reproduces, with the agent's words from its real conversation (source: that
-    conversation in the current result of the deck's check). A card built before cards named them reproduces what its
-    conversation failed in that result, when it came from an error. The words come only from a verdict that is still
-    an error there."""
-    criteria = {criterion['id']: criterion for criterion in card.get('criteria') or []}
-    rows = {row.get('ruleId'): row for row in (source or {}).get('rules') or []}
-    if 'reproduces' in card:
-        ids = card['reproduces']
-    elif card.get('origin') == FROM_LOG and source:
-        ids = [rule_id for rule_id in failed_in(source) if rule_id in criteria]
-    else:
-        ids = []
-    found = []
-    for rule_id in ids:
-        criterion, row = criteria.get(rule_id) or {}, rows.get(rule_id) or {}
-        found.append(
-            {
-                'ruleId': rule_id,
-                'name': _named(criterion, row.get('rule') or rule_id),
-                'text': criterion.get('text') or row.get('rule', ''),
-                'agentQuote': row.get('agentQuote', '') if row.get('status') == 'FAIL' else '',
-            }
-        )
-    return found
 
 
 def played(runs: list[dict], ids: set[str]) -> dict[str, list[dict]]:

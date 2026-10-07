@@ -229,11 +229,11 @@ function StartCards({ state }: { state: LabState }) {
     { title: CHECK_NAME.code, what: WHAT.code, begin: beginOf("code", state) },
     {
       title: "Симуляции",
-      what: "Синтетические клиенты играют с агентом сценарии из найденных ошибок. Разговоры оценивают по критериям той же проверки.",
+      what: "Синтетические клиенты играют с агентом сценарии из настоящих разговоров. Разговоры оценивают по критериям проверки.",
       begin: {
         status: "После первой проверки",
         needs: [
-          { label: "Итог проверки", value: null, later: "из его ошибок соберутся сценарии" },
+          { label: "Итог проверки", value: null, later: "по его критериям оценят сценарии" },
           { label: "Подключение агента", value: ready ? "задано" : null, later: "задайте в «Агенте»" },
         ],
         // Nothing to do here before the first check, unless the agent is not connected yet.
@@ -382,7 +382,11 @@ function RunBlock({ state }: { state: LabState }) {
   if (!run)
     return (
       <div className="mt-6 max-w-[640px]">
-        <BlockHead to={SECTIONS.simulations} title="Симуляции" sub="Синтетические клиенты играют сценарии из ошибок" />
+        <BlockHead
+          to={SECTIONS.simulations}
+          title="Симуляции"
+          sub="Синтетические клиенты играют сценарии из разговоров"
+        />
         <p className="mt-6 text-read text-fg-2">
           {deck
             ? `Сценарии ${BY_CRITERIA[deck.check]} собраны. Синтетические клиенты сыграют их с агентом.`

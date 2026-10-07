@@ -124,8 +124,8 @@ export function SimHeader({ runId, actions = true }: { runId: string | null; act
 
   const cards = state?.cards?.cards.length ?? 0;
   const busy = !!state?.job.running;
-  // Scenarios come from the errors of one check. Tone of voice whose criteria changed after its result is checked
-  // again first: its scenarios would carry the old criteria.
+  // Scenarios are judged by the criteria of one check. Tone of voice whose criteria changed after its result is
+  // checked again first: its scenarios would carry the old criteria.
   const results = CHECKS.filter((c) => resultOf(state, c));
   const outdated = !!toneResult(state) && toneResult(state)?.criteriaRevision !== state?.toneOfVoice?.revision;
   const ready = results.filter((c) => !(c === "tone" && outdated));
@@ -143,7 +143,7 @@ export function SimHeader({ runId, actions = true }: { runId: string | null; act
   const why = busy
     ? "Сейчас идёт другая задача"
     : !results.length
-      ? "Сценарии собираются из ошибок проверки. Сначала проверьте разговоры."
+      ? "Сценарии оцениваются по критериям проверки. Сначала проверьте разговоры."
       : !ready.length
         ? "Критерии tone of voice изменились. Сначала проверьте разговоры заново."
         : undefined;
@@ -160,7 +160,7 @@ export function SimHeader({ runId, actions = true }: { runId: string | null; act
                 onClick={build}
                 disabled={!!why}
                 className="hidden md:inline-flex"
-                title={why ?? "Из ошибок проверки разговоров"}
+                title={why ?? "Из разговоров выгрузки, по каталогу бизнес-сценариев"}
               >
                 {cards ? "Собрать заново" : "Собрать сценарии"}
               </Button>
@@ -260,7 +260,7 @@ function BuildFrom({
       }
     >
       <p className="text-body text-fg-2">
-        Сценарии собираются из ошибок одной проверки. Прогоны считаются по её критериям.
+        Сценарии собираются из разговоров выгрузки. Прогоны оцениваются по критериям выбранной проверки.
         {state.cards?.cards.length ? " Новые сценарии заменят собранные. Сохранённые прогоны не изменятся." : ""}
       </p>
       <div role="radiogroup" aria-label="Проверка" className="mt-4 flex flex-col gap-2">

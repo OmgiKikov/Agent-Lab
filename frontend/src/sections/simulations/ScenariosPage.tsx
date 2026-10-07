@@ -9,15 +9,12 @@ import { useCriteria } from "../../lab/criteria";
 import { count, day } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { personaName } from "../../lab/look";
-import { FROM_LOG } from "../../lab/runs";
 import {
-  controlLine,
   namedCriteria,
   failedTypes,
   outcomeOf,
   runsOf,
   useScenarios,
-  type Named,
   type Outcome,
   type Played,
   type ScenarioRecord,
@@ -61,26 +58,6 @@ function Row({ on, onClick, children }: { on: boolean; onClick: () => void; chil
     >
       {children}
     </button>
-  );
-}
-
-/** Why the scenario exists, in one line: the error it reproduces (the first, and how many more), or a control. */
-function Reproduces({ card, record, named }: { card: Card; record?: ScenarioRecord; named: Map<string, Named> }) {
-  if (!record) return <span aria-hidden className="mt-0.5 block h-[18px]" />;
-  if (card.origin !== FROM_LOG)
-    return (
-      <span className="mt-0.5 block truncate text-small text-fg-3">
-        {card.origin}: {controlLine(record.sourceStatus)}
-      </span>
-    );
-  const [first, ...more] = record.reproduces;
-  if (!first)
-    return <span className="mt-0.5 block truncate text-small text-fg-2">Из ошибки в настоящем разговоре</span>;
-  return (
-    <span className="mt-0.5 flex min-w-0 gap-1.5 text-small text-fg-2">
-      <span className="truncate">Воспроизводит: {named.get(first.ruleId)?.name ?? first.name}</span>
-      {more.length > 0 && <span className="flex-shrink-0 tabular-nums text-fg-3">+{more.length}</span>}
-    </span>
   );
 }
 
@@ -143,9 +120,10 @@ function LastResults({ record, personas }: { record?: ScenarioRecord; personas: 
 const scenarioKey = (c: Card) => (c.scenario ? `${c.scenario.category}\u0000${c.scenario.title}` : "\uffff");
 
 /**
- * «Сценарии»: each scenario is a test of the error it was built from, in the check named over the list. A row says what
- * it reproduces and how it came out in the latest run that played it, beside the run before; the list filters by that
- * latest result, and the scenarios with an error play again in one go. A scenario opens with its results by run.
+ * «Сценарии»: the customers of real conversations, grouped by the business scenarios of the catalog and judged by the
+ * criteria of the check named over the list. A row says its set and how it came out in the latest run that played it,
+ * beside the run before; the list filters by that latest result, and the scenarios with an error play again in one go.
+ * A scenario opens with its results by run.
  */
 export function ScenariosPage() {
   const { state, offline } = useLabState();
@@ -222,7 +200,6 @@ export function ScenariosPage() {
       </div>
     );
 
-  const fromErrors = cards.filter((c) => c.origin === FROM_LOG).length;
   // A scenario the address names that is not among the ones built: said so in its place, never a blank one.
   const lost = !!params.get("s") && !card;
   const showDetail = (!!card || lost) && (wide || !!params.get("s"));
@@ -237,8 +214,7 @@ export function ScenariosPage() {
             <p className="text-read text-fg-3">
               {cards.length && deck ? (
                 <>
-                  {count(cards.length, "сценарий", "сценария", "сценариев")} {BY_CRITERIA[deck.check]}, {fromErrors}
-                  {"\u00a0— из ошибок в диалогах"}
+                  {count(cards.length, "сценарий", "сценария", "сценариев")} {BY_CRITERIA[deck.check]}
                   {deck.createdAt ? ` · собраны ${day(deck.createdAt)}` : ""}
                 </>
               ) : (
@@ -326,7 +302,7 @@ export function ScenariosPage() {
                     <Row on={c.id === id} onClick={() => pick(c.id)}>
                       {topics > 1 && !c.scenario && <span className="block text-small text-fg-3">{c.topic}</span>}
                       <span className="block text-body font-medium text-fg">{c.name}</span>
-                      <Reproduces card={c} record={records.get(c.id)} named={namedCriteria(c, list)} />
+                      <span className="mt-0.5 block truncate text-small text-fg-3">{c.origin}</span>
                       <LastResults record={records.get(c.id)} personas={state.personas} />
                     </Row>
                   </li>
@@ -338,8 +314,8 @@ export function ScenariosPage() {
                 {cards.length
                   ? "Ничего не нашлось"
                   : CHECKS.some((c) => resultOf(state, c))
-                    ? "Соберите сценарии из ошибок проверки."
-                    : "Сценарии собираются из ошибок проверки. Сначала проверьте разговоры в разделе «Tone of voice» или «Точность»."}
+                    ? "Соберите сценарии из разговоров выгрузки."
+                    : "Сценарии оцениваются по критериям проверки. Сначала проверьте разговоры в разделе «Tone of voice» или «Точность»."}
               </p>
             )}
           </div>

@@ -1,4 +1,4 @@
-"""The deck of scenarios: building it from the errors of one check, and each scenario as a test with its results."""
+"""The deck of scenarios: building it for the criteria of one check, and each scenario as a test with its results."""
 
 from typing import Literal
 
@@ -17,7 +17,7 @@ class CardsCommand(BaseModel):
 
 @router.post('/api/cards')
 async def start_cards(jobs: Jobs, payload: CardsCommand | None = Body(default=None)) -> dict:
-    """Scenarios from the errors of one check: the one asked for, else the only check with a result."""
+    """Scenarios judged by the criteria of one check: the one asked for, else the only check with a result."""
     try:
         check = scenarios.chosen_check(payload.check if payload else None)
     except ValueError as error:
@@ -27,6 +27,6 @@ async def start_cards(jobs: Jobs, payload: CardsCommand | None = Body(default=No
 
 @router.get('/api/scenarios')
 def scenarios_view() -> dict:
-    """Each scenario of the deck as a test: the error of the real conversation it reproduces, and its own result in
-    every run of the deck's check, newest first. Results of runs stand side by side; nothing compares them."""
+    """Each scenario of the deck as a test: its own result in every run of the deck's check, newest first. Results of
+    runs stand side by side; nothing compares them."""
     return scenarios.listed()

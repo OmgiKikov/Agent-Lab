@@ -21,8 +21,8 @@ import { RunMatrix } from "./RunMatrix";
 import { NoSuchRun, SimHeader, useSimRuns } from "./stage";
 
 /**
- * «Симуляции»: synthetic customers play business scenarios with the agent, built from the errors of one check, and that
- * check's criteria judge them. The result of one run as one number, the scenarios against the types of customers, and
+ * «Симуляции»: synthetic customers play business scenarios with the agent, built from the conversations of the export,
+ * and one check's criteria judge them. The result of one run as one number, the scenarios against the types of customers, and
  * the problems it found. Counted on its own: other conversations, other customers than the export.
  */
 export function SimResultPage() {
@@ -89,7 +89,8 @@ function SimResult() {
             )
           }
         >
-          Синтетические клиенты сыграют с агентом сценарии из ошибок одной проверки. Разговоры оценят по её критериям.
+          Синтетические клиенты сыграют с агентом сценарии из настоящих разговоров. Разговоры оценят по критериям
+          проверки.
         </EmptyState>
       </div>
     );
@@ -159,7 +160,6 @@ function SimResult() {
 
 const SET_NAMES: Record<string, string> = {
   representative: "представительный",
-  regression: "из ошибок",
   stress: "стрессовый",
 };
 

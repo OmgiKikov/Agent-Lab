@@ -43,7 +43,3 @@ export function RunWord({ run, className }: { run: LabRun; className?: string })
     </span>
   );
 }
-
-/** Why the scenario exists: «из ошибки в настоящем разговоре», or the name of its set («представительный набор»). */
-export const originWord = (origin: string, fromLog: string) =>
-  origin === fromLog ? "из ошибки в настоящем разговоре" : origin.toLowerCase();

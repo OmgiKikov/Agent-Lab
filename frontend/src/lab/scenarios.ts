@@ -1,13 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
 import { nameFromText, quoteKey, type Criterion } from "./criteria";
-import type { Card, Check, LabState, Persona, Status } from "./types";
+import type { Card, Check, LabState, Persona } from "./types";
 
 /**
- * A scenario as a test (GET /api/scenarios, backend/lab/flows/scenarios.py): the error of the real conversation it
- * reproduces, and its own result in every run of its check. The runs stand side by side; nothing compares them.
+ * A scenario as a test (GET /api/scenarios, backend/lab/flows/scenarios.py): its own result in every run of its check.
+ * The runs stand side by side; nothing compares them.
  */
-export type Reproduced = { ruleId: string; name: string; text: string; agentQuote: string };
 /** One finished conversation of a scenario in a run: who played it, the result, the criteria it failed. */
 export type Played = {
   run: string;
@@ -21,9 +20,6 @@ export type Played = {
 };
 export type ScenarioRecord = {
   id: string;
-  /** The real conversation it was built from, in the current result of its check; null when that has it no more. */
-  sourceStatus: Status | null;
-  reproduces: Reproduced[];
   /** Newest run first, in the order of each run. */
   history: Played[];
 };
@@ -52,20 +48,6 @@ export function useScenarios(state: LabState | null) {
     staleTime: Infinity,
   });
 }
-
-/**
- * «Контроль: …»: what the real conversation of a control shows in the current result of its check, as the check said
- * it — no error found, an error found now (the control was built from it without one), or it could not be checked;
- * never «ошибок не было». Missing only when the result has no such conversation.
- */
-export const controlLine = (sourceStatus: Status | null | undefined) =>
-  !sourceStatus
-    ? "настоящего разговора нет в нынешнем итоге"
-    : sourceStatus === "PASS"
-      ? "в настоящем разговоре ошибок не нашли"
-      : sourceStatus === "FAIL"
-        ? "в настоящем разговоре теперь нашли ошибку"
-        : "настоящий разговор проверить не удалось";
 
 /** One run that played a scenario: its conversations by type of customer, in the order the service lists types. */
 export type RunPlays = { run: string; label: string; startedAt: string; plays: Played[] };

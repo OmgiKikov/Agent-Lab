@@ -117,7 +117,7 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
         # A conversation the episode reader put outside the agent's domain gets no card and asks no model.
         episodes = {'g': {'inDomain': False, 'reason': 'платит как покупатель'}}
         building = deck_flow._Building(
-            'code', {'topics': []}, episodes, {}, {'g': (['regression'], [])}, lambda **_: None, support.agent()
+            'code', {'topics': []}, episodes, {}, {'g': ['stress']}, lambda **_: None, support.agent()
         )
         with (
             patch.object(deck_flow, '_topics', AsyncMock(return_value={'g': topic()})),
@@ -297,9 +297,9 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
 
     def test_sets_reach_the_run_and_are_measured_apart_the_representative_one_also_weighted(self):
         card = {'id': 'c', 'name': 'n', 'topic': 't', 'origin': 'o', 'situation': 's', 'criteria': []}
-        failed = simulation.new_item({**card, 'sets': ['regression', 'representative'], 'weight': 3.0}, 'default', 1)
-        self.assertEqual(failed['sets'], ['regression', 'representative'])
+        failed = simulation.new_item({**card, 'sets': ['stress', 'representative'], 'weight': 3.0}, 'default', 1)
+        self.assertEqual(failed['sets'], ['stress', 'representative'])
         passed = simulation.new_item({**card, 'id': 'd', 'sets': ['representative'], 'weight': 1.0}, 'default', 1)
         value = metric.metric([{**failed, 'status': 'FAIL'}, {**passed, 'status': 'PASS'}])
-        self.assertEqual(value['sets']['regression'], {'accuracy': 0, 'passed': 0, 'measured': 1})
+        self.assertEqual(value['sets']['stress'], {'accuracy': 0, 'passed': 0, 'measured': 1})
         self.assertEqual(value['sets']['representative'], {'accuracy': 50, 'passed': 1, 'measured': 2, 'weighted': 25})

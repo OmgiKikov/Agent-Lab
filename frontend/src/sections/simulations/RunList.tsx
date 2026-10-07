@@ -51,7 +51,7 @@ export function RunListPage() {
             <EmptyState drop title="Здесь будут прогоны" className="py-24">
               {state.cards?.cards.length
                 ? "Сыграйте сценарии с агентом."
-                : "Сначала соберите сценарии из ошибок проверки разговоров."}
+                : "Сначала соберите сценарии из разговоров выгрузки."}
             </EmptyState>
           )}
         </div>

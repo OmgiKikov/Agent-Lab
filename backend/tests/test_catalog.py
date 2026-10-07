@@ -262,9 +262,7 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         }
         found = {'revision': 'r1', 'categories': categories, 'episodes': episodes}
 
-        async def build_card(
-            topic, dialogue, sets, general=(), reproduces=(), scenario=None, start=None, end=None, agent=None
-        ):
+        async def build_card(topic, dialogue, sets, general=(), scenario=None, start=None, end=None, agent=None):
             return {
                 'id': dialogue['id'],
                 'eligible': True,
@@ -374,9 +372,7 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         return {'revision': 'r1', 'categories': catalog.taxonomy(PROPOSED), 'episodes': found}
 
     def building(self, found: dict, failing: set[str], tries: list[str] | None = None, eligible: bool = True):
-        async def build_card(
-            topic, dialogue, sets, general=(), reproduces=(), scenario=None, start=None, end=None, agent=None
-        ):
+        async def build_card(topic, dialogue, sets, general=(), scenario=None, start=None, end=None, agent=None):
             if tries is not None:
                 tries.append(dialogue['id'])
             if dialogue['id'] in failing:

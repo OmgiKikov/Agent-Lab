@@ -122,7 +122,7 @@ export type Card = {
   sourceDialogueId: string;
   world?: World | null;
   openings?: Record<string, string>;
-  /** The sets the card is in: representative, regression, stress. */
+  /** The sets the card is in: representative, stress. */
   sets?: string[];
   /** How many conversations of the export a card of the representative set stands for. */
   weight?: number | null;
