@@ -1,4 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "./api";
 import { resultOf } from "./checks";
 import type { Change, Check, LabState, Replay, ReplayItem, ReplaySummary, Turn } from "./types";
@@ -10,23 +11,41 @@ export const replaysOf = (state: LabState | null, check: Check): ReplaySummary[]
 /** The newest check of the live agent of one check, finished or not. */
 export const latestReplay = (state: LabState | null, check: Check) => replaysOf(state, check)[0] ?? null;
 
+/** The newest check of the live agent on the check's current result, finished or not: what «Агент сейчас» shows. */
+export function latestOnResult(state: LabState | null, check: Check): ReplaySummary | null {
+  const result = resultOf(state, check);
+  if (!result?.checkId) return null;
+  return replaysOf(state, check).find((r) => r.basis.checkId === result.checkId) ?? null;
+}
+
 /**
- * The finished check of the live agent on the check's current result: what the screens set beside that result. One made
- * on an earlier result met other customers, or the same ones judged by other criteria.
+ * The check of the live agent that ran to its end on the check's current result: what the screens set beside that
+ * result. One made on an earlier result met other customers, or the same ones judged by other criteria; a stopped or
+ * failed one is no result to set beside it.
  */
 export function replayOnResult(state: LabState | null, check: Check): ReplaySummary | null {
   const result = resultOf(state, check);
   if (!result?.checkId) return null;
-  return replaysOf(state, check).find((r) => r.basis.checkId === result.checkId && r.status !== "running") ?? null;
+  return replaysOf(state, check).find((r) => r.basis.checkId === result.checkId && r.status === "done") ?? null;
 }
 
-/** A check of the live agent with its conversations, asked again whenever it changes (its revision). */
+/**
+ * A check of the live agent with its conversations, fetched again whenever the service says it changed (its revision):
+ * one entry per check, so a check that changes every few seconds never piles copies of itself up in the browser.
+ */
 export function useReplay(id: string | null, revision?: number) {
+  const client = useQueryClient();
+  const seen = useRef(revision);
+  useEffect(() => {
+    if (!id || seen.current === revision) return;
+    seen.current = revision;
+    void client.invalidateQueries({ queryKey: ["replay", id] });
+  }, [id, revision, client]);
   return useQuery({
-    queryKey: ["replay", id, revision ?? 0],
+    queryKey: ["replay", id],
     queryFn: () => api<Replay>(`/api/replays/${encodeURIComponent(id ?? "")}`),
     enabled: !!id,
-    placeholderData: (previous) => (previous?.id === id ? previous : undefined),
+    staleTime: 60_000,
   });
 }
 
@@ -55,9 +74,11 @@ export function changeOf(item: ReplayItem): Change {
   return "unmeasured";
 }
 
-/** The recorded conversation as the screens show a conversation. */
+/** The recorded conversation as it was judged: up to as many replies of the agent as the conversation now had. */
 export const recordedTurns = (item: ReplayItem): Turn[] =>
-  item.recorded.map((m) => ({ role: m.role === "user" ? "customer" : "agent", text: m.content }));
+  item.recorded
+    .slice(0, item.cut ?? item.recorded.length)
+    .map((m) => ({ role: m.role === "user" ? "customer" : "agent", text: m.content }));
 
 /** What may be read into the difference, as the result says it of two checks (lab/compare, VERDICT). */
 export function verdictText(r: ReplaySummary): string | null {

@@ -32,7 +32,7 @@ import { useCriteria } from "../../lab/criteria";
 import { exportOf, exportWords } from "../../lab/exports";
 import { longDay, count } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
-import { replayOnResult } from "../../lab/replays";
+import { replayOnResult, verdictText } from "../../lab/replays";
 import { isRunning } from "../../lab/runs";
 import { seriousOf } from "../../lab/severity";
 import { codeSources } from "../../lab/tone";
@@ -322,6 +322,7 @@ function LiveLine({ check, state }: { check: Check; state: LabState }) {
       Живой агент на тех же клиентах: в записях {before.failed} из {before.measured} → сейчас{" "}
       <span className={now.failed ? "font-semibold text-bad" : "font-semibold"}>{now.failed}</span> из {now.measured}
       <ArrowRight aria-hidden className="ml-1 inline size-4 align-[-2px] text-fg-3" />
+      {verdictText(live) && <span className="mt-0.5 block text-small text-fg-3">{verdictText(live)}</span>}
     </Link>
   );
 }

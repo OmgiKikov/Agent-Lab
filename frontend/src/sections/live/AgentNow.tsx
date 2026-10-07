@@ -4,7 +4,7 @@ import { ArrowRight } from "lucide-react";
 import { liveLink, scenariosLink, SECTIONS, stageLink, type Check } from "../../app/links";
 import { count, longDay, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
-import { latestReplay, replayOnResult } from "../../lab/replays";
+import { latestOnResult, latestReplay, replayOnResult } from "../../lab/replays";
 import { Button, buttonClass } from "../../ui/Button";
 import { Label } from "../../ui/Label";
 import { ChangeLine, ReplayNumbers, replayMeta, VerdictLine } from "./ReplayNumbers";
@@ -30,6 +30,9 @@ function LiveCard({ check }: { check: Check }) {
   const latest = latestReplay(state, check);
   const done = replayOnResult(state, check);
   const running = latest?.status === "running" ? latest : null;
+  // The newest check on this result that did not run to its end: it says why, and is no result to show.
+  const cut = latestOnResult(state, check);
+  const broken = cut && (cut.status === "failed" || cut.status === "stopped") && cut !== done ? cut : null;
   const ready = !!state?.targets.some((t) => t.ready);
   const busy = !!state?.job.running;
   return (
@@ -46,6 +49,22 @@ function LiveCard({ check }: { check: Check }) {
             Смотреть пары
             <ArrowRight aria-hidden className="size-4" />
           </Link>
+        </>
+      ) : broken && (!done || broken.startedAt > done.startedAt) ? (
+        <>
+          <p className="text-read text-fg-2">
+            {broken.status === "stopped" ? "Последняя проверка остановлена" : "Последняя проверка не удалась"}
+            {broken.error ? `: ${broken.error}` : "."}
+          </p>
+          <p className="mt-2 text-small text-fg-3">{replayMeta(broken)}</p>
+          <div className="mt-auto flex flex-wrap items-center gap-x-4 gap-y-2 pt-5">
+            <Button disabled={busy || !ready} onClick={() => setStarting(true)}>
+              Проверить снова
+            </Button>
+            <Link to={liveLink(check, { id: broken.id })} className="text-body text-run hover:underline">
+              Что успели
+            </Link>
+          </div>
         </>
       ) : done ? (
         <>

@@ -302,6 +302,8 @@ export type ReplayItem = {
   topicId: string;
   opening: string;
   recorded: { role: "user" | "assistant"; content: string }[];
+  /** How many messages of the recording were judged: as many replies of the agent as the conversation now had. */
+  cut?: number;
   before: { status: Status; rules: Rule[] };
   status: Status | "RUNNING";
   stage?: string;

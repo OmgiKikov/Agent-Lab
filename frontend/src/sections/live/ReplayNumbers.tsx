@@ -100,7 +100,8 @@ export function ReplayNumbers({ r, size = "page" }: { r: ReplaySummary; size?: "
         </span>
       </p>
       <p className="mt-1 text-read text-fg-2">
-        {plural(pairs, "разговор", "разговора", "разговоров")} с ошибкой агента у тех же клиентов
+        {plural(pairs, "разговора", "разговоров", "разговоров")} с ошибкой агента у тех же клиентов. Запись оценена
+        заново на той же длине, что и разговор сейчас.
       </p>
     </div>
   );

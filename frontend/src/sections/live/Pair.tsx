@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { count } from "../../lab/format";
 import { CHANGE_WORD, changeOf, recordedTurns } from "../../lab/replays";
 import type { ReplayItem, Rule, Turn } from "../../lab/types";
 import { Conversation, type Mark } from "../../product/Conversation";
@@ -31,6 +32,7 @@ function Side({
   turns,
   numbered,
   note,
+  after,
 }: {
   title: string;
   status: ReplayItem["status"];
@@ -38,6 +40,8 @@ function Side({
   turns: Turn[];
   numbered: Numbered;
   note?: string | null;
+  /** What follows the conversation shown and was not judged. */
+  after?: string | null;
 }) {
   const [lit, setLit] = useState<number | null>(null);
   const failed = rules.filter((r) => r.status === "FAIL");
@@ -58,6 +62,7 @@ function Side({
         ) : (
           <p className="text-body text-fg-3">Разговор ещё не начался.</p>
         )}
+        {after && <p className="mt-3 border-t border-line pt-3 text-small text-fg-3">{after}</p>}
       </div>
       {failed.length > 0 && (
         <ul className="mt-3 divide-y divide-line">
@@ -82,6 +87,13 @@ function Side({
       )}
     </section>
   );
+}
+
+/** The part of a recording that was not judged: it went on longer than the conversation now. */
+function restOf(item: ReplayItem): string | null {
+  const rest = item.recorded.length - (item.cut ?? item.recorded.length);
+  if (rest <= 0 || item.status === "RUNNING") return null;
+  return `Дальше в записи ещё ${count(rest, "сообщение", "сообщения", "сообщений")}: разговор сейчас был короче, поэтому запись сравнивается на той же длине.`;
 }
 
 /**
@@ -116,6 +128,7 @@ export function Pair({ item, numbered, onBack }: { item: ReplayItem; numbered: N
         </p>
         <div className="mt-6 grid gap-8 xl:grid-cols-2">
           <Side
+            after={restOf(item)}
             title="В записи"
             status={item.before.status}
             rules={item.before.rules}

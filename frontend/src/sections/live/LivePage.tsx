@@ -90,8 +90,11 @@ export function LivePage({ check }: { check: Check }) {
       },
       { replace },
     );
+  // ⌘K «Проверить живого агента» opens the window, also on this very page; the address forgets it.
   useEffect(() => {
-    if (params.get("start")) set((n) => n.delete("start"));
+    if (!params.get("start")) return;
+    setStarting(true);
+    set((n) => n.delete("start"));
   }, [params]); // eslint-disable-line react-hooks/exhaustive-deps
   const filter = (FILTERS.find((f) => f.value === params.get("v"))?.value ?? "all") as Filter;
   const items = useMemo(() => record?.items ?? [], [record]);
@@ -107,6 +110,7 @@ export function LivePage({ check }: { check: Check }) {
     <Button
       variant="primary"
       icon={Play}
+      aria-label={list.length ? "Проверить снова" : "Проверить живого агента"}
       disabled={running}
       title={running ? "Сейчас идёт другая задача" : undefined}
       onClick={() => setStarting(true)}
@@ -151,11 +155,13 @@ export function LivePage({ check }: { check: Check }) {
       </div>,
     );
 
+  // On a wide screen a pair replaces the one before it (Back leaves the page, as in «Разговоры»); on a phone opening
+  // one is a step, and «Все клиенты» goes back over it.
   const openPair = (id: string | null) =>
     set((n) => {
       if (id) n.set("d", id);
       else n.delete("d");
-    }, !id);
+    }, wide || !id);
   const runMenu =
     list.length > 1 ? (
       <Menu

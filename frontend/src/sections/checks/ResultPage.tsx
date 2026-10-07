@@ -28,11 +28,14 @@ import { AccuracyStart, ToneStart } from "./Start";
 const PART = { bad: "fail", ok: "pass", none: "none" } as const;
 
 /**
- * What stands beside each problem's count: what it had in the previous check (`was`), and what the live agent had on
- * the same customers (`live`, lab/replays replayOnResult) — «живой агент: 3 из 28», among those where it was decided.
+ * What stands beside each problem's count: what it had in the previous check (`was`), and the live agent on the same
+ * customers (`live`, lab/replays replayOnResult) beside the same customers' recordings, both judged now at the same
+ * length — «живой агент: было 12 из 28 → сейчас 3 из 28». Only for a check whose two sides were judged the same way:
+ * otherwise its numbers would read as a change the recordings' own count never had.
  */
 function besideOf(was: ((id: string) => ReactNode) | undefined, live: ReplaySummary | null) {
-  const now = new Map((live?.summary.criteria ?? []).map((c) => [c.id, c.now]));
+  const comparable = !!live?.summary.comparable;
+  const now = new Map(comparable ? (live?.summary.criteria ?? []).map((c) => [c.id, c]) : []);
   if (!was && !now.size) return undefined;
   return (id: string) => {
     const before = was?.(id);
@@ -41,9 +44,10 @@ function besideOf(was: ((id: string) => ReactNode) | undefined, live: ReplaySumm
     return (
       <>
         {before}
-        {counts && counts.measured > 0 && (
+        {counts && counts.now.measured > 0 && (
           <span className="block">
-            живой агент: {counts.failed} из {counts.measured}
+            живой агент: было {counts.before.failed} из {counts.before.measured} → сейчас {counts.now.failed} из{" "}
+            {counts.now.measured}
           </span>
         )}
       </>

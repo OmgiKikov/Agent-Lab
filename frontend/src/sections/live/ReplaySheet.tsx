@@ -14,9 +14,9 @@ import { Segmented } from "../../ui/Segmented";
 import { Sheet } from "../../ui/Sheet";
 import { useToast } from "../../ui/toast";
 
-const SIZES = [20, 50, 100];
+const SIZES = [20, 50];
 /** Conversations played at most in one check of the live agent (backend: domain/replay.py, LIMIT). */
-const LIMIT = 300;
+const LIMIT = 100;
 
 /**
  * «Проверить живого агента»: the customers of the check's result meet the agent again. Which agent (the ways set in
@@ -71,11 +71,11 @@ export function ReplaySheet({ check, open, onClose }: { check: Check; open: bool
             Возьмём клиентов из итога
             {made ? ` (${exportWords(made)}, проверено ${longDay(result?.finishedAt)})` : ""}. Синтетический клиент
             начнёт каждый разговор настоящей первой репликой и будет добиваться того же, что клиент в записи. Агент
-            ответит столько раз, сколько тогда.
+            ответит столько раз, сколько тогда, но не больше трёх.
           </p>
           <p>
-            Модель оценит ответы агента тем же судьёй по тем же критериям, и каждый разговор встанет рядом со своей
-            записью: стало лучше, стало хуже или без изменений.
+            Модель оценит тем же судьёй по тем же критериям и разговор сейчас, и запись на той же длине разговора.
+            Каждый разговор встанет рядом со своей записью: стало лучше, стало хуже или без изменений.
           </p>
           <p className="text-body text-fg-3">
             Цифры и имена в выгрузке скрыты: первую реплику агент получит такой же, как в записи.
