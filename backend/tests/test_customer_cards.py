@@ -272,6 +272,8 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
             ['Модель терминала ….', 'Не установлено, доступна ли история операций терминала по его номеру.'],
         )
         self.assertEqual(card['checks']['dropped']['notEstablished'], 3)
+        # Every later message here tells a fact or a result: none is a sample of the manner, told before its time.
+        self.assertEqual(card['samples'], [])
 
     def test_the_brief_is_checked_for_the_agents_words_the_criteria_and_a_goal_ahead_of_the_customer(self):
         messages = [

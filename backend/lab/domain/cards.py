@@ -464,8 +464,13 @@ def customer(value: dict, dialogue: dict, agent: dict, episode: dict | None = No
     established = [x for x in kept['notEstablished'] if not _knows_identifier(x, agent)]
     dropped['notEstablished'] += len(kept['notEstablished']) - len(established)
     texts = [m['content'] for m in messages[start - 1 : end] if m['role'] == 'user']
-    quoted = {x['quote'] for x in kept['reactions']}
-    samples = [t for t in texts[1:] if not MASK.search(t) and len(t) <= 160 and t not in quoted][:2]
+    # A sample shows the manner only: a message that tells a fact or a result would tell it before its time.
+    telling = {x['n'] for x in [*knowledge, *observations, *reactions]}
+    samples = [
+        m['content']
+        for n, m in enumerate(messages[start:end], start + 1)
+        if m['role'] == 'user' and n not in telling and not MASK.search(m['content']) and len(m['content']) <= 160
+    ][:2]
     filled = _filled(texts[0], value.get('openingFilled'))
     opening = filled or _digits(texts[0], source)
     card = {
