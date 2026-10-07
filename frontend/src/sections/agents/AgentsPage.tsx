@@ -2,58 +2,15 @@ import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Plus, Trash2 } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { agentHref, forgetAgent } from "../../app/agent";
 import { Mark } from "../../app/Mark";
-import { deleteAgent, useAgents, type Agent, type CheckLine } from "../../lab/agents";
+import { deleteAgent, useAgents, type Agent } from "../../lab/agents";
 import { CHECK_NAME, CHECKS } from "../../lab/checks";
-import { longDay, plural } from "../../lab/format";
 import { Button } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { Modal } from "../../ui/Modal";
+import { CheckResult } from "../../product/CheckResult";
 import { NewAgent } from "./NewAgent";
-
-/**
- * The result of one check in a line: its name and date, errors of measured, the split as a thin bar. Each check has its
- * own line: the two are never added up.
- */
-function Result({ name, line }: { name: string; line: CheckLine }) {
-  const { failed, measured, unmeasured } = line;
-  const parts = [
-    { key: "bad", n: failed, cls: "bg-bad" },
-    { key: "ok", n: Math.max(0, measured - failed), cls: "bg-ok" },
-    { key: "none", n: unmeasured, cls: "hatch" },
-  ].filter((p) => p.n > 0);
-  const total = parts.reduce((s, p) => s + p.n, 0) || 1;
-  return (
-    <div>
-      <p className="flex items-baseline justify-between gap-3 text-small text-fg-3">
-        <span className="font-medium text-fg-2">{name}</span>
-        <span>{longDay(line.finishedAt)}</span>
-      </p>
-      <p className="mt-1 text-small text-fg-3">
-        {measured ? (
-          <>
-            <span className={cn("text-count font-semibold tabular-nums", failed ? "text-bad" : "text-fg")}>
-              {failed}
-            </span>
-            {"\u00a0из\u00a0"}
-            <span className="font-semibold tabular-nums text-fg">{measured}</span>{" "}
-            {plural(measured, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} — с ошибкой
-            агента
-          </>
-        ) : (
-          "Ни один разговор не удалось проверить"
-        )}
-      </p>
-      <div className="mt-2 flex h-1.5 w-full gap-[2px] overflow-hidden rounded-full" aria-hidden>
-        {parts.map((p) => (
-          <div key={p.key} className={cn("h-full rounded-full", p.cls)} style={{ width: `${(100 * p.n) / total}%` }} />
-        ))}
-      </div>
-    </div>
-  );
-}
 
 /**
  * One agent: its name, what it is, the result of each of its checks. The whole card opens the agent; the bin in its
@@ -76,7 +33,7 @@ function AgentCard({ agent, onDelete }: { agent: Agent; onDelete: () => void }) 
           {lines.length ? (
             <div className="space-y-4">
               {lines.map(({ check, line }) => (
-                <Result key={check} name={CHECK_NAME[check]} line={line} />
+                <CheckResult key={check} name={CHECK_NAME[check]} line={line} />
               ))}
             </div>
           ) : (

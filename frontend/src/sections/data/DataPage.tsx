@@ -1,16 +1,17 @@
 import { useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { Archive, ArrowRight, ChevronDown, ChevronRight, Database, Info, RotateCcw } from "lucide-react";
+import { Archive, ArrowRight, ChevronDown, Database, Info, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Header } from "../../app/Header";
 import { SectionJob } from "../../app/SectionJob";
-import { SECTIONS, datasetLink, launchLink, stageRoot, type Check } from "../../app/links";
+import { SECTIONS, datasetLink, launchLink, stageRoot } from "../../app/links";
 import { useWide } from "../../app/useWide";
 import { CHECK_NAME, CHECKS, resultOf } from "../../lab/checks";
 import { useDatasets, type Dataset } from "../../lab/datasets";
 import { count, longDay, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { useLaunches } from "../../lab/launches";
+import { CheckResult } from "../../product/CheckResult";
 import { ExportFormat } from "../../product/ExportFormat";
 import { UploadButton } from "../../product/UploadLogs";
 import { Button, buttonClass } from "../../ui/Button";
@@ -27,9 +28,6 @@ const conversations = (n: number) => count(n, "разговор", "разгов�
 const Num = ({ n, bad }: { n: number; bad?: boolean }) => (
   <span className={cn("font-semibold tabular-nums", bad ? "text-bad" : "text-fg")}>{n}</span>
 );
-
-/** The way to a check not done yet, in the prototype's words. */
-const CHECK_LAUNCH: Record<Check, string> = { tone: "Проверить Tone of voice", code: "Проверить точность" };
 
 type Fact = { key: string; node: ReactNode };
 
@@ -50,16 +48,6 @@ function Facts({ facts }: { facts: Fact[] }) {
     </span>
   );
 }
-
-/** What a check found, in the words of every result: errors of what it could check, the errors red as there. */
-const foundText = (check: Check, failed: number, measured: number) =>
-  measured ? (
-    <>
-      {CHECK_NAME[check]}: <Num n={failed} bad={failed > 0} /> из <Num n={measured} /> с ошибкой
-    </>
-  ) : (
-    `${CHECK_NAME[check]}: не удалось проверить`
-  );
 
 /**
  * «Датасеты»: one export at a time, the newest by default — what it holds and what the checks found in it, in one line,
@@ -183,17 +171,19 @@ export function DataPage() {
   const found = CHECKS.flatMap((check) => {
     if (inWork) {
       const result = resultOf(state, check);
-      return result
-        ? [{ check, text: foundText(check, result.summary.failed, result.summary.measured), to: stageRoot(check) }]
-        : [];
+      if (!result) return [];
+      const { failed, measured, unmeasured } = result.summary;
+      return [{ check, line: { failed, measured, unmeasured, finishedAt: result.finishedAt }, to: stageRoot(check) }];
     }
     const launch = launches.data?.launches.find(
       (l) => l.check === check && l.dataset?.datasetId === d.id && l.modes.dataset?.metric,
     );
     const metric = launch?.modes.dataset?.metric;
-    return launch && metric
-      ? [{ check, text: foundText(check, metric.failed, metric.measured), to: launchLink(check, launch.id) }]
-      : [];
+    if (!launch || !metric) return [];
+    const { failed, measured, unmeasured } = metric;
+    return [
+      { check, line: { failed, measured, unmeasured, finishedAt: launch.startedAt }, to: launchLink(check, launch.id) },
+    ];
   });
   // The newest dataset left goes into work when the one in work goes to the archive (backend: flows/datasets.archive).
   const next = listed.find((x) => x.id !== d.id) ?? null;
@@ -248,29 +238,33 @@ export function DataPage() {
       : []),
     ...(d.archivedAt ? [{ key: "archived", node: `в архиве с ${longDay(d.archivedAt)}` }] : []),
   ];
-  // The checks of this dataset, each its own pill: what it found, leading to it; or, not done, the way to do it. The
-  // first not done is the next step and the one black pill; with both done, no pill calls.
-  const nextCheck = d.archivedAt ? undefined : CHECKS.find((check) => !found.some((f) => f.check === check));
-  const pills = CHECKS.flatMap((check) => {
+  // Each check of this dataset as an agent's card says it: its result in a line with its bar, leading to it; or not
+  // checked yet, and the way to begin.
+  const checks = CHECKS.map((check) => {
     const f = found.find((x) => x.check === check);
-    if (f)
-      return [
-        <Link key={check} to={f.to} className={cn(buttonClass({ variant: "outline" }), "font-normal")}>
-          {/* One piece of text: the pill spaces its icon apart, not the words. */}
-          <span>{f.text}</span>
-          <ChevronRight aria-hidden className="size-3.5 text-fg-3" />
-        </Link>,
-      ];
-    if (d.archivedAt) return [];
-    return [
+    return f ? (
       <Link
         key={check}
-        to={`${launchLink(check)}?dataset=${encodeURIComponent(d.id)}`}
-        className={buttonClass({ variant: check === nextCheck ? "primary" : "outline" })}
+        to={f.to}
+        className="-m-2 block rounded-control p-2 transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
       >
-        {CHECK_LAUNCH[check]}
-      </Link>,
-    ];
+        <CheckResult name={CHECK_NAME[check]} line={f.line} />
+      </Link>
+    ) : (
+      <div key={check}>
+        <p className="text-small font-medium text-fg-2">{CHECK_NAME[check]}</p>
+        <p className="mt-1 text-small text-fg-3">Ещё не проверяли</p>
+        {!d.archivedAt && (
+          <Link
+            to={`${launchLink(check)}?dataset=${encodeURIComponent(d.id)}`}
+            className="mt-1 inline-flex items-center gap-1 rounded-sm text-small font-medium text-run hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
+          >
+            Начать проверку
+            <ArrowRight aria-hidden className="size-3.5" />
+          </Link>
+        )}
+      </div>
+    );
   });
   // On a phone an open conversation takes the whole page.
   const reading = !!params.get("d") && !wide;
@@ -296,8 +290,8 @@ export function DataPage() {
       {header}
       {!reading && (
         <section aria-label="Датасет" className="flex-shrink-0 border-b border-line px-4 py-5 lg:px-10">
-          <div className="flex flex-wrap items-start gap-x-4 gap-y-3">
-            {/* On a phone «Проверить» goes under the line, which keeps its facts whole. */}
+          <div className="flex flex-wrap items-start gap-x-10 gap-y-4">
+            {/* What it is on the left, what the checks found on the right; on a narrow screen one under the other. */}
             <div className="min-w-[min(100%,22rem)] flex-1">
               <h2 className={choices.length ? "sr-only" : "break-words text-title font-semibold text-fg"}>{title}</h2>
               {choices.length > 0 && (
@@ -325,20 +319,18 @@ export function DataPage() {
                 </button>
               </p>
             </div>
-            <div className="flex flex-wrap items-center gap-2">
-              {pills}
-              {d.archivedAt && (
-                <Button
-                  icon={RotateCcw}
-                  disabled={library.changing || !!state.job.running}
-                  onClick={() =>
-                    void library.change("archive", d.id, { undo: true }).catch((cause) => toast.error(cause))
-                  }
-                >
-                  Вернуть из архива
-                </Button>
-              )}
-            </div>
+            <div className="grid w-full gap-x-8 gap-y-4 sm:grid-cols-2 lg:w-[540px]">{checks}</div>
+            {d.archivedAt && (
+              <Button
+                icon={RotateCcw}
+                disabled={library.changing || !!state.job.running}
+                onClick={() =>
+                  void library.change("archive", d.id, { undo: true }).catch((cause) => toast.error(cause))
+                }
+              >
+                Вернуть из архива
+              </Button>
+            )}
           </div>
         </section>
       )}
