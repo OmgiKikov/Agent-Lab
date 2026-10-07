@@ -1,5 +1,5 @@
 import { Input, Textarea } from "../../ui/Field";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { agentKey } from "../../app/agent";
 import { Plus, Trash2, Upload } from "lucide-react";
 import { api, upload } from "../../lab/api";
@@ -60,6 +60,12 @@ export function RuleEditor({
   }, [draftKey, name, policy, rules, expectedBase]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Why a save did not go through is said above the form and brought into view: «Сохранить» sits in the header, and
+  // the person may be far down among the criteria.
+  const notice = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (conflict || error) notice.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+  }, [conflict, error]);
   const patch = (i: number, change: Partial<ToneCriterion>) =>
     setRules((all) => all.map((r, index) => (index === i ? { ...r, ...change } : r)));
   const read = async (file?: File) => {
@@ -127,6 +133,30 @@ export function RuleEditor({
       width="lg"
     >
       <fieldset disabled={busy || state?.job.running} className="space-y-6 p-5 sm:p-7">
+        {(conflict || error) && (
+          <div ref={notice} className="scroll-mt-4 space-y-3">
+            {conflict && (
+              <div role="alert" className="rounded-block bg-inset p-4 text-body text-fg-2">
+                <p>Пока вы редактировали, у набора появилась версия {conflict.version}. Ваши правки целы.</p>
+                <Button
+                  className="mt-3"
+                  disabled={busy || !valid || state?.job.running}
+                  onClick={() => {
+                    setExpectedBase(conflict.id);
+                    void save(conflict.id);
+                  }}
+                >
+                  Сохранить поверх версии {conflict.version}
+                </Button>
+              </div>
+            )}
+            {error && (
+              <p role="alert" className="text-read text-bad">
+                {error}
+              </p>
+            )}
+          </div>
+        )}
         <label className="block text-body font-medium text-fg">
           Название набора
           <Input autoFocus maxLength={160} value={name} onChange={(e) => setName(e.target.value)} className="mt-1" />
@@ -224,26 +254,6 @@ export function RuleEditor({
             Добавить критерий
           </Button>
         </section>
-        {conflict && (
-          <div role="alert" className="rounded-block bg-inset p-4 text-body text-fg-2">
-            <p>Пока вы редактировали, у набора появилась версия {conflict.version}. Ваши правки целы.</p>
-            <Button
-              className="mt-3"
-              disabled={busy || !valid || state?.job.running}
-              onClick={() => {
-                setExpectedBase(conflict.id);
-                void save(conflict.id);
-              }}
-            >
-              Сохранить поверх версии {conflict.version}
-            </Button>
-          </div>
-        )}
-        {error && (
-          <p role="alert" className="text-read text-bad">
-            {error}
-          </p>
-        )}
       </fieldset>
     </Sheet>
   );
