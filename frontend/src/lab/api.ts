@@ -2,7 +2,7 @@
 import { AGENT } from "../app/agent";
 
 const API = import.meta.env.VITE_LAB_API_BASE_URL ?? "";
-/** Every call works inside the agent of the page (backend/lab/api.py, X-Agent), or inside the one it names. */
+/** Every call works inside the agent of the page (backend/lab/app.py, X-Agent), or inside the one it names. */
 const agentHeader = (agent: string | null): Record<string, string> => (agent ? { "X-Agent": agent } : {});
 const AGENT_HEADER = agentHeader(AGENT);
 

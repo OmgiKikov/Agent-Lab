@@ -9,6 +9,7 @@ import type { LabState } from "../../lab/types";
 import { exportFileError, ReplaceExport, replacesResult } from "../../product/UploadLogs";
 import { Button } from "../../ui/Button";
 import { Modal } from "../../ui/Modal";
+import { clarificationsOf, clarifiedText, toneDeck } from "./Criteria";
 import { TakeRules } from "./TakeRules";
 
 export function Materials({ state, onNext }: { state: LabState; onNext: () => void }) {
@@ -79,13 +80,15 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
       await refresh();
       onNext();
     });
-  // New rules replace the criteria and take the tone-of-voice result away, with the scenarios built from it (backend:
-  // store.replace_inputs); the same rules only collect the criteria anew, and the result stays. Accuracy is not touched.
+  // New rules replace the criteria and take the tone-of-voice result away, with the clarifications people confirmed
+  // and the scenarios built from it (backend: store.replace_inputs): asked first whenever one of them is there. The same
+  // rules only collect the criteria anew, and the result stays. Accuracy is not touched.
+  const deck = toneDeck(state);
+  const clarified = clarificationsOf(state.toneOfVoice);
   const next = () => {
-    if (toneResult(state) && !unchanged) setPending({ next: true });
+    if (!unchanged && (toneResult(state) || clarified || deck)) setPending({ next: true });
     else prepare();
   };
-  const deck = state.cards?.check === "tone" && !!state.cards.cards.length;
   const disabled = busy || state.job.running;
   return (
     <section aria-labelledby="materials-title">
@@ -228,9 +231,16 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
         }
       >
         <p className="text-read text-fg-2">
-          Итог tone of voice уйдёт в «Историю». Критерии соберутся заново, а ваши уточнения к прежним критериям не
-          перейдут.{deck ? " Сценарии, собранные из tone of voice, сбросятся." : ""} Итог точности не изменится.
+          {toneResult(state) ? "Итог tone of voice уйдёт в «Историю». " : ""}
+          Критерии соберутся заново по новым правилам.
+          {deck ? " Сценарии, собранные из tone of voice, сбросятся." : ""} Итог точности не изменится.
         </p>
+        {clarified > 0 && (
+          <p className="mt-3 text-read text-fg-2">
+            {clarifiedText(clarified, "У прежних критериев")} {clarified === 1 ? "Оно пропадёт" : "Они пропадут"},
+            потому что правила изменились.
+          </p>
+        )}
       </Modal>
     </section>
   );

@@ -1,6 +1,5 @@
 """An agent reached over HTTP: the aigw-rest-service contract in its two dialects (the IFT stand and the local one)."""
 
-import os
 import re
 import time
 import uuid
@@ -9,7 +8,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from ..settings import AGENT_TIMEOUT, MOCK_URL
+from .. import config
 
 AGENT_PATH = '/api/v1/ai/agents/agent-ckr-pa-acquiring'
 # Who speaks when a recorded conversation is replayed: the bank chat (Voice360 «agentCode» AGENT_GIGACHAT). With it
@@ -45,7 +44,7 @@ def prod_request(conversation_id: str, text: str, epk_ids: list[str]) -> tuple[d
     headers = {
         'Content-Type': 'application/json',
         'Request-Id': str(uuid.uuid4()),
-        'System-Id': os.environ.get('LAB_PROD_SYSTEM_ID', '6ba7b810-9dad-11d1-80b4-00c04fd430c8'),
+        'System-Id': config.current().prod_system_id,
         'Request-Time': datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ'),
     }
     body = {
@@ -140,12 +139,16 @@ def read_reply(data: object, http_status: int) -> dict:
     return {'text': text, 'status': status, 'ok': status.startswith('200') and bool(text), 'options': options}
 
 
+# What a run records as the agent's version when the stand names none.
+UNKNOWN_VERSION = 'не сообщается'
+
+
 class HttpAgent:
-    def __init__(self, config: dict) -> None:
-        self.url = config.get('url') or ''
-        self.profile = config.get('profile', 'prod')
-        self.epk = config.get('epk') or []
-        self.version = 'не сообщается'
+    def __init__(self, connection: dict) -> None:
+        self.url = connection.get('url') or ''
+        self.profile = connection.get('profile', 'prod')
+        self.epk = connection.get('epk') or []
+        self.version = UNKNOWN_VERSION
 
     @property
     def mocked(self) -> bool:
@@ -181,7 +184,7 @@ class HttpAgent:
             raise AgentError(BAD_ADDRESS)  # saved before addresses were checked: the agent cannot be reached
         headers, body = self.request(conversation_id, text, history)
         # A long answer is normal; an unreachable address should fail fast.
-        async with httpx.AsyncClient(timeout=httpx.Timeout(AGENT_TIMEOUT, connect=10)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(config.current().agent_timeout, connect=10)) as client:
             if world and self.mocked:
                 await _apply_world(client, headers['x-trace-id'], world)
             cursor = await _mock_cursor(client) if self.mocked else None
@@ -221,7 +224,9 @@ async def _apply_world(client: httpx.AsyncClient, trace_id: str, world: dict) ->
     """The scenario's answers of the bank's systems, for this request only."""
     try:
         response = await client.post(
-            f'{MOCK_URL}/mock/overrides', json={'trace_id': trace_id, 'sbe': {'tools': world}}, timeout=5
+            f'{config.current().mock_url}/mock/overrides',
+            json={'trace_id': trace_id, 'sbe': {'tools': world}},
+            timeout=5,
         )
         response.raise_for_status()
     except (httpx.HTTPError, httpx.InvalidURL) as error:
@@ -232,7 +237,7 @@ async def _apply_world(client: httpx.AsyncClient, trace_id: str, world: dict) ->
 
 async def _mock_cursor(client: httpx.AsyncClient) -> int | None:
     try:
-        data = (await client.get(f'{MOCK_URL}/mock/calls', params={'limit': 0}, timeout=3)).json()
+        data = (await client.get(f'{config.current().mock_url}/mock/calls', params={'limit': 0}, timeout=3)).json()
         return data.get('cursor') if isinstance(data, dict) else None
     except (httpx.HTTPError, httpx.InvalidURL, ValueError):
         return None
@@ -260,7 +265,7 @@ async def _mock_events(client: httpx.AsyncClient, cursor: int | None, trace_id: 
         return []
     try:
         params = {'after': cursor, 'limit': 500}
-        data = (await client.get(f'{MOCK_URL}/mock/calls', params=params, timeout=3)).json()
+        data = (await client.get(f'{config.current().mock_url}/mock/calls', params=params, timeout=3)).json()
     except (httpx.HTTPError, httpx.InvalidURL, ValueError):
         return []
     events = []

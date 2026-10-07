@@ -1,15 +1,19 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
-import type { Criterion } from "../../lab/criteria";
+import type { Criterion, Loading } from "../../lab/criteria";
 import { count } from "../../lab/format";
 import { criterionLink, problemLink, side, type Stage } from "../../app/links";
 import { ENTER, stagger } from "../../product/motion";
+import { Skeleton } from "../../ui/EmptyState";
+import { LoadFailed } from "../../ui/LoadFailed";
 import { queueOf } from "./model";
 import { ProblemRow } from "./ProblemRow";
 
 /**
  * The problems of a stage, the serious ones first, then the most frequent, with how many criteria have no error found;
- * `limit` for the overview, `was` for what each problem had in the previous check of a check.
+ * `limit` for the overview, `was` for what each problem had in the previous check of a check. `record` — how the
+ * record of the criteria stands (lab/criteria, useCriteria): while it loads or after it failed the list says so, and
+ * an empty list is never shown for a record that has not come.
  */
 export function ProblemList({
   list,
@@ -17,13 +21,18 @@ export function ProblemList({
   runId,
   limit,
   was,
+  record,
 }: {
   list: Criterion[];
   stage: Stage;
   runId?: string | null;
   limit?: number;
   was?: (id: string) => ReactNode;
+  record?: Loading;
 }) {
+  if (record?.error)
+    return <LoadFailed title="Не удалось загрузить проблемы" error={record.error} onRetry={record.retry} />;
+  if (record?.loading) return <Skeleton className={limit ? "mt-3 h-48" : "mt-3 h-72"} />;
   const where = side(stage);
   const rows = queueOf(list, where);
   const shown = limit ? rows.slice(0, limit) : rows;
@@ -40,7 +49,9 @@ export function ProblemList({
   return (
     <>
       {/* «6 из 52» next to «53 проверенных разговоров» read as a slip: what the second number counts is said once. */}
-      <p className="pt-2 text-small text-fg-3">Второе число — в скольких разговорах удалось проверить критерий.</p>
+      <p className="pt-2 text-small text-fg-3">
+        Второе число показывает, в скольких разговорах удалось проверить критерий.
+      </p>
       <ol className="divide-y divide-line">
         {shown.map((c, i) => (
           <li key={c.r.id} className={ENTER} style={stagger(i + 2)}>

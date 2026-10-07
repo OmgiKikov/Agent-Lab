@@ -3,8 +3,8 @@ acquiring agent that writes nothing outside itself, one call per turn answering 
 
 import httpx
 
-from ..settings import AGENT_TIMEOUT
-from .http import BAD_ADDRESS, AgentError, address_valid, local_request, read_reply
+from .. import config
+from .http import BAD_ADDRESS, UNKNOWN_VERSION, AgentError, address_valid, local_request, read_reply
 
 NO_ADDRESS = 'Не задан адрес сервиса повтора. Укажите его в LAB_REPLAY_URL.'
 NOT_READY = 'Сервис повтора не готов. {}'
@@ -21,9 +21,9 @@ class ReplayServiceAgent:
     traced = True
     mocked = False
 
-    def __init__(self, config: dict, transport: httpx.AsyncBaseTransport | None = None) -> None:
-        self.url = (config.get('url') or '').rstrip('/')
-        self.version = 'не сообщается'
+    def __init__(self, connection: dict, transport: httpx.AsyncBaseTransport | None = None) -> None:
+        self.url = (connection.get('url') or '').rstrip('/')
+        self.version = UNKNOWN_VERSION
         self.stand: dict | None = None
         self._transport = transport  # a test's service in memory; None — the network
 
@@ -48,7 +48,8 @@ class ReplayServiceAgent:
         if world:
             raise AgentError(NO_WORLD)
         _, body = local_request(conversation_id, text, history)
-        answer = await self._call('POST', '/replay/turn', body=body, timeout=httpx.Timeout(AGENT_TIMEOUT, connect=10))
+        timeout = httpx.Timeout(config.current().agent_timeout, connect=10)
+        answer = await self._call('POST', '/replay/turn', body=body, timeout=timeout)
         agent = answer.get('agent') or {}
         status = int(agent.get('status') or 0)
         if status != 200 and not _is_reply(agent.get('body')):

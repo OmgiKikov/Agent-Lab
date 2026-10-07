@@ -68,25 +68,41 @@ export function numberCriteria(rules: RuleEntry[], reference?: string[]): { list
   return { list, topics };
 }
 
+/** How the records a screen rests on stand: still coming, failed with the way to ask again, or here (both false). */
+export type Loading = {
+  /** A record is asked for and not here yet; also while the service's state has not come. */
+  loading: boolean;
+  /** Why a record could not be loaded, once every try failed; `retry` asks for it again. */
+  error: Error | null;
+  retry: () => void;
+};
+
 /**
  * The numbered criteria of a check. Numbers come from the check's own record (its result and its last run), so a
  * criterion keeps its number in a run's results; a rule only that run has gets the next free number. Tone of voice
- * numbers its criteria in the order of the person's draft, as the step-by-step check shows them.
+ * numbers its criteria in the order of the person's draft, as the step-by-step check shows them. Until the records
+ * they rest on are here, `list` is empty and `loading` or `error` says why: a screen says «no errors» or «nothing
+ * checked» only of a record that came.
  */
 export function useCriteria(
   check: Check | null,
   runId: string | null = null,
-): {
+): Loading & {
   data: Problems | undefined;
   list: Criterion[];
   topics: Topic[];
   unnamed: number;
 } {
-  const { data: base } = useProblems(check);
-  const { data: withRun } = useProblems(check, runId, !!runId);
+  const baseQuery = useProblems(check);
+  const runQuery = useProblems(check, runId, !!runId);
+  const base = baseQuery.data;
+  const withRun = runQuery.data;
   const { state } = useLabState();
   const draft = check === "tone" ? state?.toneOfVoice : null;
-  return useMemo(() => {
+  // The check's own record numbers the criteria; a run's, when one is asked for, holds what is shown.
+  const missing = [...(check ? [baseQuery] : []), ...(runId ? [runQuery] : [])].filter((q) => q.data === undefined);
+  const failed = missing.find((q) => q.error && !q.isFetching);
+  const criteria = useMemo(() => {
     const reference = draft?.criteria.map((c) => c.quote);
     const numbered = numberCriteria(base?.rules ?? [], reference);
     const data = runId ? withRun : base;
@@ -109,4 +125,10 @@ export function useCriteria(
       .sort((a, b) => a.n - b.n);
     return { data, list, topics: numbered.topics, unnamed };
   }, [base, withRun, runId, draft]);
+  return {
+    ...criteria,
+    loading: missing.length > 0 && !failed,
+    error: failed?.error ?? null,
+    retry: () => missing.forEach((q) => void q.refetch()),
+  };
 }

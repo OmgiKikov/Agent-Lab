@@ -8,17 +8,17 @@ import type { Problems, RuleEntry } from "./problems";
 import type { Check, Job } from "./types";
 
 /**
- * Serious and minor errors (spec 2026-10-04-severity-design.md). After each check the automatic check proposes, for
+ * Serious and minor errors. After each check the automatic check proposes, for
  * every criterion of the result, whether its errors are serious, with a reason; a person confirms or changes it — in
  * the criteria, on the problem's page, or all at once («Подтвердить все») — and a person's decision always wins: no new
  * proposal changes it. Without either an error is minor. Both live in the service by the criterion's key (the
  * problem's id), apart from the criteria: they change neither what is checked nor how. Serious problems come first
  * everywhere, carry «серьёзная», and the conversations with a serious error are counted beside the check's number —
- * never instead of it, never added to it; every screen says whose decision it is (DESIGN.md, «Честность чисел», 4).
+ * never instead of it, never added to it; every screen says whose decision it is.
  */
 export type Mark = { check: Check; rule: string; serious: boolean };
 
-/** What the service says while the automatic check proposes (backend/lab/severity.py), and the name of its task. */
+/** What the service says while the automatic check proposes (backend/lab/flows/severity.py), and the name of its task. */
 export const PROPOSING = "Отмечаем серьёзные ошибки";
 
 /** The person reading («вы») or, on a page someone else reads (the summary, a report, a letter), people («люди»). */
@@ -108,7 +108,7 @@ export function whoseText(st: Standing, who: Who = "you"): string {
     return st.proposed
       ? `Серьёзных критериев нет. Так считает ${MODEL[who]}, ${checked}.`
       : `Серьёзных критериев нет. Так решили ${person}.`;
-  const head = `Серьёзные критерии — ${st.serious}\u00a0из\u00a0${st.criteria}.`;
+  const head = `Серьёзных критериев ${st.serious}\u00a0из\u00a0${st.criteria}.`;
   const them = st.serious === 1 ? "Его" : "Их";
   if (!st.yours) return `${head} ${them} отметила ${MODEL[who]}, ${checked}.`;
   return `${head} ${them} отметили ${person}.${st.proposed ? ` Всего ${checked}.` : ""}`;
@@ -160,7 +160,7 @@ export function seriousOf(data: Problems | null | undefined): Serious | null {
  * проверить в 16 разговорах из 53.», or «Этот критерий не удалось проверить ни в одном разговоре.» A share of all
  * conversations says little when the criteria seldom applied, and this says how seldom.
  */
-function whereText(s: Serious): string | null {
+export function whereText(s: Serious): string | null {
   if (s.checked >= s.measured) return null;
   const these = s.marked === 1 ? "Этот критерий" : "Эти критерии";
   if (!s.checked) return `${these} не удалось проверить ни в одном разговоре.`;
@@ -177,7 +177,7 @@ export type SeverityLine =
   | { kind: "text"; text: string; action?: "check" | "propose" | "again" };
 
 /**
- * What a check says about serious errors, line by line (DESIGN.md, «Честность чисел», 4). Once a criterion is
+ * What a check says about serious errors, line by line. Once a criterion is
  * serious: the count of the same checked conversations; which criteria are serious and whose decision it is; where
  * they could be checked, when not everywhere; what is not decided yet. With none serious: whose decision that is. While
  * nothing is marked: that, or why it failed. A page someone else reads (`people`) says nothing until something is

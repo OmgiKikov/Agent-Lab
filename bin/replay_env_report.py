@@ -24,7 +24,7 @@ from pathlib import Path
 
 LAB = Path(__file__).resolve().parents[1]
 AGENT_BRANCH = 'feat/replay-service'
-LAB_BRANCH = 'feat/voice360-replay-traces'
+LAB_BRANCH = 'feat/voice360-replay-on-master'
 SECRET = re.compile(r'PASS|SECRET|TOKEN|LOGIN|CREDENTIAL|API_KEY|(?<!_)KEY$|_KEY$')
 PATHLIKE = re.compile(r'(FILEPATH|CERT_PATH)$')
 ENDPOINTS = (
@@ -240,16 +240,15 @@ def lab_setup() -> list[str]:
     url = certs / 'url.txt'
     if url.exists():
         lines.append(f'шлюз моделей: {mask_url(url.read_text(encoding="utf-8").strip())}')
-    for key in ('LAB_MODEL_URL', 'LAB_MODEL', 'LAB_SECOND_MODEL', 'LAB_SECOND_URL', 'LAB_DATA', 'LAB_PORT', 'LAB_REPLAY_URL'):
+    for key in (
+        'LAB_MODEL_URL', 'LAB_MODEL', 'LAB_SECOND_MODEL', 'LAB_SECOND_URL', 'LAB_DATA', 'LAB_PORT', 'LAB_REPLAY_URL',
+        'LAB_AGENT_TIMEOUT', 'AGENT_LAB_MOCK_URL',
+    ):  # fmt: skip
         if key in os.environ:
             lines.append(f'{key}={shown(key, os.environ[key])}')
     agents = LAB / 'data' / 'agents'
     lines.append(f'агенты в data/: {", ".join(sorted(p.name for p in agents.iterdir())) if agents.exists() else "нет"}')
     lines.append(f'интерфейс собран (frontend/dist): {"да" if (LAB / "frontend" / "dist").exists() else "нет"}')
-    settings = LAB / 'backend' / 'lab' / 'settings.py'
-    if settings.exists():
-        found = re.findall(r"(AGENT_TIMEOUT|MOCK_URL)\s*=\s*(.+)", settings.read_text(encoding='utf-8'))
-        lines += [f'settings.py {key} = {value.strip()}' for key, value in found]
     return lines
 
 

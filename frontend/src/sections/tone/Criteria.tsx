@@ -6,36 +6,73 @@ import { duty } from "../../lab/criteria";
 import { count } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { toneResult } from "../../lab/tone";
-import type { LabState } from "../../lab/types";
+import type { LabState, ToneDraft } from "../../lab/types";
 import { UploadButton } from "../../product/UploadLogs";
 import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
+import { Modal } from "../../ui/Modal";
+import { useToast } from "../../ui/toast";
+import { stopFailed } from "./Checking";
 
-/** One check takes at most this many criteria (backend/lab/api.py, ToneCheckCommand). */
+/** One check takes at most this many criteria (backend/lab/api/tone.py, ToneCheckCommand). */
 const MAX_CRITERIA = 20;
+
+/** The clarifications people confirmed on the criteria: the work that collecting criteria again can take away. */
+export const clarificationsOf = (draft: ToneDraft | null | undefined) =>
+  (draft?.criteria ?? []).reduce((n, c) => n + (c.clarifications?.length ?? 0), 0);
+
+/** «У критериев 3 подтверждённых уточнения.» — how many there are, the first words of what happens to them. */
+export const clarifiedText = (n: number, of = "У критериев") =>
+  `${of} ${count(n, "подтверждённое уточнение", "подтверждённых уточнения", "подтверждённых уточнений")}.`;
+
+/** The tone of voice scenarios of the agent: new criteria take them away (store.save_tone_draft). */
+export const toneDeck = (state: LabState) => state.cards?.check === "tone" && !!state.cards.cards.length;
+
+/**
+ * A check of these criteria that was stopped and can go on (the service keeps what it judged), also when other tasks
+ * ran since: its criteria, how many conversations, and how many it judged, to offer the same start again.
+ */
+function pausedCheck(state: LabState) {
+  const job = state.paused?.["tone-check"];
+  const input = job?.input;
+  if (!job || !input?.ruleIds || !input.count || input.revision !== state.toneOfVoice?.revision) return null;
+  return { ruleIds: input.ruleIds, count: input.count, kept: job.kept ?? 0 };
+}
+
+const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((id) => b.includes(id));
 
 export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack: () => void; onStarted: () => void }) {
   const { refresh } = useLabState();
+  const toast = useToast();
   const draft = state.toneOfVoice;
   const result = toneResult(state);
+  const paused = pausedCheck(state);
   const [choice, setChoice] = useState<{ revision: string; ids: string[] } | null>(null);
   // While the first criteria are still being collected there is neither a draft nor a choice: nothing is chosen yet.
+  // A stopped check that can go on is offered as it was: its criteria and its size.
   const ids =
     choice && choice.revision === draft?.revision
       ? choice.ids
-      : ((result?.criteriaRevision === draft?.revision
+      : (paused?.ruleIds ??
+        (result?.criteriaRevision === draft?.revision
           ? result?.topics.flatMap((t) => t.rules.map((c) => c.id))
           : null) ??
         draft?.criteria.slice(0, MAX_CRITERIA).map((c) => c.id) ??
         []);
   const full = ids.length >= MAX_CRITERIA;
-  const [size, setSize] = useState(100);
+  const [chosenSize, setSize] = useState<number | null>(null);
+  const size = chosenSize ?? paused?.count ?? 100;
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Collecting the criteria anew from the same rules is asked first: it can take away what people made of them.
+  const [asking, setAsking] = useState(false);
+  const clarified = clarificationsOf(draft);
   const running = state.job.running;
   const generating = running && state.job.kind === "tone-criteria";
   const serviceError = state.job.kind === "tone-criteria" ? state.job.error : null;
   const total = Math.min(size, state.logs.total);
+  // The same start as the stopped check: it goes on from where it stopped, judging only the rest.
+  const resumes = !!paused && total === paused.count && sameSet(ids, paused.ruleIds);
   const sizes = [...new Set([100, 200, 300].map((n) => Math.min(n, state.logs.total)))];
   const toggle = (id: string) =>
     draft &&
@@ -74,10 +111,9 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
           <Button
             className="mt-3"
             onClick={() =>
-              api("/api/job/stop", {}).then(
-                () => refresh(),
-                () => refresh(),
-              )
+              api("/api/job/stop", {})
+                .catch((e) => toast.error(stopFailed("сборку критериев", e)))
+                .finally(() => void refresh())
             }
           >
             Остановить
@@ -160,14 +196,21 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
               </select>
             </div>
           )}
-          {!!state.logs.total && (
-            <p className="mt-2 text-body text-fg-3">
-              Проверим {total}
-              {"\u00a0"}из{"\u00a0"}
-              {count(state.logs.total, "разговора", "разговоров", "разговоров")} по{" "}
-              {count(ids.length, "критерию", "критериям", "критериям")}. Подключать агента не нужно.
-            </p>
-          )}
+          {!!state.logs.total &&
+            (resumes ? (
+              <p className="mt-2 text-body text-fg-3">
+                Проверка остановлена, проверенное сохранено: уже {paused?.kept ?? 0}
+                {"\u00a0"}из{"\u00a0"}
+                {total}. Продолжим с этого места, остальные разговоры проверим по тем же критериям.
+              </p>
+            ) : (
+              <p className="mt-2 text-body text-fg-3">
+                Проверим {total}
+                {"\u00a0"}из{"\u00a0"}
+                {count(state.logs.total, "разговора", "разговоров", "разговоров")} по{" "}
+                {count(ids.length, "критерию", "критериям", "критериям")}. Подключать агента не нужно.
+              </p>
+            ))}
         </>
       ) : (
         !serviceError && <p className="mt-6 text-read text-fg-2">Критерии пока не собраны.</p>
@@ -194,7 +237,7 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
             disabled={running || !ids.length || !total}
             onClick={start}
           >
-            Запустить проверку
+            {resumes ? "Продолжить проверку" : "Запустить проверку"}
           </Button>
         )}
         {!generating && (
@@ -203,12 +246,45 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
             icon={RotateCcw}
             disabled={running || !state.logs.total}
             title={state.logs.total ? undefined : "Сначала загрузите диалоги"}
-            onClick={regenerate}
+            onClick={draft ? () => setAsking(true) : regenerate}
           >
             {draft ? "Собрать заново" : "Собрать критерии"}
           </Button>
         )}
       </div>
+      <Modal
+        open={asking}
+        onClose={() => setAsking(false)}
+        title="Собрать критерии заново?"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setAsking(false)}>
+              Отмена
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => {
+                setAsking(false);
+                regenerate();
+              }}
+            >
+              Собрать заново
+            </Button>
+          </>
+        }
+      >
+        <p className="text-read text-fg-2">
+          Критерии соберутся заново из тех же правил общения.
+          {result ? " Итог tone of voice останется, но будет относиться к предыдущей версии критериев." : ""}
+          {toneDeck(state) ? " Сценарии, собранные из tone of voice, сбросятся." : ""}
+        </p>
+        {clarified > 0 && (
+          <p className="mt-3 text-read text-fg-2">
+            {clarifiedText(clarified)} {clarified === 1 ? "Оно останется" : "Каждое останется"}, если цитата его
+            критерия не изменится, иначе пропадёт.
+          </p>
+        )}
+      </Modal>
     </section>
   );
 }

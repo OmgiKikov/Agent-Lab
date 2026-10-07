@@ -1,14 +1,20 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { api } from "../../lab/api";
+import { plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { PROPOSING, proposalCheck } from "../../lab/severity";
 import { toneResult } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
 import { Button } from "../../ui/Button";
+import { useToast } from "../../ui/toast";
 
 const STOPPED = "Остановлено";
+
+/** «Не удалось остановить проверку. Задача уже закончилась.»: what failed first, then the service's words. */
+export const stopFailed = (what: string, e: unknown) =>
+  `Не удалось остановить ${what}. ${e instanceof Error ? e.message : String(e)}`;
 
 export function Checking({
   state,
@@ -24,6 +30,7 @@ export function Checking({
   onResult: () => void;
 }) {
   const { refresh } = useLabState();
+  const toast = useToast();
   const job = state.job;
   const active = job.kind === "tone-check";
   const finished = !!toneResult(state);
@@ -37,6 +44,22 @@ export function Checking({
   const error = active && !job.running ? job.error : null;
   // A stop is the person's own choice, not a failure: no red, no model settings; the previous result stays.
   const stopped = error === STOPPED;
+  // What a stop or a failure kept: the same start goes on from there (backend/lab/api/work.py, continuable).
+  const input = job.input;
+  const resumable = !!error && !!job.continuable && !!input?.ruleIds && !!input.count;
+  const [resuming, setResuming] = useState(false);
+  const resume = async () => {
+    setResuming(true);
+    try {
+      // The same start as the stopped one, as it was kept: the service continues it only when nothing changed.
+      await api("/api/tone-of-voice/check", input);
+      await refresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setResuming(false);
+    }
+  };
   return (
     <section aria-labelledby="checking-title">
       <h2 id="checking-title" className="text-title font-semibold text-fg">
@@ -45,13 +68,20 @@ export function Checking({
       {error ? (
         <div role={stopped ? "status" : "alert"} className="mt-6">
           <p className={cn("text-read", stopped ? "text-fg-2" : "text-bad")}>
-            {stopped
-              ? `Проверка остановлена. ${finished ? "Прежний итог сохранён." : "Диалоги и критерии сохранены."}`
-              : error}
+            {resumable
+              ? `${stopped ? `Проверка остановлена на ${job.kept}\u00a0из\u00a0${input.count}.` : error} Проверенное сохранено: продолжим с этого места.${stopped && finished ? " Прежний итог тоже на месте." : ""}`
+              : stopped
+                ? `Проверка остановлена. ${finished ? "Прежний итог сохранён." : "Диалоги и критерии сохранены."}`
+                : error}
           </p>
           <div className="mt-4 flex flex-wrap gap-3">
+            {resumable && (
+              <Button variant="primary" loading={resuming} onClick={() => void resume()}>
+                Продолжить проверку
+              </Button>
+            )}
             {finished && (
-              <Button variant="primary" onClick={onResult}>
+              <Button variant={resumable ? undefined : "primary"} onClick={onResult}>
                 К прежнему итогу
               </Button>
             )}
@@ -87,7 +117,10 @@ export function Checking({
                   {total || "…"}
                 </span>
               </p>
-              <p className="mt-2 text-read text-fg-3">разговоров проверено</p>
+              <p className="mt-2 text-read text-fg-3">
+                {/* After «из 21» the noun agrees with the total: «разговора проверено», «из 53 разговоров». */}
+                {plural(total, "разговора", "разговоров", "разговоров")} проверено
+              </p>
               <p className="mt-1 text-read text-fg-3">Проверка продолжится, даже если перейти в другие разделы.</p>
               <div className="mt-5 h-2 overflow-hidden rounded-full bg-well">
                 <div
@@ -101,10 +134,9 @@ export function Checking({
             className="mt-6"
             disabled={!job.running}
             onClick={() =>
-              api("/api/job/stop", {}).then(
-                () => refresh(),
-                () => refresh(),
-              )
+              api("/api/job/stop", {})
+                .catch((e) => toast.error(stopFailed("проверку", e)))
+                .finally(() => void refresh())
             }
           >
             Остановить проверку

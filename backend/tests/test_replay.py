@@ -1,11 +1,13 @@
-import tempfile
 import unittest
-from pathlib import Path
-from unittest.mock import patch
 
-from lab import llm, match, rag, replay, store
+import support
+
+from lab import models, storage
 from lab.agents import AgentError
-from lab.judge import Verdict
+from lab.domain import match, rag
+from lab.flows import accuracy, replay
+from lab.roles.judge import Verdict
+from lab.storage import tasks
 
 DIALOGUE = {
     'id': 'd-1',
@@ -74,11 +76,7 @@ class MetricTests(unittest.TestCase):
 
 class CriteriaTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        db = patch.object(store, 'DB', Path(directory.name) / 'lab.sqlite3')
-        db.start()
-        self.addCleanup(db.stop)
+        support.lab(self)
 
     def test_family_prefixes_ids(self) -> None:
         rules = replay.of_family('code', [{'id': 'r1', 'text': 't'}])
@@ -89,8 +87,8 @@ class CriteriaTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(found['d-1'], [*rag.CRITERIA, match.CRITERION])
 
     async def test_accuracy_topic_rules_join_for_a_known_dialogue(self) -> None:
-        store.save(
-            replay.discover.RESULT,
+        storage.documents.save(
+            accuracy.RESULT,
             {
                 'topics': [{'id': 't1', 'title': 'Возвраты', 'rules': [{'id': 'r1', 'text': 'про возврат'}]}],
                 'results': [{'dialogueId': 'd-1', 'topicId': 't1'}],
@@ -147,26 +145,22 @@ class UnreadyAgent(FakeAgent):
         raise AgentError('Сервис повтора не готов.')
 
 
-async def passing_judge(rules: list[dict], step: dict, endpoint=None) -> Verdict:
+async def passing_judge(rules: list[dict], step: dict, model=None) -> Verdict:
     rows = [
         {'ruleId': r['id'], 'rule': r['text'], 'status': 'PASS', 'reason': 'ok', 'agentQuote': 'x', 'title': ''}
         for r in rules
     ]
-    return Verdict(rows, 'PASS', 'judge-model')
+    return Verdict(rows, 'PASS', 'judge-model', 'judge-version')
 
 
-async def silent_judge(rules: list[dict], step: dict, endpoint=None) -> Verdict:
-    raise llm.ModelError('Модель не ответила.')
+async def silent_judge(rules: list[dict], step: dict, model=None) -> Verdict:
+    raise models.ModelError('Модель не ответила.')
 
 
 class RunTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        db = patch.object(store, 'DB', Path(directory.name) / 'lab.sqlite3')
-        db.start()
-        self.addCleanup(db.stop)
-        store.save(replay.logs.FILE, [DIALOGUE])
+        support.lab(self)
+        storage.dialogues.replace([DIALOGUE])
 
     async def play(self, agent: FakeAgent, verdict=passing_judge) -> dict:
         return await replay.run('local', 5, lambda **_: None, create=lambda _key: agent, verdict=verdict)
@@ -179,7 +173,7 @@ class RunTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_result_is_saved_with_verdicts_per_step(self) -> None:
         result = await self.play(FakeAgent())
-        self.assertEqual(store.load(replay.RESULT)['id'], result['id'])
+        self.assertEqual(storage.documents.load(replay.RESULT)['id'], result['id'])
         dialogue = result['dialogues'][0]
         self.assertEqual(dialogue['status'], 'PASS')
         self.assertEqual(dialogue['steps'][0]['reply']['text'], 'ответ на вернуть платёж')
@@ -187,10 +181,12 @@ class RunTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_summary_is_saved_beside_the_result(self) -> None:
         result = await self.play(FakeAgent())
-        self.assertEqual(store.load(replay.REPLAY_SUMMARY), {'id': result['id'], 'finishedAt': result['finishedAt']})
+        self.assertEqual(
+            storage.documents.load(replay.REPLAY_SUMMARY), {'id': result['id'], 'finishedAt': result['finishedAt']}
+        )
 
     async def test_summary_reads_only_its_own_document(self) -> None:
-        store.save(replay.REPLAY_SUMMARY, {'id': 'r-1', 'finishedAt': '2026-10-05T10:00:00.000+00:00'})
+        storage.documents.save(replay.REPLAY_SUMMARY, {'id': 'r-1', 'finishedAt': '2026-10-05T10:00:00.000+00:00'})
         self.assertEqual(replay.summary(), {'id': 'r-1', 'finishedAt': '2026-10-05T10:00:00.000+00:00'})
 
     async def test_the_result_keeps_what_the_stand_said_about_itself(self) -> None:
@@ -206,8 +202,8 @@ class RunTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['dialogues'][0]['status'], 'PASS')
 
     async def test_judge_failure_keeps_the_rows_unknown_and_the_step_unmeasured(self) -> None:
-        store.save(
-            replay.discover.RESULT,
+        storage.documents.save(
+            accuracy.RESULT,
             {
                 'topics': [{'id': 't1', 'title': 'Возвраты', 'rules': [{'id': 'r1', 'text': 'про возврат'}]}],
                 'results': [{'dialogueId': 'd-1', 'topicId': 't1'}],
@@ -229,7 +225,7 @@ class RunTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_a_reply_unlike_production_fails_no_step(self) -> None:
-        async def unlike_production(rules: list[dict], step: dict, endpoint=None) -> Verdict:
+        async def unlike_production(rules: list[dict], step: dict, model=None) -> Verdict:
             rows = [
                 {
                     'ruleId': r['id'],
@@ -241,7 +237,7 @@ class RunTests(unittest.IsolatedAsyncioTestCase):
                 }
                 for r in rules
             ]
-            return Verdict(rows, 'PASS', 'judge-model')
+            return Verdict(rows, 'PASS', 'judge-model', 'judge-version')
 
         result = await self.play(FakeAgent(), verdict=unlike_production)
         self.assertEqual(result['dialogues'][0]['steps'][0]['status'], 'PASS')
@@ -285,3 +281,41 @@ class RunTests(unittest.IsolatedAsyncioTestCase):
         agent.traced = False
         with self.assertRaisesRegex(RuntimeError, 'трейс'):
             await self.play(agent)
+
+
+class ContinuedTests(unittest.IsolatedAsyncioTestCase):
+    """A replay is a task's work: what it replayed is kept as it goes, and the same replay started again replays only
+    the rest."""
+
+    def setUp(self) -> None:
+        support.lab(self)
+        storage.dialogues.replace([DIALOGUE])
+        task = tasks.begin('replay', {'target': 'local', 'count': 5})
+        token = tasks.CURRENT.set(tasks.Current(task['id']))
+        self.addCleanup(tasks.CURRENT.reset, token)
+
+    async def play(self, agent: FakeAgent) -> dict:
+        return await replay.run('local', 5, lambda **_: None, create=lambda _key: agent, verdict=passing_judge)
+
+    async def test_a_replayed_conversation_is_kept_as_a_step_of_the_task(self) -> None:
+        result = await self.play(FakeAgent())
+        self.assertEqual(tasks.steps()['dialogue:d-1'], result['dialogues'][0])
+
+    async def test_a_continued_replay_does_not_replay_a_kept_conversation_again(self) -> None:
+        first = await self.play(FakeAgent())
+        again = FakeAgent()
+        result = await self.play(again)
+        self.assertEqual((again.heard, result['dialogues']), ([], first['dialogues']))
+
+    async def test_a_continued_replay_judges_by_the_criteria_it_kept(self) -> None:
+        await self.play(FakeAgent())
+        kept = tasks.steps()[replay.CRITERIA]
+        storage.documents.save(
+            accuracy.RESULT,
+            {
+                'topics': [{'id': 't1', 'title': 'Возвраты', 'rules': [{'id': 'r1', 'text': 'про возврат'}]}],
+                'results': [{'dialogueId': 'd-1', 'topicId': 't1'}],
+            },
+        )
+        await self.play(FakeAgent())
+        self.assertEqual(tasks.steps()[replay.CRITERIA], kept)

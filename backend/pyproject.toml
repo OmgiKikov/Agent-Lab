@@ -1,7 +1,7 @@
 [project]
 name = "agent-lab"
 version = "1.0.0"
-description = "Проверка качества ИИ-агента: аудит логов, тестовые сценарии, LLM-судья, одна метрика качества"
+description = "Проверка ИИ-агента поддержки по его настоящим разговорам: ошибки по критериям, сценарии, симуляции"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi==0.141.1",
@@ -17,7 +17,7 @@ dev = ["ruff==0.14.0"]
 [tool.ruff]
 line-length = 120
 target-version = "py311"
-include = ["lab/**/*.py", "bridge/**/*.py", "tests/**/*.py"]
+include = ["lab/**/*.py", "tests/**/*.py"]
 
 [tool.ruff.format]
 quote-style = "single"
@@ -39,9 +39,8 @@ extend-immutable-calls = ["fastapi.Body"]
 max-complexity = 12
 
 [tool.ruff.lint.per-file-ignores]
-# Prompts are prose: one sentence per line.
-"lab/prompts.py" = ["E501"]
-# CLI stdout is a machine-readable migration report.
+# CLI stdout is the report: of the migration (machine-readable), of the Lab's instruments.
 "lab/migrate.py" = ["T201"]
+"lab/eval.py" = ["T201"]
 # Flexible mock/fixture call signatures are not exported production contracts.
 "tests/**/*.py" = ["ANN001", "ANN201", "ANN202", "ANN204"]

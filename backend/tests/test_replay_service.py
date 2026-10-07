@@ -1,14 +1,14 @@
 import json
-import os
 import unittest
-from unittest.mock import patch
 
 import httpx
+import support
 
-from lab import agents
+from lab import agents, config
 from lab.agents import AgentError
 from lab.agents.http import BAD_ADDRESS
 from lab.agents.replay_service import NO_ADDRESS, ReplayServiceAgent
+from lab.flows import connection
 
 WARMING = 'Кэш базы знаний ещё прогревается.'
 NOT_AN_OBJECT = 'Тело запроса не JSON-объект.'
@@ -82,6 +82,9 @@ class OpenTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SayTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        support.lab(self)
+
     async def test_a_turn_gives_the_reply(self) -> None:
         reply = await replay_agent(FakeService()).say('c-1', 'как вернуть терминал', history=[])
         self.assertEqual((reply['text'], reply['status']), ('Верните терминал в отделение.', '200'))
@@ -127,13 +130,22 @@ class SayTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ReplayTargetsTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.settings = support.lab(self)
+
+    def targets(self, **values: object) -> list[str]:
+        with config.using(support.changed(self.settings, **values)):
+            return [target['id'] for target in agents.replay_targets(connection.replay_ways())]
+
     def test_the_service_is_offered_for_replays_when_its_address_is_set(self) -> None:
-        with patch.dict(os.environ, {'LAB_REPLAY_URL': 'http://replay.stand:8080'}):
-            self.assertIn(agents.REPLAY_SERVICE, [t['id'] for t in agents.replay_targets()])
+        self.assertIn(agents.REPLAY_SERVICE, self.targets(replay_url='http://replay.stand:8080'))
 
     def test_the_service_is_not_offered_without_an_address(self) -> None:
-        with patch.dict(os.environ, {'LAB_REPLAY_URL': ''}):
-            self.assertNotIn(agents.REPLAY_SERVICE, [t['id'] for t in agents.replay_targets()])
+        self.assertNotIn(agents.REPLAY_SERVICE, self.targets(replay_url=''))
+
+    def test_the_address_is_read_from_the_environment(self) -> None:
+        settings = config.Settings.from_environment({'LAB_DATA': 'data', 'LAB_REPLAY_URL': 'http://replay.stand:8080'})
+        self.assertEqual(settings.replay_url, 'http://replay.stand:8080')
 
     def test_the_service_is_not_a_way_to_talk_to_the_agent(self) -> None:
-        self.assertNotIn(agents.REPLAY_SERVICE, agents.configs())
+        self.assertNotIn(agents.REPLAY_SERVICE, connection.ways())

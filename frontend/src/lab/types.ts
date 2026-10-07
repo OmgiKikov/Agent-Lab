@@ -1,5 +1,5 @@
 /**
- * The two checks of the real conversations of the export (docs/DESIGN.md): tone of voice by a person's rules of
+ * The two checks of the real conversations of the export: tone of voice by a person's rules of
  * communication, accuracy by the criteria read from the agent's code. Each has its own criteria, result and answers.
  */
 export type Check = "tone" | "code";
@@ -76,6 +76,8 @@ export type LabRun = {
   check?: Check;
   /** Grows with every change of the run: a conversation played or judged again, a person's answer. */
   revision?: number;
+  /** When the run changed last; older services have no such field. */
+  updatedAt?: string;
 };
 /** A run as /api/state lists it: its summary, without the conversations, and always with its check. */
 export type RunSummary = LabRun & { check: Check };
@@ -139,8 +141,9 @@ export type Persona = { id: string; name: string; note: string };
 export type Settings = { prodUrl: string; epk: string[]; repo: string };
 export type Source = { id: string; kind: string; origin: string; chars: number; rules: number; sha256?: string | null };
 /**
- * The models as /api/state describes them (backend/lab/llm, describe): where the conversations go, where the second
- * check's go when elsewhere, and why the bank's gateway, set up, cannot be used now.
+ * The models as /api/state describes them (backend/lab/models/__init__.py, describe): where the conversations go, where the second
+ * check's go when elsewhere, and why the models cannot be used now: the bank's gateway, set up, does not work, or
+ * OpenRouter has no key.
  */
 export type Models = {
   via: string;
@@ -158,6 +161,8 @@ export type Discover = {
   purpose?: string;
   criteriaRevision?: string;
   sampled: number;
+  /** Accuracy: the sampled conversations that fell into no topic, so no criterion applied to them. */
+  unassigned?: number;
   model: string;
   finishedAt: string;
   rulesSince?: string;
@@ -171,7 +176,8 @@ export type Discover = {
     failed: number;
     passed: number;
     unmeasured: number;
-    patterns: Pattern[];
+    /** The recurring errors: in the result itself (GET /api/checks/{check}), not in its brief in the state. */
+    patterns?: Pattern[];
     secondJudge?: { model: string; checked: number; agree: number } | null;
   };
 };
@@ -183,20 +189,73 @@ export type Job = {
   error: string | null;
   /** `check`: the check a proposal of which errors are serious is for (task `severity`, lab/severity). */
   progress: { message?: string; done?: number; total?: number; run?: string; check?: Check };
+  /** When the task started: tells one task from the next of the same kind. Older services have no such field. */
+  startedAt?: string | null;
+  /** How many times a restart of the Lab took the task up again where it was (backend/lab/jobs.py). */
+  resumed?: number;
+  /** How many finished parts the task keeps: a stopped check keeps the conversations it judged. */
+  kept?: number;
+  /** Starting the same work again continues the task with what it kept (backend/lab/api/work.py, continuable). */
+  continuable?: boolean;
+  /** What the task was started with: a check of tone of voice, its criteria and how many conversations. */
+  input?: { ruleIds?: string[]; count?: number; revision?: string; propose?: boolean };
 };
+/**
+ * A check's result with people's answers taken in, counted by the service from the result's rows with the answers on
+ * them. A conversation is «с ошибкой с учётом ответов» when it
+ * keeps an error a person did not take back, or a person found the error the check missed there. The denominator stays
+ * the check's: the conversations it could check. It never stands in for the check's own number, is never compared
+ * between checks and never enters «было → стало».
+ */
+export type Answers = {
+  /** The check's own count: the conversations it could check, and those it found an error in. */
+  measured: number;
+  failed: number;
+  /** The same conversations with an error, people's answers taken in. */
+  counted: number;
+  /** The errors the check found (one criterion in one conversation), and people's «да» and «нет» on them. */
+  errors: number;
+  confirmed: number;
+  removed: number;
+  /** The verdicts «без ошибки» people answered, and in how many they found the error the check missed. */
+  clean: number;
+  missed: number;
+};
+
+/**
+ * A check's result in brief, as /api/state gives it every 1.5 s: everything but the verdicts of its conversations and
+ * the recurring errors, with how many conversations it judged and its count with people's answers. The verdicts come
+ * from the result itself (lab/checks, useResult).
+ */
+export type ResultBrief = ResultHead & { conversations: number; answers: Answers };
+
+/** What a result and its brief share: everything but the verdicts on the conversations. */
+export type ResultHead = Omit<Discover, "results">;
+
 export type LabState = {
   toneOfVoice?: ToneDraft | null;
   job: Job;
+  /**
+   * The stopped work of each kind that the same start continues, whatever task ran after it (backend/lab/api/work.py,
+   * paused): «tone-check», «discover».
+   */
+  paused?: Partial<Record<string, Job>>;
   model: string;
   models: Models;
   settings: Settings;
   sources: Source[];
+  /**
+   * When the agent's code was read last and from which folder, as the person wrote it; null before the first read.
+   * `overBudget`: where the prompts are that the read found and left out of the criteria planner's budget
+   * (sources.MAX_TOTAL); older records have no such field.
+   */
+  sourcesRead?: { readAt: string; repo: string; overBudget?: string[] } | null;
   logs: { total: number; file?: string | null; updatedAt?: string | null };
-  /** The result of each check, or null: tone of voice and accuracy never replace each other. */
-  checks: Record<Check, Discover | null>;
+  /** The result of each check in brief, or null: tone of voice and accuracy never replace each other. */
+  checks: Record<Check, ResultBrief | null>;
   /**
    * The serious criteria, per check, by their key (the problem's id, problems.rule_key): by a person's decision, else
-   * by the automatic check's proposal; without either an error is minor (spec 2026-10-04-severity-design.md). Older
+   * by the automatic check's proposal; without either an error is minor. Older
    * services have no such field.
    */
   severity?: Record<Check, string[]>;
@@ -205,6 +264,11 @@ export type LabState = {
    * confirmed a proposal: whose decision it is changed). Older services have no such field.
    */
   severityStamp?: string;
+  /**
+   * Changes with every answer given or taken back, on a check's result or on a run, in this tab or any other: the
+   * results, the problems and an open run are fetched again by it. Older services have none.
+   */
+  reviewsStamp?: string;
   cards: null | Deck;
   runs: RunSummary[];
   targets: Target[];
@@ -226,10 +290,12 @@ export type ToneDraft = {
 
 /** A tool the agent called during its turn, as the service logged it. */
 export type ToolCall = { tool: string; article?: string; query?: string; arguments?: unknown; seconds?: number };
-/** One turn of a conversation: who spoke, the logged text, the tools called, and how the turn ended. */
+/** One turn of a conversation: who spoke, the logged text, the buttons sent, the tools called, and how the turn ended. */
 export type Turn = {
   role: "customer" | "agent";
   text: string;
+  /** The buttons a simulated agent sent with its reply, by their words; an export writes its own into the text. */
+  options?: string[];
   events?: ToolCall[];
   ok?: boolean;
   status?: string;

@@ -6,7 +6,7 @@ import { conversationsLink, historyLink, type Check } from "../../app/links";
 import { resultOf } from "../../lab/checks";
 import {
   comparisonOf,
-  compareSentence,
+  compareParts,
   goneText,
   noLongerFound,
   seriousCompareText,
@@ -24,6 +24,7 @@ import { useLabState } from "../../lab/LabProvider";
 import type { RuleEntry } from "../../lab/problems";
 import { seriousFirst } from "../../lab/severity";
 import { SeriousTag } from "../../product/Severity";
+import { Step, STEP_ACTION } from "../../product/Checklist";
 
 /**
  * «Было → стало» of the check on the screen: its current result against its previous saved check, or, without a
@@ -38,44 +39,65 @@ export function useComparison(check: Check): Compare | null {
 const link = "font-medium text-run hover:underline";
 
 /**
- * The line under a check's number: how its result stands to its previous check, which opens from the line; the export
- * of that check is in the link's tooltip. Nothing when there is nothing to compare with. With `serious` — once the
- * lines of serious errors stand above — the same comparison of the conversations with a serious error follows in the
- * next line, in the same words.
+ * How the result stands to its previous check, under its number (product/Checklist): a fact to know, not a step to
+ * do. Compared: «Прошлая проверка: 22 из 53 (42%) → сейчас 4 из 12 (33%)», when it was and what may be read into the
+ * difference, and «Открыть» that check (its export in the tooltip). With `serious` — once some criteria are serious —
+ * the same comparison of the conversations with a serious error follows. Nothing when there is nothing to compare
+ * with, nor when the checks are not comparable: a row saying so would leave nothing to do, and the history of the
+ * checks says why. When the service did not answer, the row says so, with «Повторить».
  */
 export function CompareLine({
   check,
   compare,
   serious,
-  className,
 }: {
   check: Check;
   compare: Compare | null;
   /** The serious criteria of the current result, once there are any: the serious comparison follows. */
   serious?: number;
-  className?: string;
 }) {
-  const sentence = compare && compareSentence(compare);
-  if (!compare || !sentence) return null;
+  const asked = useCompare(check);
+  if (!compare && asked.isError)
+    return (
+      <Step
+        state="info"
+        title="Не удалось загрузить сравнение с прошлой проверкой"
+        action={
+          <button
+            type="button"
+            onClick={() => void asked.refetch()}
+            disabled={asked.isFetching}
+            className={STEP_ACTION}
+          >
+            Повторить
+          </button>
+        }
+      />
+    );
+  const parts = compare && compareParts(compare);
+  if (!compare || !parts) return null;
   const grave = serious ? seriousCompareText(compare, serious) : null;
   return (
-    <>
-      <p className={cn("max-w-[72ch] text-read text-fg-2", className)}>
-        {compare.previous ? (
+    <Step
+      state="info"
+      title={
+        <>
+          Прошлая проверка: <span className="tabular-nums">{parts.value}</span>
+        </>
+      }
+      text={[parts.note, grave].filter(Boolean).join("\n")}
+      action={
+        compare.previous && (
           <Link
             to={historyLink(check, compare.previous.id)}
             title={compare.previous.file ? `Выгрузка «${compare.previous.file}»` : undefined}
-            className={link}
+            className={STEP_ACTION}
           >
-            {sentence.head}
+            Открыть
           </Link>
-        ) : (
-          sentence.head
-        )}
-        {sentence.rest}
-      </p>
-      {grave && <p className="max-w-[72ch] whitespace-pre-line text-read text-fg-2">{grave}</p>}
-    </>
+        )
+      }
+    />
   );
 }
 

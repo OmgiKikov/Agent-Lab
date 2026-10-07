@@ -5,7 +5,7 @@ import type { Family, LabState, ReplayResult } from "./types";
 
 export const FAMILY_NAME: Record<Family, string> = { tone: CHECK_NAME.tone, code: CHECK_NAME.code, rag: "База знаний" };
 export const familyOf = (ruleId: string) => ruleId.split(":", 1)[0] as Family;
-/** The match of the replayed reply with production's (backend lab/match.py): shown under the replies, in no score. */
+/** The match of the replayed reply with production's (backend lab/domain/match.py): shown under the replies, in no score. */
 export const MATCH_ID = "replay:match";
 
 /** The latest replay; read again when the service reports a new one. */

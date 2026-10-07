@@ -1,14 +1,16 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowRight, Plus } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { ArrowRight, Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { agentHref } from "../../app/agent";
+import { agentHref, forgetAgent } from "../../app/agent";
 import { Mark } from "../../app/Mark";
-import { useAgents, type Agent, type CheckLine } from "../../lab/agents";
+import { deleteAgent, useAgents, type Agent, type CheckLine } from "../../lab/agents";
 import { CHECK_NAME, CHECKS } from "../../lab/checks";
 import { longDay, plural } from "../../lab/format";
 import { Button } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
+import { Modal } from "../../ui/Modal";
 import { NewAgent } from "./NewAgent";
 
 /**
@@ -53,49 +55,124 @@ function Result({ name, line }: { name: string; line: CheckLine }) {
   );
 }
 
-/** One agent: its name, what it is, the result of each of its checks. The whole card opens the agent. */
-function AgentCard({ agent }: { agent: Agent }) {
+/**
+ * One agent: its name, what it is, the result of each of its checks. The whole card opens the agent; the bin in its
+ * corner, shown on hover and always on a touch screen, asks to delete it.
+ */
+function AgentCard({ agent, onDelete }: { agent: Agent; onDelete: () => void }) {
   const lines = CHECKS.flatMap((c) => {
     const line = agent.results?.[c];
     return line ? [{ check: c, line }] : [];
   });
   return (
-    <a
-      href={agentHref(agent.id)}
-      className="group flex min-h-[176px] flex-col rounded-block md:min-h-[220px] border border-line bg-canvas p-5 transition-[border-color,box-shadow] hover:border-line-strong hover:shadow-card"
+    <div className="group relative">
+      <a
+        href={agentHref(agent.id)}
+        className="flex min-h-[176px] flex-col rounded-block md:min-h-[220px] border border-line bg-canvas p-5 transition-[border-color,box-shadow] hover:border-line-strong hover:shadow-card"
+      >
+        <h2 className="pr-8 text-count font-semibold text-fg">{agent.name}</h2>
+        {agent.description && <p className="mt-1 line-clamp-2 text-body text-fg-3">{agent.description}</p>}
+        <div className="mt-auto pt-6">
+          {lines.length ? (
+            <div className="space-y-4">
+              {lines.map(({ check, line }) => (
+                <Result key={check} name={CHECK_NAME[check]} line={line} />
+              ))}
+            </div>
+          ) : (
+            <div>
+              <p className="text-read text-fg-2">Ещё не проверялся</p>
+              <p className="mt-2 inline-flex items-center gap-1 text-read font-medium text-run group-hover:underline">
+                Начать проверку
+                <ArrowRight aria-hidden className="size-4" />
+              </p>
+            </div>
+          )}
+        </div>
+      </a>
+      <button
+        type="button"
+        onClick={onDelete}
+        aria-label={`Удалить агента «${agent.name}»`}
+        title="Удалить агента"
+        className="absolute right-3 top-3 inline-flex size-8 items-center justify-center rounded-control text-fg-3 opacity-0 transition hover:bg-hover hover:text-fg focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
+      >
+        <Trash2 aria-hidden className="size-4" />
+      </button>
+    </div>
+  );
+}
+
+/**
+ * «Удалить агента …?»: what goes with it, and that its files stay on this computer (data/deleted/). Refused while its
+ * task runs: the service says so here.
+ */
+function DeleteAgent({ agent, onClose }: { agent: Agent | null; onClose: () => void }) {
+  const client = useQueryClient();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const close = () => {
+    if (busy) return;
+    setError(null);
+    onClose();
+  };
+  const remove = async () => {
+    if (!agent) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await deleteAgent(agent.id);
+      forgetAgent(agent.id);
+      await client.invalidateQueries({ queryKey: ["agents"] });
+      setBusy(false);
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setBusy(false);
+    }
+  };
+  return (
+    <Modal
+      open={!!agent}
+      onClose={close}
+      title={`Удалить агента «${agent?.name ?? ""}»?`}
+      footer={
+        <>
+          <Button onClick={close} disabled={busy}>
+            Отмена
+          </Button>
+          <Button variant="primary" loading={busy} onClick={() => void remove()}>
+            Удалить
+          </Button>
+        </>
+      }
     >
-      <h2 className="text-count font-semibold text-fg">{agent.name}</h2>
-      {agent.description && <p className="mt-1 line-clamp-2 text-body text-fg-3">{agent.description}</p>}
-      <div className="mt-auto pt-6">
-        {lines.length ? (
-          <div className="space-y-4">
-            {lines.map(({ check, line }) => (
-              <Result key={check} name={CHECK_NAME[check]} line={line} />
-            ))}
-          </div>
-        ) : (
-          <div>
-            <p className="text-read text-fg-2">Ещё не проверялся</p>
-            <p className="mt-2 inline-flex items-center gap-1 text-read font-medium text-run group-hover:underline">
-              Начать проверку
-              <ArrowRight aria-hidden className="size-4" />
-            </p>
-          </div>
-        )}
-      </div>
-    </a>
+      <p className="text-read text-fg-2">Пропадут его выгрузка, правила, проверки, сценарии и ответы людей.</p>
+      <p className="mt-2 text-small text-fg-3">
+        Файлы не стираются: они переедут в папку <span className="font-mono">data/deleted/</span> на этом компьютере.
+      </p>
+      {error && (
+        <p role="alert" className="mt-3 text-small text-bad">
+          {error}
+        </p>
+      )}
+    </Modal>
   );
 }
 
 /**
  * «Агенты»: the first screen of the product. Every agent the Lab checks, each on its own dialogues by its own rules;
  * inside an agent, the product as it was. Never ranked or compared: their numbers come from other exports and other
- * rules (DESIGN.md, честность 2).
+ * rules.
  */
 export function AgentsPage() {
   const { data, isLoading, error } = useAgents();
   const [params, setParams] = useSearchParams();
   const [creating, setCreating] = useState(params.get("new") === "1");
+  const [deleting, setDeleting] = useState<Agent | null>(null);
+  // An address of an agent the Lab does not have leads here (app/Shell, ?missing=): said, so the list is not taken for it.
+  const missing = params.get("missing");
+  const unknown = missing && data && !data.some((a) => a.id === missing) ? missing : null;
   const close = () => {
     setCreating(false);
     if (params.get("new")) setParams({}, { replace: true });
@@ -119,6 +196,11 @@ export function AgentsPage() {
           Каждый агент проверяется на своих разговорах по своим правилам. Откройте агента, чтобы увидеть, где он
           ошибается и чем это доказано.
         </p>
+        {unknown && (
+          <p role="status" className="mt-6 max-w-[64ch] rounded-block bg-inset px-4 py-3 text-read text-fg-2">
+            Агент «{unknown}» не найден.{data?.length ? " Откройте агента из списка." : ""}
+          </p>
+        )}
         {error ? (
           <div className="mt-10">
             <ServiceDown />
@@ -143,7 +225,7 @@ export function AgentsPage() {
           <>
             <div className="mt-10 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               {data.map((agent) => (
-                <AgentCard key={agent.id} agent={agent} />
+                <AgentCard key={agent.id} agent={agent} onDelete={() => setDeleting(agent)} />
               ))}
               <button
                 type="button"
@@ -163,6 +245,7 @@ export function AgentsPage() {
         )}
       </main>
       <NewAgent open={creating} onClose={close} />
+      <DeleteAgent agent={deleting} onClose={() => setDeleting(null)} />
     </div>
   );
 }

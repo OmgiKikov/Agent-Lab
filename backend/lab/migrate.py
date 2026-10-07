@@ -5,14 +5,16 @@ import json
 from contextlib import nullcontext
 from pathlib import Path
 
-from . import checks, discover, judge, logs, registry, store
-from .metric import metric
+from . import config, storage
+from .domain import checks, export, results, verdicts
+from .domain.metric import metric
+from .storage import legacy, registry
 
 
 def _recompute_verdict(value: dict) -> tuple[int, int]:
     """Reaggregate existing evidence; migration never asks a model for new evidence."""
     changed = 0
-    status = judge.verdict_of(value.get('rules') or [])
+    status = verdicts.verdict_of(value.get('rules') or [])
     if status != value.get('status'):
         changed += 1
     reset = int(bool(changed and value.get('review') in ('agree', 'disagree')))
@@ -38,12 +40,12 @@ def _load_documents(source: Path) -> dict:
         else:
             documents[name] = value
     log_file = source / 'logs.jsonl'
-    if logs.FILE in documents:
-        log_data = '\n'.join(json.dumps(row, ensure_ascii=False) for row in documents[logs.FILE]).encode('utf-8')
-        documents[logs.FILE] = logs.prepare('logs.jsonl', log_data) if log_data.strip() else []
+    if legacy.EXPORT in documents:
+        log_data = '\n'.join(json.dumps(row, ensure_ascii=False) for row in documents[legacy.EXPORT]).encode('utf-8')
+        documents[legacy.EXPORT] = export.prepare('logs.jsonl', log_data) if log_data.strip() else []
     elif log_file.exists():
         log_data = log_file.read_bytes()
-        documents[logs.FILE] = logs.prepare('logs.jsonl', log_data) if log_data.strip() else []
+        documents[legacy.EXPORT] = export.prepare('logs.jsonl', log_data) if log_data.strip() else []
     return documents
 
 
@@ -57,7 +59,7 @@ def migrate(source: Path) -> dict[str, int]:
         if not record.get('id') or not isinstance(record.get('items'), list):
             raise ValueError('В старом прогоне нет id или items.')
         if record.get('status') == 'running':
-            record.update(status='stopped', finishedAt=store.now(), error='Прогон остановился до переноса данных.')
+            record.update(status='stopped', finishedAt=storage.now(), error='Прогон остановился до переноса данных.')
             for item in record['items']:
                 if item.get('status') == 'RUNNING':
                     reset_reviews += int(item.get('review') in ('agree', 'disagree'))
@@ -75,8 +77,8 @@ def migrate(source: Path) -> dict[str, int]:
             changed, reset = _recompute_verdict(result)
             recomputed += changed
             reset_reviews += reset
-        analysis['summary'] = discover.summarize(analysis['results'], analysis['topics'])
-    return {**store.import_legacy(documents, records), 'recomputedVerdicts': recomputed, 'resetReviews': reset_reviews}
+        analysis['summary'] = results.summarize(analysis['results'], analysis['topics'], analysis.get('sampled'))
+    return {**legacy.insert(documents, records), 'recomputedVerdicts': recomputed, 'resetReviews': reset_reviews}
 
 
 def target(agent_id: str | None) -> str | None:
@@ -98,12 +100,13 @@ def main() -> None:
     parser.add_argument('--source', required=True, type=Path, help='Папка старых data/*.json, logs.jsonl и runs/*.json')
     parser.add_argument('--agent', help='id агента, как в адресе /a/<id>. Без него — единственный агент')
     args = parser.parse_args()
-    try:
-        agent = target(args.agent)
-    except ValueError as error:
-        parser.error(str(error))
-    with registry.using(agent) if agent else nullcontext():
-        report = migrate(args.source)
+    with config.using(config.Settings.from_environment()):
+        try:
+            agent = target(args.agent)
+        except ValueError as error:
+            parser.error(str(error))
+        with registry.using(agent) if agent else nullcontext():
+            report = migrate(args.source)
     print(json.dumps({**report, 'agent': agent}, ensure_ascii=False))
 
 

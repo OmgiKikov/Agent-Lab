@@ -1,5 +1,5 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Bot,
@@ -56,7 +56,9 @@ const ABOUT: Record<Check, string> = {
 
 /**
  * ⌘K: any section and tab of both checks, the simulations, the problems and criteria of each check, runs, scenarios
- * and the actions of each check, without the mouse. Actions only open their place; nothing is started from here.
+ * and the actions of each check, without the mouse. Actions only open their place; nothing is started from here. For a
+ * screen reader it is a combobox (WAI-ARIA): the field keeps the focus and names the line Enter runs
+ * (aria-activedescendant), the lines are the options of a listbox, in groups named as on the screen.
  */
 export function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
   const navigate = useNavigate();
@@ -66,6 +68,9 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   const [query, setQuery] = useState("");
   const [at, setAt] = useState(0);
   const list = useRef<HTMLDivElement>(null);
+  const id = useId();
+  const listId = `${id}-results`;
+  const optionId = (i: number) => `${id}-option-${i}`;
   useEffect(() => {
     if (open) {
       setQuery("");
@@ -308,6 +313,16 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     () => entries.filter((e) => !q || `${e.label} ${e.sub ?? ""}`.toLowerCase().includes(q)).slice(0, 40),
     [entries, q],
   );
+  // The lines in their groups, each with its place among all the lines (the one ↑ ↓ and Enter work by).
+  const groups = useMemo(() => {
+    const out: { name: string; lines: { e: Entry; i: number }[] }[] = [];
+    shown.forEach((e, i) => {
+      const last = out[out.length - 1];
+      if (last?.name === e.group) last.lines.push({ e, i });
+      else out.push({ name: e.group, lines: [{ e, i }] });
+    });
+    return out;
+  }, [shown]);
   useEffect(() => {
     list.current?.querySelector<HTMLElement>(`[data-index="${at}"]`)?.scrollIntoView({ block: "nearest" });
   }, [at]);
@@ -350,7 +365,12 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
               name="palette"
               autoComplete="off"
               spellCheck={false}
+              role="combobox"
               aria-label="Поиск по разделам и действиям"
+              aria-expanded
+              aria-controls={listId}
+              aria-autocomplete="list"
+              aria-activedescendant={shown[at] ? optionId(at) : undefined}
               value={query}
               onChange={(e) => {
                 setQuery(e.target.value);
@@ -360,33 +380,56 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
               className="h-12 w-full bg-transparent text-body text-fg outline-none placeholder:text-fg-4"
             />
           </div>
-          <div ref={list} className="max-h-[min(420px,60dvh)] overflow-auto p-1.5">
-            {shown.map((e, i) => (
-              <div key={e.id}>
-                {(i === 0 || shown[i - 1].group !== e.group) && (
-                  <Label className="block px-2.5 pb-1 pt-2.5">{e.group}</Label>
-                )}
-                <button
-                  type="button"
-                  data-index={i}
-                  onClick={() => choose(e)}
-                  onMouseMove={() => setAt(i)}
-                  className={cn(
-                    "flex w-full items-center gap-3 rounded-control px-2.5 py-2 text-left transition-colors",
-                    i === at ? "bg-selected" : "hover:bg-hover",
-                  )}
-                >
-                  <e.icon aria-hidden className="size-4 flex-shrink-0 text-fg-3" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-body text-fg">{e.label}</span>
-                    {e.sub && <span className="block truncate text-small text-fg-3">{e.sub}</span>}
-                  </span>
-                  {i === at && <CornerDownLeft aria-hidden className="size-3.5 flex-shrink-0 text-fg-3" />}
-                </button>
+          {/* The listbox is the scrolling list itself: ↑ ↓ scroll it, as the popup of the field. */}
+          <div
+            ref={list}
+            id={listId}
+            role="listbox"
+            aria-label="Найденные разделы и действия"
+            className="max-h-[min(420px,60dvh)] overflow-auto p-1.5"
+          >
+            {groups.map((g, n) => (
+              <div key={`${n}-${g.name}`} role="group" aria-labelledby={`${id}-group-${n}`}>
+                <Label id={`${id}-group-${n}`} className="block px-2.5 pb-1 pt-2.5">
+                  {g.name}
+                </Label>
+                {g.lines.map(({ e, i }) => (
+                  <div
+                    key={e.id}
+                    id={optionId(i)}
+                    role="option"
+                    aria-selected={i === at}
+                    data-index={i}
+                    // The field keeps the focus: it says which line Enter runs.
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => choose(e)}
+                    onMouseMove={() => setAt(i)}
+                    className={cn(
+                      "flex w-full cursor-pointer items-center gap-3 rounded-control px-2.5 py-2 text-left transition-colors",
+                      i === at ? "bg-selected" : "hover:bg-hover",
+                    )}
+                  >
+                    <e.icon aria-hidden className="size-4 flex-shrink-0 text-fg-3" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-body text-fg">{e.label}</span>
+                      {/* On the highlighted line the lighter grey would fall below WCAG AA contrast. */}
+                      {e.sub && (
+                        <span className={cn("block truncate text-small", i === at ? "text-fg-2" : "text-fg-3")}>
+                          {e.sub}
+                        </span>
+                      )}
+                    </span>
+                    {i === at && <CornerDownLeft aria-hidden className="size-3.5 flex-shrink-0 text-fg-3" />}
+                  </div>
+                ))}
               </div>
             ))}
-            {!shown.length && <div className="px-3 py-8 text-center text-small text-fg-3">Ничего не нашлось</div>}
           </div>
+          {!shown.length && (
+            <div role="status" className="px-3 pb-8 pt-6 text-center text-small text-fg-3">
+              Ничего не нашлось
+            </div>
+          )}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

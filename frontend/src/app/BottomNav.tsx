@@ -48,7 +48,7 @@ export function BottomNav() {
         align="right"
         className={cn(
           "h-full min-h-11",
-          "[&_[role=menuitemradio]]:min-h-11 [&_[role=menuitemradio]]:items-center",
+          "[&_[role^=menuitem]]:min-h-11 [&_[role^=menuitem]]:items-center",
           more ? "text-fg" : "text-fg-3",
         )}
         trigger={

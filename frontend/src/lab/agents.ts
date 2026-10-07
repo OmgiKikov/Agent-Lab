@@ -15,7 +15,7 @@ export type Rules = { name: string; criteria: number; sha256: string | null };
 
 /**
  * An agent the Lab checks, with the result of each check and its rules of communication, read from its own database
- * (backend/lab/api.py, /api/agents).
+ * (backend/lab/api/agents.py, /api/agents).
  */
 export type Agent = {
   id: string;
@@ -37,13 +37,19 @@ export function useAgent(): Agent | undefined {
 
 export const createAgent = (name: string, description: string) => api<Agent>("/api/agents", { name, description });
 
+/**
+ * The agent out of the list (backend/lab/api/agents.py): its data is moved to data/deleted/ on this computer, never
+ * erased. Refused while its task runs.
+ */
+export const deleteAgent = (id: string) => api<{ ok: boolean }>("/api/agents/delete", { id }, null);
+
 /** An agent whose rules of communication another agent can take. */
 export type RulesSource = Agent & { rules: Rules };
 
-/** The agents with rules of communication, but `except` (this page's agent): where the rules can be taken from. */
-export function useRulesSources(except: string | null = AGENT): RulesSource[] {
+/** The agents with rules of communication but this page's: where the rules can be taken from. */
+export function useRulesSources(): RulesSource[] {
   const { data } = useAgents();
-  return (data ?? []).filter((a): a is RulesSource => a.id !== except && !!a.rules);
+  return (data ?? []).filter((a): a is RulesSource => a.id !== AGENT && !!a.rules);
 }
 
 /** «Правила общения.md · 14 критериев»: what taking an agent's rules brings. */
@@ -52,8 +58,8 @@ export const rulesLine = (rules: Rules) =>
 
 /**
  * The rules of communication of another agent and their criteria, with the clarifications people confirmed, become the
- * own of this page's agent, or of `into` (a new agent), as a copy: later changes in either never reach the other.
- * `unchanged`: it had the same rules and criteria already.
+ * own of this page's agent as a copy: later changes in either never reach the other. `unchanged`: it had the same rules
+ * and criteria already.
  */
-export const takeRules = (from: string, into: string | null = AGENT) =>
-  api<{ ok: boolean; unchanged: boolean }>("/api/tone-of-voice/copy", { agent: from }, into);
+export const takeRules = (from: string) =>
+  api<{ ok: boolean; unchanged: boolean }>("/api/tone-of-voice/copy", { agent: from });

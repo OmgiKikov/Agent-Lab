@@ -8,7 +8,7 @@ import { dialogOf } from "../../lab/dialogs";
 import { count } from "../../lab/format";
 import { reliabilityWord } from "../../lab/problemReport";
 import { useReview } from "../../lab/problems";
-import type { Discover, ToneDraft } from "../../lab/types";
+import type { ResultHead, ToneDraft } from "../../lab/types";
 import { SeriousTag } from "../../product/Severity";
 import { Button } from "../../ui/Button";
 import { Advice } from "./Advice";
@@ -21,7 +21,7 @@ export function Finding({
   busy,
 }: {
   criterion: Criterion;
-  result: Discover;
+  result: ResultHead;
   draft?: ToneDraft | null;
   busy: boolean;
 }) {

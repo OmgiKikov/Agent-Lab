@@ -11,6 +11,7 @@ import { FAMILY_NAME, useReplay } from "../../lab/replay";
 import type { Family, FamilyScore, ReplayDialogue, ReplayResult, Target } from "../../lab/types";
 import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
+import { LoadFailed } from "../../ui/LoadFailed";
 import { useToast } from "../../ui/toast";
 import { Dot, dotOf } from "../simulations/parts";
 import { KnowledgeBase } from "./KnowledgeBase";
@@ -60,8 +61,12 @@ export function ReplayPage() {
           <StartForm />
           {result ? (
             <Result result={result} />
-          ) : replay.isError ? (
-            <EmptyState title="Не удалось прочитать повтор">{replay.error.message}</EmptyState>
+          ) : replay.isError && !replay.isFetching ? (
+            <LoadFailed
+              title="Не удалось прочитать повтор"
+              error={replay.error}
+              onRetry={() => void replay.refetch()}
+            />
           ) : state?.replay ? (
             <Skeleton className="h-36" />
           ) : (

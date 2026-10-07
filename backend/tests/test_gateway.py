@@ -1,21 +1,24 @@
 """The bank's gateway read from certs/. openssl makes the bundles here, in a temporary folder: no key is in Git."""
 
 import asyncio
+import json
 import os
 import shutil
+import sqlite3
 import ssl
 import subprocess
-import sys
 import tempfile
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import httpx
+import support
 
-from lab import llm
-from lab.llm import gateway
+from lab import config, models, roles, storage
+from lab.app import create
+from lab.models import gateway
 
 Client = httpx.AsyncClient
 PASSWORD = 'Secret-1'
@@ -62,13 +65,7 @@ class GatewayCase(unittest.TestCase):
         shutil.copy(BUNDLES / f'{self.bundle}.p12', self.certs / 'client.p12')
         (self.certs / 'url.txt').write_text('https://gateway.bank.test/v2\n')
         (self.certs / 'password.txt').write_text(PASSWORD + '\n')
-        environment = patch.dict(os.environ)
-        environment.start()
-        self.addCleanup(environment.stop)
-        for name in (*gateway._ENV.values(), 'AGENT_LAB_GATEWAY_INSECURE'):
-            os.environ.pop(name, None)
-        for name, value in (('CERTS', self.certs), ('FILE', Path(folder.name) / 'none.json')):
-            self.patch(name, value)
+        self.settings = support.lab(self, certs=self.certs, gateway_file=Path(folder.name) / 'none.json')
         for name in ('_unpacked', '_built', '_session'):  # what earlier tests left in the caches
             self.patch(name, None)
 
@@ -79,7 +76,7 @@ class GatewayCase(unittest.TestCase):
 
     def reason(self) -> str:
         with self.assertRaises(gateway.ModelError) as caught:
-            gateway.config()
+            gateway.settings()
         return str(caught.exception)
 
     def spy(self, target: object, name: str) -> list[bool]:
@@ -113,7 +110,7 @@ class BundleTests(GatewayCase):
             return real(command, **options)
 
         with patch.object(gateway.subprocess, 'run', side_effect=spy):
-            settings = gateway.config()
+            settings = gateway.settings()
         self.assertEqual(settings['url'], 'https://gateway.bank.test')
         self.assertTrue(calls)
         for command, options in calls:
@@ -138,7 +135,7 @@ class BundleTests(GatewayCase):
         self.assertIn('Впишите его в', self.reason())
 
     def test_a_failed_conversion_keeps_the_previous_files(self) -> None:
-        settings = gateway.config()
+        settings = gateway.settings()
         before = Path(settings['cert']).read_bytes(), Path(settings['key']).read_bytes()
         (self.certs / 'password.txt').write_text('Wrong-Pa55\n')
         self.reason()
@@ -202,8 +199,8 @@ class SetupTests(GatewayCase):
         wrong = '{"format": "agent-lab-gateway-1", "url": 5, "certPath": "c.pem", "keyPath": "c.key"}'
         for text in ('[]', wrong):
             with self.subTest(text=text):
-                gateway.FILE.write_text(text)
-                self.assertIn(str(gateway.FILE), self.broken())
+                self.settings.gateway_file.write_text(text)
+                self.assertIn(str(self.settings.gateway_file), self.broken())
 
     def test_a_certificate_and_a_key_that_do_not_open_are_named(self) -> None:
         self.pem()
@@ -230,40 +227,68 @@ class SetupTests(GatewayCase):
     def test_every_model_call_answers_with_the_reason_and_the_settings_show_it(self) -> None:
         (self.certs / 'url.txt').write_text('')
         reason = self.reason()
-        with (
-            patch.object(llm, 'MAIN', (llm.GATEWAY, 'requested')),
-            patch.object(llm, 'SECOND', (llm.GATEWAY, 'requested')),
-            patch.object(gateway, 'chosen_models', return_value={}),
-        ):
-            for call in (lambda: llm.chat('system', 'question'), lambda: llm.structured('system', {}, parse=dict)):
-                with self.assertRaises(llm.ModelError) as caught:
+        on_gateway = support.changed(self.settings, model_url=None, model='requested')
+        with config.using(on_gateway), patch.object(gateway, 'chosen_models', return_value={}):
+            self.assertEqual(models.endpoints().main, (models.GATEWAY, 'requested'))
+            asked = (
+                lambda: models.chat('system', 'question'),
+                lambda: roles.ask(roles.Role('test', 'system', dict), {}),
+            )
+            for call in asked:
+                with self.assertRaises(models.ModelError) as caught:
                     asyncio.run(call())
                 self.assertEqual(str(caught.exception), reason)
-            self.assertEqual(asyncio.run(llm.check(llm.MAIN)), {'ok': False, 'error': reason})
-            self.assertEqual(llm.describe()['problem'], reason)
+            self.assertEqual(asyncio.run(models.check(models.endpoints().main)), {'ok': False, 'error': reason})
+            self.assertEqual(models.describe()['problem'], reason)
 
     def test_the_backend_starts_with_broken_certificates_and_stays_on_the_gateway(self) -> None:
         (self.certs / 'url.txt').write_text('')
-        environment = {k: v for k, v in os.environ.items() if not k.startswith(('LAB_', 'AGENT_LAB', 'PI_'))}
-        environment.update(
-            LAB_DATA=str(self.certs.parent / 'data'),
-            LAB_CERTS=str(self.certs),
-            AGENT_LAB_GATEWAY_FILE=str(gateway.FILE),
+        started = config.Settings.from_environment(
+            {
+                'LAB_DATA': str(self.certs.parent / 'data'),
+                'LAB_CERTS': str(self.certs),
+                'AGENT_LAB_GATEWAY_FILE': str(self.settings.gateway_file),
+            }
         )
-        script = 'import lab.api\nfrom lab import llm\nprint(llm.MAIN[0])\nprint(llm.describe()["problem"])'
-        done = subprocess.run(
-            [sys.executable, '-c', script], env=environment, capture_output=True, text=True, timeout=60, check=False
-        )
-        self.assertEqual(done.returncode, 0, done.stderr[-600:])
-        self.assertEqual(done.stdout.splitlines()[0], 'gateway')
-        self.assertIn('url.txt пустой', done.stdout)
+        with config.using(started), patch.object(gateway, 'chosen_models', return_value={}):
+            self.assertEqual(models.endpoints().main[0], models.GATEWAY)
+            self.assertIn('url.txt пустой', models.describe()['problem'])
+
+    def test_starting_the_lab_on_the_gateway_opens_no_database(self) -> None:
+        """Importing the Lab reads no agent's database. A database
+        from before agents stays as it was until the start adopts it, so its backup is the file as it was; a fresh
+        folder gets no empty database; the second judge comes only from LAB_SECOND_MODEL."""
+        data = self.certs.parent / 'data'
+        data.mkdir()
+        legacy = data / 'lab.sqlite3'
+        connection = sqlite3.connect(legacy)
+        connection.execute('CREATE TABLE documents (name TEXT PRIMARY KEY, value TEXT NOT NULL)')
+        result = {'finishedAt': 'then', 'topics': [], 'results': [{'dialogueId': 'd1', 'status': 'PASS', 'rules': []}]}
+        connection.execute("INSERT INTO documents VALUES ('discover.json', ?)", (json.dumps(result),))
+        connection.execute('INSERT INTO documents VALUES (\'models.json\', \'{"model": "glm-old"}\')')
+        connection.commit()
+        connection.close()
+        before = legacy.read_bytes()
+        environment = {'LAB_DATA': str(data), 'LAB_CERTS': str(self.certs)}
+        environment['AGENT_LAB_GATEWAY_FILE'] = str(self.settings.gateway_file)
+        started = config.Settings.from_environment(environment)
+        with config.using(started):
+            create(started)
+            found = models.endpoints()
+        self.assertEqual((found.main, found.second), ((models.GATEWAY, 'auto'), (models.GATEWAY, 'auto')))
+        self.assertEqual(legacy.read_bytes(), before)
+        legacy.unlink()
+        with config.using(support.changed(started, data=data)):
+            create(started)
+            models.endpoints()
+        self.assertFalse(legacy.exists())
 
 
 class LegacyBundleTests(GatewayCase):
     bundle = 'legacy'
 
     def test_an_rc2_bundle_from_older_windows_is_opened_with_the_legacy_provider(self) -> None:
-        settings = gateway.config()
+        settings = gateway.settings()
         self.assertIn(b'PRIVATE KEY', Path(settings['key']).read_bytes())
 
     def test_an_rc2_bundle_without_the_legacy_provider_is_a_reason(self) -> None:
@@ -295,10 +320,10 @@ class ReuseTests(GatewayCase):
     def test_a_renewed_bundle_is_converted_again_once(self) -> None:
         conversions = self.spy(gateway.subprocess, 'run')
         for _ in range(3):
-            gateway.config()
+            gateway.settings()
         self.renew()
         for _ in range(3):
-            gateway.config()
+            gateway.settings()
         self.assertEqual(len(conversions), 4)
 
     def test_a_broken_bundle_is_not_opened_again_on_every_call(self) -> None:
@@ -325,3 +350,20 @@ class ReuseTests(GatewayCase):
         self.assertFalse(first.is_closed)
         self.assertIsNot(renewed, first)
         self.assertIsNot(other, renewed)
+
+
+class AutoModelTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        support.lab(self)
+
+    async def chosen(self, names: list[str]) -> str | None:
+        with patch.object(gateway, 'catalog', AsyncMock(return_value=names)):
+            return (await gateway.auto_models())['model']
+
+    async def test_the_newest_full_glm_is_chosen_by_its_numbers_not_its_letters(self) -> None:
+        self.assertEqual(await self.chosen(['glm-5.9', 'GLM-5.10', 'glm-5.11-flash', 'glm-4.6', 'gpt-oss']), 'GLM-5.10')
+
+    async def test_without_a_full_glm_the_newest_light_one_and_without_glm_the_first_model(self) -> None:
+        self.assertEqual(await self.chosen(['glm-4.5-air', 'glm-4.10-flash', 'qwen']), 'glm-4.10-flash')
+        storage.documents.save(gateway.MODELS, {})
+        self.assertEqual(await self.chosen(['qwen', 'gpt-oss']), 'qwen')

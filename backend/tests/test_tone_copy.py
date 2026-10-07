@@ -4,17 +4,18 @@ rules (GET /api/agents, `rules`)."""
 
 import asyncio
 import json
-import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
-import httpx
+import support
 from test_tone import POLICY
 from test_tone_followthrough import judged
 
-from lab import api, discover, jobs, registry, store, tone
-from lab.context import sources
+from lab import jobs, storage
+from lab.domain import checks
+from lab.domain import tone as tone_rules
+from lab.flows import accuracy, conversations, inputs, tone
+from lab.storage import registry
 
 CODE = {'id': 's1', 'kind': 'prompt', 'origin': 'agent.py:1', 'content': 'Называй срок рассмотрения заявки.'}
 CLARIFICATION = '«Вы» с прописной буквы — тоже ошибка.'
@@ -24,15 +25,7 @@ COPIED_AT = '2030-01-01T00:00:00.000+00:00'
 
 class ToneCopyTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        for mocked in (
-            patch.object(store, 'DB', Path(directory.name) / 'lab.sqlite3'),
-            patch.object(api, 'jobs', jobs.PerAgent()),
-        ):
-            mocked.start()
-            self.addCleanup(mocked.stop)
-        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app), base_url='http://test')
+        support.serve(self, jobs.PerAgent())
         self.source = registry.create('Агент эквайринга')['id']
         self.target = registry.create('Агент кредитов')['id']
         await self.upload(self.source)
@@ -45,10 +38,6 @@ class ToneCopyTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(response.status_code, 200, response.text)
 
-    async def asyncTearDown(self):
-        await api.jobs.close()
-        await self.client.aclose()
-
     async def post(self, agent, path, body):
         return await self.client.post(path, json=body, headers={'X-Agent': agent})
 
@@ -58,7 +47,7 @@ class ToneCopyTests(unittest.IsolatedAsyncioTestCase):
     async def wait_job(self, agent):
         for _ in range(200):
             with registry.using(agent):
-                if not api.jobs.state['running']:
+                if not self.jobs.state['running']:
                     return
             await asyncio.sleep(0.002)
         self.fail('background job did not finish')
@@ -87,33 +76,33 @@ class ToneCopyTests(unittest.IsolatedAsyncioTestCase):
     async def check(self, agent):
         """A tone-of-voice check with a fake model; the result it published."""
         draft = self.draft(agent)
-        with patch.object(discover, 'judge_dialogue', side_effect=judged('FAIL')):
+        with patch.object(conversations, 'judge_dialogue', side_effect=judged('FAIL')):
             response = await self.post(
                 agent, '/api/tone-of-voice/check', {'ruleIds': ['pronouns'], 'count': 1, 'revision': draft['revision']}
             )
             self.assertEqual(response.status_code, 200, response.text)
             await self.wait_job(agent)
         with registry.using(agent):
-            self.assertIsNone(api.jobs.state['error'])
-            return store.load(tone.RESULT)
+            self.assertIsNone(self.jobs.state['error'])
+            return storage.documents.load(tone.RESULT)
 
     def draft(self, agent):
         with registry.using(agent):
-            return store.load(tone.DRAFT)
+            return storage.documents.load(tone.DRAFT)
 
     def sources_of(self, agent):
         with registry.using(agent):
-            return sources.load()
+            return inputs.sources()
 
     async def test_a_new_agent_takes_the_rules_and_their_criteria_with_the_clarifications(self):
         with registry.using(self.target):
-            store.save(sources.FILE, [CODE])
+            storage.documents.save(inputs.SOURCES, [CODE])
         before = self.draft(self.source)
-        with patch.object(store, 'now', return_value=COPIED_AT):
+        with patch.object(storage, 'now', return_value=COPIED_AT):
             response = await self.copy(self.target)
         self.assertEqual(response.status_code, 200, response.text)
         self.assertEqual(response.json(), {'ok': True, 'unchanged': False})
-        policy = next(item for item in self.sources_of(self.source) if item['kind'] == tone.KIND)
+        policy = next(item for item in self.sources_of(self.source) if item['kind'] == tone_rules.KIND)
         self.assertEqual(self.sources_of(self.target), [CODE, policy])  # its own code stays
         copied = self.draft(self.target)
         self.assertEqual(copied['criteria'], before['criteria'])
@@ -135,15 +124,15 @@ class ToneCopyTests(unittest.IsolatedAsyncioTestCase):
         await self.prepare(self.target, OTHER_POLICY, 'Старые правила.md')
         old = await self.check(self.target)
         with registry.using(self.target):
-            store.save(discover.RESULT, {'finishedAt': '2026-10-01T09:00:00+00:00', 'results': []})
-            store.save(api.cards.DECK, {'check': 'tone', 'cards': ['from the old rules']})
+            storage.documents.save(accuracy.RESULT, {'finishedAt': '2026-10-01T09:00:00+00:00', 'results': []})
+            storage.documents.save(checks.DECK, {'check': 'tone', 'cards': ['from the old rules']})
         response = await self.copy(self.target)
         self.assertEqual(response.json(), {'ok': True, 'unchanged': False})
         with registry.using(self.target):
-            self.assertIsNone(store.load(tone.RESULT))
-            self.assertIsNone(store.load(api.cards.DECK))
-            self.assertEqual([check['id'] for check in store.tone_checks()], [old['checkId']])
-            self.assertEqual(store.load(discover.RESULT)['finishedAt'], '2026-10-01T09:00:00+00:00')
+            self.assertIsNone(storage.documents.load(tone.RESULT))
+            self.assertIsNone(storage.documents.load(checks.DECK))
+            self.assertEqual([check['id'] for check in storage.history.lines('tone')], [old['checkId']])
+            self.assertEqual(storage.documents.load(accuracy.RESULT)['finishedAt'], '2026-10-01T09:00:00+00:00')
             self.assertEqual(tone.current_policy()['content'], POLICY.strip())
         self.assertEqual(self.draft(self.target)['criteria'], self.draft(self.source)['criteria'])
 
@@ -157,7 +146,9 @@ class ToneCopyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(copied['criteria'], self.draft(self.source)['criteria'])
         self.assertNotEqual(copied['revision'], result['criteriaRevision'])
         with registry.using(self.target):
-            self.assertEqual(store.load(tone.RESULT), result)  # the rules did not change: only their criteria did
+            self.assertEqual(
+                storage.documents.load(tone.RESULT), result
+            )  # the rules did not change: only their criteria did
             self.assertEqual(tone.current_policy()['name'], 'Правила общения')
 
     async def test_rules_already_the_same_are_left_as_they_are(self):
@@ -170,7 +161,7 @@ class ToneCopyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.json(), {'ok': True, 'unchanged': True})
         self.assertEqual(self.draft(self.target), draft)
         with registry.using(self.target):
-            self.assertEqual(store.load(tone.RESULT), result)
+            self.assertEqual(storage.documents.load(tone.RESULT), result)
 
     async def test_later_changes_in_either_agent_never_reach_the_other(self):
         await self.copy(self.target)
@@ -222,7 +213,7 @@ class ToneCopyTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.Event().wait()
 
         with registry.using(self.target):
-            api.jobs.start('run', busy)
+            self.jobs.start('run', busy)
         await entered.wait()
         response = await self.copy(self.target)
         self.assertEqual(response.status_code, 409)
@@ -231,32 +222,20 @@ class ToneCopyTests(unittest.IsolatedAsyncioTestCase):
 
 class AgentRulesTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        for mocked in (
-            patch.object(store, 'DB', Path(directory.name) / 'lab.sqlite3'),
-            patch.object(api, 'jobs', jobs.PerAgent()),
-        ):
-            mocked.start()
-            self.addCleanup(mocked.stop)
-        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app), base_url='http://test')
-
-    async def asyncTearDown(self):
-        await api.jobs.close()
-        await self.client.aclose()
+        support.serve(self, jobs.PerAgent())
 
     async def test_each_agent_is_listed_with_its_rules_of_communication(self):
         ruled = registry.create('Агент эквайринга')['id']
         drafted = registry.create('Агент кредитов')['id']
         registry.create('Агент вкладов')
-        policy = tone.policy('ToV.docx', POLICY)
+        policy = tone_rules.policy('ToV.docx', POLICY)
         for agent in (ruled, drafted):
             with registry.using(agent):
-                store.save(sources.FILE, [CODE, policy])
+                storage.documents.save(inputs.SOURCES, [CODE, policy])
         with registry.using(ruled):
-            criteria = tone.coded_criteria(policy)
-            store.save_tone_draft(
-                {'revision': 'r1', 'createdAt': store.now(), 'sourceSha256': policy['sha256'], 'criteria': criteria}
+            criteria = tone_rules.coded_criteria(policy)
+            tone.save_draft(
+                {'revision': 'r1', 'createdAt': storage.now(), 'sourceSha256': policy['sha256'], 'criteria': criteria}
             )
         listed = (await self.client.get('/api/agents')).json()
         self.assertEqual(
@@ -272,7 +251,7 @@ class AgentRulesTests(unittest.IsolatedAsyncioTestCase):
         broken = registry.create('Сломанный')['id']
         registry.create('Агент кредитов')
         with registry.using(broken):
-            store.save(sources.FILE, {'not': 'a list'})
+            storage.documents.save(inputs.SOURCES, {'not': 'a list'})
         response = await self.client.get('/api/agents')
         self.assertEqual(response.status_code, 200)
         self.assertEqual([agent['rules'] for agent in response.json()], [None, None])

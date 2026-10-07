@@ -20,7 +20,7 @@ export function StageResult({
   checked: number;
   unchecked?: number;
   size?: "hero" | "display";
-  /** Where each part's conversations open: every number leads to what it is made of (DESIGN.md, честность 5). */
+  /** Where each part's conversations open: every number leads to what it is made of. */
   link?: (part: "bad" | "ok" | "none") => string;
   className?: string;
 }) {
@@ -58,7 +58,7 @@ export function StageResult({
             <span aria-hidden>{shownChecked}</span>
           </p>
           <p className={cn("text-fg-2", size === "hero" ? "mt-3 text-lead" : "mt-2 text-read")}>
-            {plural(checked, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} — с ошибкой
+            {plural(checked, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} с ошибкой
             агента
             <span className="text-fg-3">
               {"\u00a0·\u00a0"}

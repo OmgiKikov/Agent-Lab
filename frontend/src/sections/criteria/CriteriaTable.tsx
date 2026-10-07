@@ -92,7 +92,7 @@ export function CriteriaTable({
               <tr
                 key={c.r.id}
                 onClick={() => onSelect(c.r.id)}
-                aria-selected={on}
+                aria-current={on ? "true" : undefined}
                 className={cn(
                   "cursor-pointer border-b border-line align-top transition-colors",
                   on ? "bg-selected" : "hover:bg-hover",

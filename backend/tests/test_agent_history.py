@@ -2,6 +2,7 @@ import unittest
 from unittest.mock import patch
 
 import httpx
+import support
 
 from lab.agents import http
 
@@ -55,6 +56,9 @@ class TraceTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SayTraceTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        support.lab(self)
+
     async def requested(self, history: list[dict] | None) -> list[str]:
         """The paths a local agent's turn reached, the agent and the stand's mocks answering."""
         seen = []

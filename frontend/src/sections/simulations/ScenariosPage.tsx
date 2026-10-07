@@ -25,6 +25,7 @@ import {
 import type { Card, Persona } from "../../lab/types";
 import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
+import { LoadFailed } from "../../ui/LoadFailed";
 import { Search } from "../../ui/Search";
 import { Dot, dotOf } from "./parts";
 import { ScenarioView, type RecordState } from "./ScenarioView";
@@ -147,7 +148,7 @@ export function ScenariosPage() {
   const wide = useWide();
   const deck = state?.cards ?? null;
   const { list } = useCriteria(deck?.check ?? null);
-  const { data: tests, isError, isFetching } = useScenarios(state);
+  const { data: tests, isError, isFetching, error, refetch } = useScenarios(state);
   const [query, setQuery] = useState("");
   const set = (edit: (n: URLSearchParams) => void, replace = true) =>
     setParams(
@@ -211,7 +212,9 @@ export function ScenariosPage() {
     );
 
   const fromErrors = cards.filter((c) => c.origin === FROM_LOG).length;
-  const showDetail = !!card && (wide || !!params.get("s"));
+  // A scenario the address names that is not among the ones built: said so in its place, never a blank one.
+  const lost = !!params.get("s") && !card;
+  const showDetail = (!!card || lost) && (wide || !!params.get("s"));
   const status: RecordState = card && records.has(card.id) ? "ready" : isError && !isFetching ? "error" : "loading";
   const busy = !!state.job.running;
   return (
@@ -286,16 +289,34 @@ export function ScenariosPage() {
               )}
             </div>
           </div>
-          <div className="min-h-0 flex-1 overflow-auto px-2 pb-4" role="list">
-            {filter !== "all" && !tests && <Skeleton className="mx-2 mt-2 h-40" />}
-            {shown.map((c) => (
-              <Row key={c.id} on={c.id === id} onClick={() => pick(c.id)}>
-                {topics > 1 && <span className="block text-small text-fg-3">{c.topic}</span>}
-                <span className="block text-body font-medium text-fg">{c.name}</span>
-                <Reproduces card={c} record={records.get(c.id)} named={namedCriteria(c, list)} />
-                <LastResults record={records.get(c.id)} personas={state.personas} />
-              </Row>
-            ))}
+          <div className="min-h-0 flex-1 overflow-auto px-2 pb-4">
+            {/* A filter by the last results waits for them; when they could not be loaded, that and «Повторить». */}
+            {filter !== "all" &&
+              !tests &&
+              (isError && !isFetching ? (
+                <LoadFailed
+                  title="Не удалось загрузить итоги сценариев"
+                  error={error}
+                  onRetry={() => void refetch()}
+                  className="px-2"
+                />
+              ) : (
+                <Skeleton className="mx-2 mt-2 h-40" />
+              ))}
+            {shown.length > 0 && (
+              <ul aria-label="Сценарии">
+                {shown.map((c) => (
+                  <li key={c.id}>
+                    <Row on={c.id === id} onClick={() => pick(c.id)}>
+                      {topics > 1 && <span className="block text-small text-fg-3">{c.topic}</span>}
+                      <span className="block text-body font-medium text-fg">{c.name}</span>
+                      <Reproduces card={c} record={records.get(c.id)} named={namedCriteria(c, list)} />
+                      <LastResults record={records.get(c.id)} personas={state.personas} />
+                    </Row>
+                  </li>
+                ))}
+              </ul>
+            )}
             {!shown.length && (filter === "all" || tests) && (
               <p className="px-3 py-10 text-center text-small text-fg-3">
                 {cards.length
@@ -319,6 +340,15 @@ export function ScenariosPage() {
             onPlay={() => set((n) => n.set("play", card.id), false)}
             onBack={wide ? undefined : () => pick(null)}
           />
+        ) : showDetail && lost ? (
+          <EmptyState
+            drop
+            title="Такого сценария нет"
+            className="justify-center"
+            action={<Button onClick={() => pick(null)}>Все сценарии</Button>}
+          >
+            Сценария из ссылки нет среди собранных. Новые сценарии заменяют прежние.
+          </EmptyState>
         ) : (
           wide && (
             <EmptyState drop title="Выберите сценарий" className="justify-center">

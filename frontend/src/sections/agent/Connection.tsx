@@ -10,7 +10,17 @@ import { useToast } from "../../ui/toast";
 import { agentKey } from "../../app/agent";
 
 type Answer = Probe & { question?: string };
-type Last = { target: string; text: string; at: string };
+/** The last answer of the agent: on which way and where (`where`, since this change), what it said and when. */
+type Last = { target: string; where?: string; text: string; at: string };
+
+/** A way to the agent and where it leads: a check's answer belongs to this, never to the way chosen meanwhile. */
+const targetKey = (target: Target) => `${target.id}|${target.where}`;
+
+/** The last answer of the agent on this very connection, or none: one on another way says nothing about this one. */
+const lastOn = (last: Last | null, target: Target | undefined) =>
+  last && target && last.target === target.id && (last.where === undefined || last.where === target.where)
+    ? last
+    : null;
 
 const LAST = agentKey("lab.agent.lastCheck"),
   WAY = agentKey("lab.agent.way"),
@@ -130,7 +140,11 @@ function Way({ target, on, onPick }: { target: Target; on: boolean; onPick: () =
   );
 }
 
-/** Подключение: the way to reach the agent, whose clients the simulator writes for, where the code is; save and check. */
+/**
+ * Подключение: the way to reach the agent, whose clients the simulator writes for, where the code is; save and check.
+ * Each check's answer is kept by the connection it asked (targetKey): switching the way while «Проверить связь» is on
+ * its way never shows the old connection's answer under the new one.
+ */
 export function ConnectionForm({ state }: { state: LabState }) {
   const { refresh } = useLabState();
   const toast = useToast();
@@ -141,13 +155,14 @@ export function ConnectionForm({ state }: { state: LabState }) {
   const [epk, setEpk] = useState(saved.epk.join(" "));
   const [repo, setRepo] = useState(saved.repo);
   const [saving, setSaving] = useState(false);
-  const [check, setCheck] = useState<Answer | "pending" | null>(null);
+  const [checks, setChecks] = useState<Record<string, Answer | "pending">>({});
   const dirty =
     prodUrl.trim() !== saved.prodUrl || repo.trim() !== saved.repo || words(epk).join(" ") !== saved.epk.join(" ");
   const target = state.targets.find((t) => t.id === way);
+  const check = target ? (checks[targetKey(target)] ?? null) : null;
+  const last = lastOn(memory.last, target);
   const pick = (id: string) => {
     setWay(id);
-    setCheck(null);
     write(WAY, id);
   };
   const save = () => {
@@ -160,15 +175,28 @@ export function ConnectionForm({ state }: { state: LabState }) {
   };
   const run = () => {
     if (!target) return;
-    setCheck("pending");
+    const key = targetKey(target);
+    const answer = (value: Answer | null) =>
+      setChecks((all) => {
+        const next = { ...all };
+        if (value) next[key] = value;
+        else delete next[key];
+        return next;
+      });
+    setChecks((all) => ({ ...all, [key]: "pending" }));
     api<Answer>(`/api/agents/${encodeURIComponent(target.id)}/check`, {})
       .then((a) => {
-        setCheck(a);
+        answer(a);
         if (a.ok && a.text)
-          write(LAST, { target: target.id, text: a.text, at: new Date().toISOString() } satisfies Last);
+          write(LAST, {
+            target: target.id,
+            where: target.where,
+            text: a.text,
+            at: new Date().toISOString(),
+          } satisfies Last);
       })
       .catch((e) => {
-        setCheck(null);
+        answer(null);
         toast.error(e);
       });
   };
@@ -265,10 +293,10 @@ export function ConnectionForm({ state }: { state: LabState }) {
               `Агент ответил не текстом, а статусом ${check.status ?? "?"}. Так бывает, когда разговор передан оператору.`}
           </p>
         ))}
-      {memory.last && !check && (
+      {last && !check && (
         <p className="mt-4 text-small text-fg-3">
           В последний раз отвечал{" "}
-          {new Date(memory.last.at).toLocaleString("ru-RU", {
+          {new Date(last.at).toLocaleString("ru-RU", {
             day: "2-digit",
             month: "2-digit",
             hour: "2-digit",

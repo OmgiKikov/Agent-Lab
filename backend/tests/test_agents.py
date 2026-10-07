@@ -46,8 +46,8 @@ class ReadinessTests(unittest.TestCase):
 
 class LocalTests(unittest.TestCase):
     def test_only_the_bank_stand_is_not_local(self):
-        with patch.object(agents, 'settings', return_value={'prodUrl': '', 'epk': [], 'repo': '~/agent'}):
-            local = {key: agents.public(key, config)['local'] for key, config in agents.configs().items()}
+        ways = agents.configs({'prodUrl': '', 'epk': [], 'repo': '~/agent'})
+        local = {key: agents.public(key, way)['local'] for key, way in ways.items()}
         self.assertEqual(local, {'prod': False, 'local-http': True, 'local-code': True})
 
 
@@ -55,8 +55,8 @@ class NamesTests(unittest.TestCase):
     def test_the_ways_to_reach_the_agent_have_the_names_of_the_agent_section(self):
         """«Сыграть» said «Агент на ИФТ / Локальный агент / Агент из исходников» for what «Агент» calls «Тестовый
         стенд банка / На этом компьютере / Запуск из кода»: one set everywhere, in words without a developer's slang."""
-        with patch.object(agents, 'settings', return_value={'prodUrl': '', 'epk': [], 'repo': '~/agent'}):
-            named = {key: config['name'] for key, config in agents.configs().items()}
+        ways = agents.configs({'prodUrl': '', 'epk': [], 'repo': '~/agent'})
+        named = {key: config['name'] for key, config in ways.items()}
         self.assertEqual(
             named,
             {'prod': 'Тестовый стенд банка', 'local-http': 'На этом компьютере', 'local-code': 'Запуск из кода'},

@@ -5,7 +5,7 @@ import { api } from "./api";
 import { JOB_OF } from "./checks";
 import type { Check, LabRun, LabState, Turn } from "./types";
 
-/** The service's record of rules and problems (lab/problems.py; spec, section 8). */
+/** The service's record of rules and problems (backend/lab/flows/checks.py, problems; spec, section 8). */
 export type Decision = "agree" | "disagree";
 export type Scope = "rule" | "dialogue";
 export type Example = {
@@ -118,15 +118,16 @@ export const severityStamp = (state: LabState | null) =>
   state?.severityStamp ?? (state?.severity ? `${state.severity.tone.join(",")}|${state.severity.code.join(",")}` : "");
 
 /**
- * What makes the problems out of date: a new result, a run that started or finished, new scenarios, a task that ended,
- * a decision or a proposal of whether a criterion's errors are serious.
+ * What makes the problems out of date: a new result, a run that started, finished or changed (judged again, answered:
+ * its revision), new scenarios, a task that ended, a decision or a proposal of whether a criterion's errors are
+ * serious, and any answer on the checks' results (reviewsStamp) — also one given in another tab or browser.
  */
 export function problemsStamp(state: LabState | null): string {
   if (!state) return "";
-  const runs = state.runs.map((r) => `${r.id}:${r.status}:${r.finishedAt ?? ""}`).join(",");
+  const runs = state.runs.map((r) => `${r.id}:${r.status}:${r.finishedAt ?? ""}:${r.revision ?? ""}`).join(",");
   const sources = state.sources.map((s) => `${s.id}:${s.sha256 ?? ""}`).join(",");
   const results = `${state.checks.tone?.finishedAt ?? ""}|${state.checks.code?.finishedAt ?? ""}`;
-  return `${state.logs.updatedAt ?? ""}|${results}|${state.cards?.createdAt ?? ""}|${sources}|${runs}|${state.job.running}|${severityStamp(state)}`;
+  return `${state.logs.updatedAt ?? ""}|${results}|${state.cards?.createdAt ?? ""}|${sources}|${runs}|${state.job.running}|${severityStamp(state)}|${state.reviewsStamp ?? ""}`;
 }
 
 /** Every example of the record with the check it belongs to (Example.check). */
@@ -181,11 +182,20 @@ function withDecision(data: Problems, target: Example, decision: Decision | null
  * A person's answer on one verdict, as the screen shows it: the example with its status, and the logs' result it comes
  * from (`finishedAt`). The service refuses it when either has changed since, so it never lands on another check.
  */
-export type Answer = { example: Example; decision: Decision | null; finishedAt: string | null | undefined };
+export type Answer = {
+  example: Example;
+  decision: Decision | null;
+  finishedAt: string | null | undefined;
+  /**
+   * The answer the person saw on this criterion, when it is not the example's own: «Отменить» takes back the answer
+   * just given, so it saw that one. Otherwise the example's answer, unless it is on the whole conversation.
+   */
+  seen?: Decision | null;
+};
 
 /**
  * Why answers on a check's result wait, in one line, or null. While that check runs, its new result replaces the one
- * the person answers on, and the service refuses answers to it (backend/lab/api.py, review); the other check's
+ * the person answers on, and the service refuses answers to it (backend/lab/api/reviews.py); the other check's
  * result takes answers as usual.
  */
 export function answersWait(state: LabState | null, example: Pick<Example, "source" | "check">): string | null {
@@ -206,8 +216,11 @@ export function useReview() {
   const { refresh } = useLabState();
   return useMutation({
     mutationKey: ["review"],
-    mutationFn: ({ example, decision, finishedAt }: Answer) =>
-      api(
+    mutationFn: ({ example, decision, finishedAt, seen }: Answer) => {
+      // The answer the person saw on this criterion: one given meanwhile in another tab or browser is never overwritten
+      // unseen (the service refuses, and the screen gets that answer). An answer on the whole conversation is not this.
+      const before = seen !== undefined ? seen : example.reviewScope === "dialogue" ? null : example.review;
+      return api(
         "/api/review",
         example.source === "log"
           ? {
@@ -218,6 +231,7 @@ export function useReview() {
               decision,
               finishedAt,
               status: example.status,
+              before,
             }
           : {
               source: "sim",
@@ -226,8 +240,10 @@ export function useReview() {
               ruleId: example.ruleId,
               decision,
               status: example.status,
+              before,
             },
-      ),
+      );
+    },
     onMutate: ({ example, decision }) => {
       client.setQueriesData<Problems>({ queryKey: ["problems"] }, (old) =>
         old ? withDecision(old, example, decision) : old,
@@ -272,6 +288,7 @@ export function useTurns(example?: Example): { turns?: Turn[]; loading: boolean;
   const turns = item?.conversation.map((m) => ({
     role: m.role,
     text: m.text,
+    options: m.options,
     events: m.events,
     ok: m.ok,
     status: m.status,

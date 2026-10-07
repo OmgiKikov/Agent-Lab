@@ -7,27 +7,20 @@ import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-import httpx
+import support
 
-from lab import api, history, store
-from lab.jobs import Jobs
+from lab import agents, api, models, storage
+from lab.agents import knowledge
+from lab.domain import checks, comparison
+from lab.domain.results import summarize
+from lab.flows import accuracy, answers, connection, inputs, replay
+from lab.flows import checks as results_of
+from lab.flows import scenarios as cards
 
 
 class ApiTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        for mocked in (
-            patch.object(store, 'DB', Path(directory.name) / 'lab.sqlite3'),
-            patch.object(api, 'jobs', Jobs()),
-        ):
-            mocked.start()
-            self.addCleanup(mocked.stop)
-        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=api.app), base_url='http://test')
-
-    async def asyncTearDown(self) -> None:
-        await api.jobs.close()
-        await self.client.aclose()
+        support.serve(self)
 
     async def test_uploaded_log_transcript_has_current_evaluation(self) -> None:
         dialogue = {
@@ -36,11 +29,11 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         }
         response = await self.client.post('/api/logs?name=sample.jsonl', content=json.dumps(dialogue))
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {'total': 1})
+        self.assertEqual(response.json(), {'total': 1, 'skipped': 0})
         response = await self.client.get('/api/logs/dialogue-1')
         self.assertEqual(response.json(), {**dialogue, 'evaluation': None})
         evaluation = {'dialogueId': 'dialogue-1', 'status': 'FAIL'}
-        store.save(api.discover.RESULT, {'results': [evaluation]})
+        storage.documents.save(accuracy.RESULT, {'results': [evaluation]})
         response = await self.client.get('/api/logs/dialogue-1')
         self.assertEqual(response.json()['evaluation'], evaluation)
         self.assertEqual((await self.client.get('/api/logs/missing')).status_code, 404)
@@ -48,11 +41,11 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_an_article_the_agent_read_comes_from_its_knowledge_base(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             repo = Path(folder)
-            kb = repo / api.knowledge.KB
+            kb = repo / knowledge.KB
             kb.parent.mkdir(parents=True)
             article = {'id': 'возвраты', 'title': 'Как оформить возврат', 'passages': ['Откройте раздел.', 'Нажмите.']}
             kb.write_text(json.dumps({'articles': [article]}))
-            with patch.object(api.knowledge.agents, 'repo', return_value=repo):
+            with patch.object(connection, 'repo', return_value=repo):
                 response = await self.client.get('/api/articles/возвраты')
                 self.assertEqual(
                     response.json(),
@@ -61,14 +54,14 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual((await self.client.get('/api/articles/нет-такой')).status_code, 404)
 
     async def test_failed_upload_keeps_inputs_and_derived_documents(self) -> None:
-        store.save(api.logs.FILE, [{'id': 'old'}])
-        store.save(api.discover.RESULT, {'results': ['old']})
-        store.save(api.cards.DECK, {'cards': ['old']})
+        storage.dialogues.replace([{'id': 'old'}])
+        storage.documents.save(accuracy.RESULT, {'results': ['old']})
+        storage.documents.save(checks.DECK, {'cards': ['old']})
         response = await self.client.post('/api/logs?name=broken.xlsx', content=b'not a workbook')
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(store.load(api.logs.FILE), [{'id': 'old'}])
-        self.assertEqual(store.load(api.discover.RESULT), {'results': ['old']})
-        self.assertEqual(store.load(api.cards.DECK), {'cards': ['old']})
+        self.assertEqual(storage.dialogues.read(), [{'id': 'old'}])
+        self.assertEqual(storage.documents.load(accuracy.RESULT), {'results': ['old']})
+        self.assertEqual(storage.documents.load(checks.DECK), {'cards': ['old']})
 
     async def test_a_broken_export_is_refused_in_words_a_person_can_act_on(self) -> None:
         response = await self.client.post('/api/logs?name=export.jsonl', content='id;client;agent\n1;Здравствуйте')
@@ -80,16 +73,16 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_successful_upload_invalidates_old_audit_and_scenarios(self) -> None:
-        store.save(api.discover.RESULT, {'results': ['old']})
-        store.save(api.cards.DECK, {'cards': ['old']})
+        storage.documents.save(accuracy.RESULT, {'results': ['old']})
+        storage.documents.save(checks.DECK, {'cards': ['old']})
         dialogue = {
             'id': 'new',
             'messages': [{'role': 'user', 'content': 'question'}, {'role': 'assistant', 'content': 'answer'}],
         }
         response = await self.client.post('/api/logs?name=sample.jsonl', content=json.dumps(dialogue))
         self.assertEqual(response.status_code, 200)
-        self.assertIsNone(store.load(api.discover.RESULT))
-        self.assertIsNone(store.load(api.cards.DECK))
+        self.assertIsNone(storage.documents.load(accuracy.RESULT))
+        self.assertIsNone(storage.documents.load(checks.DECK))
 
     async def test_criteria_extracted_anew_drop_the_cards_built_from_the_old_ones(self) -> None:
         for replan, kept in ((False, True), (True, False)):
@@ -97,34 +90,34 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                 # What a check of no conversation returns (discover.run), with its own id for its saved check.
                 audit = {
                     'checkId': uuid.uuid4().hex,
-                    'datasetFingerprint': history.dataset_fingerprint([]),
-                    'finishedAt': store.now(),
+                    'datasetFingerprint': comparison.dataset_fingerprint([]),
+                    'finishedAt': storage.now(),
                     'model': None,
                     'sampled': 0,
                     'topics': [],
                     'results': [],
-                    'summary': api.discover.summarize([], []),
+                    'summary': summarize([], []),
                 }
-                store.save(api.cards.DECK, {'check': 'code', 'cards': ['built from the previous criteria']})
-                with patch.object(api.discover, 'run', AsyncMock(return_value=audit)):
+                storage.documents.save(checks.DECK, {'check': 'code', 'cards': ['built from the previous criteria']})
+                with patch.object(accuracy, 'assess', AsyncMock(return_value=audit)):
                     response = await self.client.post('/api/discover', json={'count': 5, 'replan': replan})
                     self.assertEqual(response.status_code, 200, response.text)
                     for _ in range(100):
-                        if not api.jobs.state['running']:
+                        if not self.jobs.state['running']:
                             break
                         await asyncio.sleep(0.002)
-                self.assertIsNone(api.jobs.state['error'])
-                self.assertEqual(store.load(api.discover.RESULT), audit)
-                self.assertEqual(store.load(api.cards.DECK) is not None, kept)
+                self.assertIsNone(self.jobs.state['error'])
+                self.assertEqual(storage.documents.load(accuracy.RESULT), audit)
+                self.assertEqual(storage.documents.load(checks.DECK) is not None, kept)
 
     async def test_an_audit_the_model_could_not_answer_keeps_the_previous_one_and_its_scenarios(self) -> None:
         dialogue = {
             'id': 'd1',
             'messages': [{'role': 'user', 'content': 'Вопрос'}, {'role': 'assistant', 'content': 'Ответ'}],
         }
-        store.save(api.logs.FILE, [dialogue])
-        store.save(
-            api.sources.FILE, [{'id': 's1', 'kind': 'prompt', 'origin': 'agent.py', 'content': 'Отвечай по делу.'}]
+        storage.dialogues.replace([dialogue])
+        storage.documents.save(
+            inputs.SOURCES, [{'id': 's1', 'kind': 'prompt', 'origin': 'agent.py', 'content': 'Отвечай по делу.'}]
         )
         rule = {'id': 't1r1', 'text': 'Отвечает по делу', 'quote': 'Отвечай по делу', 'sourceId': 's1'}
         previous = {
@@ -132,52 +125,103 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             'topics': [{'id': 't1', 'title': 'Вопросы', 'dialogueIds': ['d1'], 'rules': [rule]}],
             'results': [{'dialogueId': 'd1', 'topicId': 't1', 'status': 'PASS', 'rules': [], 'opening': 'Вопрос'}],
         }
-        store.save(api.discover.RESULT, previous)
-        store.save(api.cards.DECK, {'cards': ['built from the previous audit']})
-        down = AsyncMock(side_effect=api.llm.ModelError('Модель недоступна: ConnectError'))
-        with patch.object(api.discover.judge, 'log_verdict', down):
+        storage.documents.save(accuracy.RESULT, previous)
+        storage.documents.save(checks.DECK, {'cards': ['built from the previous audit']})
+        down = AsyncMock(side_effect=models.ModelError('Модель недоступна: ConnectError'))
+        with patch.object(accuracy.conversations.judge, 'log_verdict', down):
             response = await self.client.post('/api/discover', json={'count': 5})
             self.assertEqual(response.status_code, 200, response.text)
             for _ in range(100):
-                if not api.jobs.state['running']:
+                if not self.jobs.state['running']:
                     break
                 await asyncio.sleep(0.002)
         down.assert_awaited_once()
         self.assertEqual(
-            api.jobs.state['error'],
+            self.jobs.state['error'],
             'Модель проверки не ответила ни по одному разговору. Прежний итог сохранён. '
             'Проверьте модель в разделе «Настройки».',
         )
-        self.assertEqual(store.load(api.discover.RESULT), previous)
-        self.assertEqual(store.load(api.cards.DECK), {'cards': ['built from the previous audit']})
+        self.assertEqual(storage.documents.load(accuracy.RESULT), previous)
+        self.assertEqual(storage.documents.load(checks.DECK), {'cards': ['built from the previous audit']})
+
+    async def test_criteria_extracted_anew_without_one_grounded_keep_the_previous_result(self) -> None:
+        """«Извлечь критерии заново» where the model cited words the agent's code does not have: no criterion stands,
+        so no conversation can be checked. The check fails, and «0 из 0» never replaces the result, its scenarios and
+        the history."""
+        dialogue = {
+            'id': 'd1',
+            'messages': [{'role': 'user', 'content': 'Вопрос'}, {'role': 'assistant', 'content': 'Ответ'}],
+        }
+        storage.dialogues.replace([dialogue])
+        storage.documents.save(
+            inputs.SOURCES,
+            [{'id': 's1', 'kind': 'prompt', 'origin': 'agent.py', 'content': 'Отвечай клиенту по делу и вежливо.'}],
+        )
+        previous = {'finishedAt': '2026-10-01T10:00:00+00:00', 'topics': [{'id': 't1', 'rules': []}], 'results': []}
+        storage.documents.save(accuracy.RESULT, previous)
+        storage.documents.save(checks.DECK, {'check': 'code', 'cards': ['built from the previous criteria']})
+        paraphrased = {
+            'id': 't1r1',
+            'name': 'По делу',
+            'text': 'Отвечает по делу',
+            'sourceId': 's1',
+            'quote': 'Говори с клиентом только о его вопросе',
+            'condition': 'всегда',
+            'acceptable': '',
+            'observation': 'reply',
+        }
+        plan = {'topics': [{'id': 't1', 'title': 'Вопросы', 'dialogueIds': ['d1'], 'rules': [paraphrased]}]}
+
+        planned = models.Reply(json.dumps(plan, ensure_ascii=False), 'model')
+        judge = AsyncMock(side_effect=AssertionError('no conversation is judged without a criterion'))
+        with (
+            patch.object(models, 'chat', AsyncMock(return_value=planned)),
+            patch.object(accuracy.conversations.judge, 'log_verdict', judge),
+        ):
+            response = await self.client.post('/api/discover', json={'count': 5, 'replan': True})
+            self.assertEqual(response.status_code, 200, response.text)
+            for _ in range(100):
+                if not self.jobs.state['running']:
+                    break
+                await asyncio.sleep(0.002)
+        self.assertEqual(
+            self.jobs.state['error'],
+            'Ни один критерий не подтвердился дословной цитатой из кода агента. Прежний итог сохранён. '
+            'Извлеките критерии ещё раз.',
+        )
+        self.assertEqual(storage.documents.load(accuracy.RESULT), previous)
+        self.assertEqual(
+            storage.documents.load(checks.DECK), {'check': 'code', 'cards': ['built from the previous criteria']}
+        )
+        self.assertEqual(storage.history.lines('code'), [])
 
     async def test_stopped_source_worker_cannot_publish_or_invalidate_previous_analysis(self) -> None:
         entered, release, finished = threading.Event(), threading.Event(), threading.Event()
-        store.save(api.sources.FILE, [{'id': 'old'}])
-        store.save(api.discover.RESULT, {'results': ['old']})
-        store.save(api.cards.DECK, {'cards': ['old']})
+        storage.documents.save(inputs.SOURCES, [{'id': 'old'}])
+        storage.documents.save(accuracy.RESULT, {'results': ['old']})
+        storage.documents.save(checks.DECK, {'cards': ['old']})
 
-        def collect(repo) -> list[dict]:
+        def collect(repo) -> tuple[list[dict], list[str]]:
             entered.set()
             release.wait(timeout=5)
             finished.set()
-            return [{'id': 'new'}]
+            return [{'id': 'new'}], []
 
-        with patch.object(api.sources, 'collect', side_effect=collect):
+        with patch.object(inputs.agent_sources, 'collect', side_effect=collect):
             try:
                 response = await self.client.post('/api/sources')
                 self.assertEqual(response.status_code, 200)
                 self.assertTrue(await asyncio.to_thread(entered.wait, 2))
                 response = await self.client.post('/api/job/stop')
                 self.assertEqual(response.status_code, 200)
-                self.assertFalse(api.jobs.state['running'])
+                self.assertFalse(self.jobs.state['running'])
             finally:
                 release.set()
                 await asyncio.to_thread(finished.wait, 2)
                 await asyncio.sleep(0)
-        self.assertEqual(store.load(api.sources.FILE), [{'id': 'old'}])
-        self.assertEqual(store.load(api.discover.RESULT), {'results': ['old']})
-        self.assertEqual(store.load(api.cards.DECK), {'cards': ['old']})
+        self.assertEqual(storage.documents.load(inputs.SOURCES), [{'id': 'old'}])
+        self.assertEqual(storage.documents.load(accuracy.RESULT), {'results': ['old']})
+        self.assertEqual(storage.documents.load(checks.DECK), {'cards': ['old']})
 
     async def test_upload_and_other_commands_share_exclusivity(self) -> None:
         entered, release = asyncio.Event(), asyncio.Event()
@@ -186,7 +230,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             entered.set()
             await release.wait()
 
-        api.jobs.start('discover', work)
+        self.jobs.start('discover', work)
         await entered.wait()
         response = await self.client.post('/api/logs?name=sample.jsonl', content='{}')
         self.assertEqual(response.status_code, 409)
@@ -194,31 +238,31 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 409)
         response = await self.client.post('/api/job/stop')
         self.assertEqual(response.status_code, 200)
-        self.assertFalse(api.jobs.state['running'])
+        self.assertFalse(self.jobs.state['running'])
 
     async def test_settings_cannot_change_under_an_active_job(self) -> None:
-        store.save(api.agents.SETTINGS, {'repo': '/old/agent'})
+        storage.documents.save(connection.SETTINGS, {'repo': '/old/agent'})
         entered = asyncio.Event()
 
         async def work(progress) -> None:
             entered.set()
             await asyncio.Event().wait()
 
-        api.jobs.start('run', work)
+        self.jobs.start('run', work)
         await entered.wait()
         response = await self.client.post('/api/settings', json={'repo': '/new/agent'})
         self.assertEqual(response.status_code, 409)
-        self.assertEqual(api.agents.settings()['repo'], '/old/agent')
+        self.assertEqual(connection.settings()['repo'], '/old/agent')
         await self.client.post('/api/job/stop')
         response = await self.client.post('/api/settings', json={'repo': '/new/agent'})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(api.agents.settings()['repo'], '/new/agent')
+        self.assertEqual(connection.settings()['repo'], '/new/agent')
 
     async def test_agent_check_uses_session_and_closes_before_returning(self) -> None:
-        agent = api.agents.HttpAgent({'url': 'http://unused.test', 'profile': 'prod'})
+        agent = agents.HttpAgent({'url': 'http://unused.test', 'profile': 'prod'})
         reply = {'text': 'answer', 'status': '200', 'ok': True, 'options': []}
         with (
-            patch.object(api.agents, 'create', return_value=agent),
+            patch.object(connection, 'connect', return_value=agent),
             patch.object(agent, 'open', new=AsyncMock()) as opened,
             patch.object(agent, 'say', new=AsyncMock(return_value=reply)),
             patch.object(agent, 'close', new=AsyncMock()) as closed,
@@ -230,10 +274,10 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         closed.assert_awaited_once()
 
     async def test_agent_check_open_failure_still_closes(self) -> None:
-        agent = api.agents.HttpAgent({'url': 'http://unused.test', 'profile': 'prod'})
+        agent = agents.HttpAgent({'url': 'http://unused.test', 'profile': 'prod'})
         with (
-            patch.object(api.agents, 'create', return_value=agent),
-            patch.object(agent, 'open', new=AsyncMock(side_effect=api.agents.AgentError('not reachable'))),
+            patch.object(connection, 'connect', return_value=agent),
+            patch.object(agent, 'open', new=AsyncMock(side_effect=agents.AgentError('not reachable'))),
             patch.object(agent, 'say', new=AsyncMock()) as said,
             patch.object(agent, 'close', new=AsyncMock()) as closed,
         ):
@@ -256,12 +300,12 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                 response = await self.client.post('/api/settings', json={'prodUrl': url})
                 self.assertEqual(response.status_code, 400, response.text)
                 self.assertIn('Адрес агента', response.json()['detail'])
-        self.assertEqual(api.agents.settings()['prodUrl'], '')
+        self.assertEqual(connection.settings()['prodUrl'], '')
         for url in ('https://ift.example.invalid:8443/api/v1/ai/agents/agent', ''):
             response = await self.client.post('/api/settings', json={'prodUrl': url})
             self.assertEqual(response.status_code, 200, response.text)
         # Saved before addresses were checked: the agent is unusable, and both the check and a run say why.
-        store.save(api.agents.SETTINGS, {'prodUrl': malformed[0]})
+        storage.documents.save(connection.SETTINGS, {'prodUrl': malformed[0]})
         response = await self.client.post('/api/agents/prod/check')
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.json()['ok'])
@@ -275,14 +319,14 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             'opening': 'Как оформить возврат?',
             'criteria': [{'id': 't1r1', 'text': 'Отвечает на вопрос', 'observation': 'reply', 'quote': 'q'}],
         }
-        store.save(api.cards.DECK, {'cards': [card]})
+        storage.documents.save(checks.DECK, {'cards': [card]})
         response = await self.client.post('/api/runs', json={'target': 'prod'})
         self.assertEqual(response.status_code, 200, response.text)
         for _ in range(100):
-            if not api.jobs.state['running']:
+            if not self.jobs.state['running']:
                 break
             await asyncio.sleep(0.002)
-        run = store.runs()[0]
+        run = storage.runs.listed()[0]
         # Never a crash: each conversation names the address, and the run, which the agent answered in none, fails
         # with it (simulate.unanswered).
         self.assertEqual(run['status'], 'failed')
@@ -307,20 +351,25 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         async def build(check, progress) -> list[dict]:
             return [{'id': 'card-1'}]
 
-        with patch.object(api.cards, 'run', side_effect=build):
+        with patch.object(cards, 'built', side_effect=build):
             self.assertEqual((await self.client.get('/api/cards')).status_code, 405)
             response = await self.client.post('/api/cards', json={'check': 'code'})
             self.assertEqual(response.status_code, 200)
-            await api.jobs._task
-        self.assertEqual(store.load(api.cards.DECK)['cards'], [{'id': 'card-1'}])
+            await self.jobs._task
+        self.assertEqual(storage.documents.load(checks.DECK)['cards'], [{'id': 'card-1'}])
 
-    async def test_review_and_state_expose_current_revision(self) -> None:
-        store.create_run({'id': 'run-1', 'items': [{'cardId': 'card-1', 'status': 'PASS'}]})
+    async def test_an_answer_on_a_run_is_counted_and_announced_without_rewriting_the_run(self) -> None:
+        """An answer is kept apart from the run: the run stays as it was played (its revision), its metric counts the
+        answer, and the stamp of answers tells the screens to fetch it again."""
+        storage.runs.create({'id': 'run-1', 'items': [{'cardId': 'card-1', 'status': 'PASS'}]})
+        before = (await self.client.get('/api/state')).json()
         response = await self.client.post('/api/review', json={'run': 'run-1', 'index': 0, 'decision': 'disagree'})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()['metric']['human']['agree'], 0)
+        self.assertEqual(response.json()['metric']['human'], {'reviewed': 1, 'agree': 0})
         state = (await self.client.get('/api/state')).json()
-        self.assertEqual(state['runs'][0]['revision'], 2)
+        self.assertEqual(state['runs'][0]['metric']['human'], {'reviewed': 1, 'agree': 0})
+        self.assertEqual(state['runs'][0]['revision'], before['runs'][0]['revision'])
+        self.assertNotEqual(state['reviewsStamp'], before['reviewsStamp'])
         self.assertTrue(state['runs'][0]['updatedAt'])
         self.assertNotIn('workshop', state)
 
@@ -333,7 +382,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             parsed.append(text if isinstance(text, str) else text.decode())
             return loads(text, *args, **kwargs)
 
-        with patch.object(store.json, 'loads', spy):
+        with patch.object(json, 'loads', spy):
             response = await self.client.get('/api/state')
         self.assertEqual(response.status_code, 200)
         return response.json(), parsed
@@ -341,7 +390,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_state_lists_runs_without_parsing_their_conversations(self) -> None:
         conversation = [{'role': 'agent', 'text': 'conversation-of-the-run'}]
         for number in (1, 2):
-            store.create_run(
+            storage.runs.create(
                 {
                     'id': f'run-{number}',
                     'startedAt': f'2026-10-0{number}T10:00:00+00:00',
@@ -349,23 +398,25 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                     'items': [{'cardId': 'card-1', 'status': 'PASS', 'conversation': conversation}],
                 }
             )
-        store.set_review('run-1', 0, 'agree')
+        answers.on_run('run-1', 0, 'agree')
         state, parsed = await self.state_parsing()
         self.assertEqual([run['id'] for run in state['runs']], ['run-2', 'run-1'])
-        self.assertEqual(state['runs'][1]['revision'], 2)
+        self.assertEqual(state['runs'][1]['revision'], 1)  # an answer is kept apart from the run it is on
         self.assertEqual(state['runs'][1]['metric']['human'], {'reviewed': 1, 'agree': 1})
         self.assertNotIn('items', state['runs'][0])
         self.assertFalse([text for text in parsed if 'conversation-of-the-run' in text])
 
     async def test_a_run_recorded_under_an_older_name_of_its_agent_is_listed_under_the_current_one(self) -> None:
-        store.create_run({'id': 'run-1', 'target': 'prod', 'targetName': 'Агент на ИФТ', 'items': []})
-        store.create_run({'id': 'run-2', 'target': 'mystery', 'targetName': 'Агент, которого больше нет', 'items': []})
+        storage.runs.create({'id': 'run-1', 'target': 'prod', 'targetName': 'Агент на ИФТ', 'items': []})
+        storage.runs.create(
+            {'id': 'run-2', 'target': 'mystery', 'targetName': 'Агент, которого больше нет', 'items': []}
+        )
         listed = {run['id']: run['targetName'] for run in (await self.client.get('/api/state')).json()['runs']}
         self.assertEqual(listed, {'run-1': 'Тестовый стенд банка', 'run-2': 'Агент, которого больше нет'})
 
     async def test_state_counts_the_dialogues_without_parsing_them(self) -> None:
         messages = [{'role': 'user', 'content': 'dialogue-text'}, {'role': 'assistant', 'content': 'answer'}]
-        store.replace_inputs('logs.json', [{'id': str(number), 'messages': messages} for number in range(3)])
+        inputs.replace_export([{'id': str(number), 'messages': messages} for number in range(3)])
         state, parsed = await self.state_parsing()
         self.assertEqual(state['logs']['total'], 3)
         self.assertFalse([text for text in parsed if 'dialogue-text' in text])
@@ -384,21 +435,109 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             'sources': [{'id': 's1', 'rules': 2}],
             'summary': summary,
         }
-        store.save(api.discover.RESULT, assessment)
-        store.save('sources.json', [{'id': 's1', 'kind': 'prompt', 'origin': 'agent.py:1', 'content': 'prompt'}])
-        with patch.object(api.discover, 'summarize', side_effect=AssertionError('the stored summary is reused')):
+        storage.documents.save(accuracy.RESULT, assessment)
+        storage.documents.save(
+            'sources.json', [{'id': 's1', 'kind': 'prompt', 'origin': 'agent.py:1', 'content': 'prompt'}]
+        )
+        with patch.object(results_of.results, 'summarize', side_effect=AssertionError('the stored summary is reused')):
             state, parsed = await self.state_parsing()
-        self.assertEqual(state['checks']['code']['summary'], summary)
+        # In brief: the counts without the recurring errors, and no verdict of a conversation.
+        self.assertEqual(state['checks']['code']['summary'], {k: v for k, v in summary.items() if k != 'patterns'})
+        self.assertEqual(state['checks']['code']['conversations'], 1)
+        self.assertNotIn('results', state['checks']['code'])
         self.assertEqual(state['sources'][0]['rules'], 2)
         self.assertEqual(len([text for text in parsed if 'assessment-text' in text]), 1)
         # A record from before results carried their summary gets one.
-        store.save(api.discover.RESULT, {key: value for key, value in assessment.items() if key != 'summary'})
+        storage.documents.save(accuracy.RESULT, {key: value for key, value in assessment.items() if key != 'summary'})
         state, _ = await self.state_parsing()
         found = state['checks']['code']['summary']
         self.assertEqual((found['failed'], found['measured']), (1, 1))
 
+    async def test_not_checked_counts_the_whole_sample_on_every_screen(self) -> None:
+        """«Не удалось проверить» is the conversations taken without a verdict, those in no topic included: the result's
+        screen, the summary for management, the history and the list of agents say the same number."""
+        summary = {'checked': 3, 'measured': 2, 'failed': 1, 'passed': 1, 'unmeasured': 1, 'patterns': []}
+        storage.documents.save(
+            accuracy.RESULT,
+            {'results': [], 'topics': [], 'sampled': 5, 'unassigned': 2, 'summary': summary, 'finishedAt': 'now'},
+        )
+        state = (await self.client.get('/api/state')).json()
+        self.assertEqual(state['checks']['code']['summary']['unmeasured'], 3)
+        self.assertEqual(results_of.line('code')['unmeasured'], 3)
+
+    async def test_an_answer_given_anywhere_changes_the_stamp_the_screens_refresh_by(self) -> None:
+        result = {
+            'finishedAt': 'now',
+            'topics': [],
+            'results': [{'dialogueId': 'd1', 'status': 'FAIL', 'rules': [{'ruleId': 't1r1', 'status': 'FAIL'}]}],
+        }
+        storage.documents.save(accuracy.RESULT, result)
+        before = (await self.client.get('/api/state')).json()['reviewsStamp']
+        answers.on_log('code', 'd1', 't1r1', 'agree')
+        after = (await self.client.get('/api/state')).json()['reviewsStamp']
+        self.assertNotEqual(before, after)
+        answers.on_log('code', 'd1', 't1r1', None)  # an answer taken back is a change too
+        self.assertNotIn((await self.client.get('/api/state')).json()['reviewsStamp'], (before, after))
+
+    async def test_the_agent_page_names_the_read_that_succeeded(self) -> None:
+        """When the code was read, and from which folder: written with the sources, so a read that failed names
+        nothing, and a folder saved later is not said to be the one read."""
+        source = {'id': 's1', 'kind': 'prompt', 'name': 'a.py:1', 'origin': 'a.py:1', 'sha256': 'x', 'content': 'p'}
+        await self.client.post('/api/settings', json={'repo': '~/agent'})
+        with patch.object(inputs.agent_sources, 'collect', return_value=([source], ['src/c.py:1'])):
+            await self.client.post('/api/sources')
+            await self.wait_job()
+        read = (await self.client.get('/api/state')).json()['sourcesRead']
+        self.assertEqual(read['repo'], '~/agent')
+        self.assertEqual(read['overBudget'], ['src/c.py:1'])
+        self.assertTrue(read['readAt'])
+        await self.client.post('/api/settings', json={'repo': '~/elsewhere'})
+        with patch.object(inputs.agent_sources, 'collect', side_effect=RuntimeError('В папке нет кода агента.')):
+            await self.client.post('/api/sources')
+            await self.wait_job()
+        self.assertEqual((await self.client.get('/api/state')).json()['sourcesRead'], read)
+
+    async def test_a_task_said_finished_has_its_data_in_the_same_answer(self) -> None:
+        """The state is put together in a worker thread while the task runs on: a task that finishes meanwhile is
+        still running in this answer, never «done» beside the data it has just replaced."""
+        entered = asyncio.Event()
+
+        async def work(progress) -> None:
+            entered.set()
+            await asyncio.Event().wait()
+
+        started = self.jobs.start('sources', work)
+        await entered.wait()
+        summary = api.state.source_summary
+
+        def finishing(analysis):
+            listed = summary(analysis)
+            # The task commits and finishes after the sources were read.
+            storage.tasks.end(started['task'], storage.tasks.DONE)
+            return listed
+
+        with patch.object(api.state, 'source_summary', finishing):
+            job = (await self.client.get('/api/state')).json()['job']
+        self.assertTrue(job['running'])
+
+    async def test_a_task_says_when_it_started(self) -> None:
+        async def work(progress) -> None:
+            pass
+
+        self.jobs.start('sources', work)
+        first = (await self.client.get('/api/state')).json()['job']['startedAt']
+        await self.wait_job()
+        self.assertTrue(first)
+
+    async def wait_job(self) -> None:
+        for _ in range(500):
+            if not self.jobs.state['running']:
+                return
+            await asyncio.sleep(0.002)
+        self.fail('background job did not finish')
+
     async def test_startup_recovers_interrupted_run_and_retains_finished_items_and_reviews(self) -> None:
-        store.create_run(
+        storage.runs.create(
             {
                 'id': 'interrupted',
                 'status': 'running',
@@ -408,7 +547,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                 ],
             }
         )
-        async with api.app.router.lifespan_context(api.app):
+        async with self.app.router.lifespan_context(self.app):
             result = (await self.client.get('/api/runs/interrupted')).json()
             self.assertEqual(result['status'], 'stopped')
             self.assertTrue(result['finishedAt'])
@@ -417,7 +556,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result['items'][1]['status'], 'UNMEASURED')
             self.assertEqual(result['items'][1]['stage'], '')
             self.assertEqual(result['revision'], 2)
-        self.assertEqual(store.recover_runs(), 0)
+        self.assertEqual(storage.runs.recover(), 0)
 
     async def test_replay_rejects_an_unknown_way_to_the_agent(self) -> None:
         response = await self.client.post('/api/replay', json={'target': 'nowhere', 'count': 3})
@@ -427,14 +566,14 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.client.get('/api/replay')).json(), {})
 
     async def test_the_replay_comes_with_its_knowledge_base_summary(self) -> None:
-        store.save(api.replay.RESULT, self.replay_with_a_knowledge_base_call())
+        storage.documents.save(replay.RESULT, self.replay_with_a_knowledge_base_call())
         summary = (await self.client.get('/api/replay')).json()['knowledgeBase']
         self.assertEqual(summary['called'], 1)
 
     async def test_the_knowledge_base_summary_is_not_saved(self) -> None:
-        store.save(api.replay.RESULT, self.replay_with_a_knowledge_base_call())
+        storage.documents.save(replay.RESULT, self.replay_with_a_knowledge_base_call())
         await self.client.get('/api/replay')
-        self.assertNotIn('knowledgeBase', store.load(api.replay.RESULT))
+        self.assertNotIn('knowledgeBase', storage.documents.load(replay.RESULT))
 
     @staticmethod
     def replay_with_a_knowledge_base_call() -> dict:
@@ -449,8 +588,10 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_state_tells_the_latest_replay_without_parsing_it(self) -> None:
         stamp = {'id': 'replay-1', 'finishedAt': '2026-10-05T10:00:00.000+00:00'}
-        store.save(api.replay.RESULT, {**stamp, 'dialogues': [{'dialogueId': 'replayed-dialogue', 'steps': []}]})
-        store.save(api.replay.REPLAY_SUMMARY, stamp)
+        storage.documents.save(
+            replay.RESULT, {**stamp, 'dialogues': [{'dialogueId': 'replayed-dialogue', 'steps': []}]}
+        )
+        storage.documents.save(replay.REPLAY_SUMMARY, stamp)
         state, parsed = await self.state_parsing()
         self.assertEqual(state['replay'], stamp)
         self.assertFalse([text for text in parsed if 'replayed-dialogue' in text])

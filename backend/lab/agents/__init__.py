@@ -2,21 +2,19 @@
 
 - prod:       the agent on the IFT stand, reachable from the work computer;
 - local-http: the acquiring agent already running on this computer (localhost:8080);
-- local-code: the Lab starts the agent from its repository for one run.
-Their settings are set on the page and kept in data/settings.json.
+- local-code: the Lab starts the agent from its repository for one run;
+- replay-service: the acquiring agent on the stand that only replays recorded conversations, with its trace.
+The settings they are reached by are set on the page (flows.connection keeps them); here is how to reach each.
 """
 
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .. import store
-from ..settings import replay_url
-from .http import AGENT_PATH, BAD_ADDRESS, AgentError, HttpAgent, address_valid
+from .code import START, CodeAgent
+from .http import AGENT_PATH, BAD_ADDRESS, UNKNOWN_VERSION, AgentError, HttpAgent, address_valid
 from .replay_service import ReplayServiceAgent
 from .session import session
-from .source import START, CodeAgent
 
-SETTINGS = 'settings.json'
 DEFAULT_REPO = '~/Desktop/aigw-local'
 REPLAY_SERVICE = 'replay-service'
 Agent = HttpAgent | ReplayServiceAgent
@@ -35,10 +33,10 @@ STAND_CUSTOMER = (
 )
 
 
-def settings() -> dict:
+def settings(saved: dict) -> dict:
     """prodUrl: the agent's address on the IFT stand; epk: the customers' EPK ids to talk as (none: an
-    unauthorized test customer); repo: the agent's repository with its prompts, tools and knowledge base."""
-    saved = store.load(SETTINGS, {}) or {}
+    unauthorized test customer); repo: the agent's repository with its prompts, tools and knowledge base. saved: the
+    settings as the page last saved them."""
     return {
         'prodUrl': str(saved.get('prodUrl') or '').strip(),
         'epk': [str(e).strip() for e in saved.get('epk') or [] if str(e).strip()],
@@ -46,26 +44,20 @@ def settings() -> dict:
     }
 
 
-def save_settings(values: dict) -> dict:
-    """A typo in the agent's address is refused here, in words, instead of surfacing later inside a check or a run;
-    an empty address clears it."""
-    current = settings()
-    current.update({k: v for k, v in values.items() if k in current})
-    if isinstance(current['epk'], str):
-        current['epk'] = current['epk'].split()
-    current['prodUrl'] = current['prodUrl'].strip()
-    if current['prodUrl'] and not address_valid(current['prodUrl']):
+def changed(current: dict, values: dict) -> dict:
+    """The settings with a person's changes. A typo in the agent's address is refused here, in words, instead of
+    surfacing later inside a check or a run; an empty address clears it."""
+    found = current | {key: value for key, value in values.items() if key in current}
+    if isinstance(found['epk'], str):
+        found['epk'] = found['epk'].split()
+    found['prodUrl'] = found['prodUrl'].strip()
+    if found['prodUrl'] and not address_valid(found['prodUrl']):
         raise ValueError(BAD_ADDRESS)
-    store.save(SETTINGS, current)
-    return settings()
+    return found
 
 
-def repo() -> Path:
-    return Path(settings()['repo']).expanduser()
-
-
-def configs() -> dict[str, dict]:
-    current = settings()
+def configs(current: dict) -> dict[str, dict]:
+    """How to reach the agent each way, by the settings (settings)."""
     return {
         'prod': {
             'name': NAMES['prod'],
@@ -97,20 +89,22 @@ def configs() -> dict[str, dict]:
     }
 
 
-def replay_config() -> dict:
+def replay_config(url: str) -> dict:
+    """How to reach the replay service on the stand (aigw-local replay/) at its origin, http://host:port: it replays
+    recorded conversations and does not talk, so it is not among the ways to reach the agent (configs)."""
     return {
         'name': NAMES[REPLAY_SERVICE],
         'kind': 'replay',
         'profile': 'replay',
-        'url': replay_url(),
+        'url': url.strip(),
         'note': 'Агент эквайринга на стенде. Во внешние системы не пишет, трейс отдаёт на каждом шаге.',
     }
 
 
-def replay_targets() -> list[dict]:
-    """The ways a replay reaches the agent: set up and giving their trace. The replay service is only here: it replays
-    recorded conversations and does not talk."""
-    shown = [public(key, config) for key, config in {**configs(), REPLAY_SERVICE: replay_config()}.items()]
+def replay_targets(ways: dict[str, dict]) -> list[dict]:
+    """The ways a replay may reach the agent (ways: the agent's own and the replay service), as the page shows them:
+    set up and giving their trace."""
+    shown = [public(key, way) for key, way in ways.items()]
     return [target for target in shown if target['ready'] and (target['local'] or target['kind'] == 'replay')]
 
 
@@ -141,29 +135,30 @@ def run_name(run: dict) -> str:
     return NAMES.get(str(run.get('target') or ''), run.get('targetName') or '')
 
 
-def create(key: str) -> Agent:
-    if key == REPLAY_SERVICE:
-        return ReplayServiceAgent(replay_config())
-    config = configs().get(key)
-    if not config:
-        raise AgentError(f'Неизвестный способ подключения агента: {key}.')
-    return CodeAgent(config) if config['kind'] == 'code' else HttpAgent(config)
+def create(connection: dict) -> Agent:
+    """The agent reached this way (configs, replay_config); one started from its code writes its output to
+    connection['log']."""
+    if connection['kind'] == 'replay':
+        return ReplayServiceAgent(connection)
+    return CodeAgent(connection) if connection['kind'] == 'code' else HttpAgent(connection)
 
 
 __all__ = [
     'NAMES',
     'REPLAY_SERVICE',
     'STAND_CUSTOMER',
+    'UNKNOWN_VERSION',
     'Agent',
     'AgentError',
     'CodeAgent',
     'HttpAgent',
     'ReplayServiceAgent',
+    'changed',
     'configs',
     'create',
     'public',
+    'replay_config',
     'replay_targets',
-    'repo',
     'run_name',
     'session',
     'settings',

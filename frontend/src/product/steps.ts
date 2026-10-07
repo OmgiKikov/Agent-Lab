@@ -5,7 +5,7 @@ import { visible } from "./text";
 
 /**
  * What the agent did before a reply, as the stand's mocks recorded it: searched its knowledge base, or called a bank
- * system. A check of a tool criterion quotes these steps (backend/lab/transcript.py tool_calls), not the reply.
+ * system. A check of a tool criterion quotes these steps (backend/lab/domain/transcript.py tool_calls), not the reply.
  */
 export const isKnowledge = (call: ToolCall) => !!call.article || call.tool === "База знаний";
 

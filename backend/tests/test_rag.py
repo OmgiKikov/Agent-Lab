@@ -1,6 +1,6 @@
 import unittest
 
-from lab import rag
+from lab.domain import rag
 
 TRACE = {
     'traceId': 't',

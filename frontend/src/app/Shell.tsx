@@ -16,10 +16,15 @@ function Frame() {
   const shell = useMemo<ShellApi>(() => ({ openPalette: () => setPalette(true) }), []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.code === "KeyK") {
-        e.preventDefault();
-        setPalette((o) => !o);
-      }
+      if (!(e.metaKey || e.ctrlKey) || e.code !== "KeyK") return;
+      const target = e.target instanceof HTMLElement ? e.target : null;
+      const own = target?.getAttribute("name") === "palette";
+      // Ctrl+K in a text field is the field's own (on a Mac it deletes to the end of the line); ⌘K opens the palette.
+      if (e.ctrlKey && !e.metaKey && !own && target?.closest("input, textarea, [contenteditable='true']")) return;
+      // Over an open sheet or dialog the palette would stack a second one: it opens once that one is closed.
+      if (!own && document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+      e.preventDefault();
+      setPalette((o) => !o);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -67,7 +72,7 @@ function AgentTitle() {
   useEffect(() => {
     if (!data) return;
     const agent = data.find((a) => a.id === AGENT);
-    if (!agent) window.location.replace("/agents");
+    if (!agent) window.location.replace(`/agents?missing=${encodeURIComponent(AGENT ?? "")}`);
     else document.title = `${agent.name} · Agent Lab`;
   }, [data]);
   return null;

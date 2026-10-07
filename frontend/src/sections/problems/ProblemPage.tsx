@@ -29,8 +29,9 @@ import { SourceSheet } from "../../product/SourceSheet";
 import { shortOrigin } from "../../product/text";
 import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
+import { LoadFailed } from "../../ui/LoadFailed";
 import { useToast } from "../../ui/toast";
-import { useSimRuns } from "../simulations/stage";
+import { NoSuchRun, useSimRuns } from "../simulations/stage";
 import { Handoff } from "./Handoff";
 import { Reproduce } from "./Reproduce";
 import { checked, violationsOf } from "./model";
@@ -41,18 +42,23 @@ import { shareBase } from "../../app/agent";
  * («Серьёзная ошибка» on its criterion, with whose decision it is: the automatic check's proposal with its reason and
  * «Подтвердить», or the person's), how often (one line of numbers), then the case itself — the conversation as the
  * customer saw it — and the person's answer. One stage at a time: in a check, its conversations; in the simulation,
- * one run of that check's scenarios. The other is one link away.
+ * one run of that check's scenarios. The other is one link away. Another problem of the same stage opens afresh: the
+ * page is keyed by the problem, so nothing unfolded, opened or lit on one stays on the next.
  */
 export function ProblemPage({ stage }: { stage: Stage }) {
   const { id = "" } = useParams();
+  return <Problem key={id} stage={stage} id={id} />;
+}
+
+function Problem({ stage, id }: { stage: Stage; id: string }) {
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const toast = useToast();
   const { state, offline } = useLabState();
-  const { run: simRun } = useSimRuns(state, stage === "sim" ? params.get("run") : null);
+  const { run: simRun, newest, missing } = useSimRuns(state, stage === "sim" ? params.get("run") : null);
   // A check's problem is of that check; a run's, of the check whose scenarios it played.
   const check = stage === "sim" ? (simRun?.check ?? null) : stage;
-  const { data, list } = useCriteria(check, stage === "sim" ? (simRun?.id ?? null) : null);
+  const { data, list, error, retry } = useCriteria(check, stage === "sim" ? (simRun?.id ?? null) : null);
   const here = side(stage);
   const review = useReview();
   const [lit, setLit] = useState(false);
@@ -64,7 +70,7 @@ export function ProblemPage({ stage }: { stage: Stage }) {
   const runId = stage === "sim" ? (data?.sim?.runId ?? null) : null;
 
   const examples = c ? violationsOf(c, here) : [];
-  const at = exampleAt(examples, params.get("e"));
+  const { at, missing: lostExample } = exampleAt(examples, params.get("e"));
   const example = examples[at];
   /** The example in the address by its conversation: «Нет» sends it to the end of the order, it stays on screen. */
   const pin = (e: Example) =>
@@ -92,7 +98,7 @@ export function ProblemPage({ stage }: { stage: Stage }) {
     if (next)
       toast.notify(next === "agree" ? "Отмечено как ошибка" : "Отмечено, что ошибки нет", {
         label: "Отменить",
-        run: () => review.mutate({ example: e, decision: before, finishedAt }),
+        run: () => review.mutate({ example: e, decision: before, finishedAt, seen: next }),
       });
   };
   useKeys({
@@ -128,6 +134,20 @@ export function ProblemPage({ stage }: { stage: Stage }) {
       <div className="flex h-full flex-col">
         {header}
         <ServiceDown />
+      </div>
+    );
+  if (missing)
+    return (
+      <div className="flex h-full flex-col">
+        {header}
+        <NoSuchRun newest={newest} />
+      </div>
+    );
+  if (!data && error)
+    return (
+      <div className="flex h-full flex-col">
+        {header}
+        <LoadFailed page title="Не удалось загрузить проблему" error={error} onRetry={retry} />
       </div>
     );
   // Without any run the simulation has no problems to wait for.
@@ -302,6 +322,13 @@ export function ProblemPage({ stage }: { stage: Stage }) {
                 onClick={() => go(at + 1)}
               />
             </div>
+            {/* The case an address names is not among the examples now: another one is shown, and that is said. */}
+            {lostExample && example && (
+              <p role="status" className="mt-3 text-read text-fg-3">
+                Случая из ссылки среди примеров нет. Показан пример{"\u00a0"}
+                {at + 1}.
+              </p>
+            )}
             <div className="mt-4">
               {example ? (
                 <div

@@ -5,9 +5,8 @@ LAB_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$LAB_ROOT"
 uv run --locked --directory backend ruff check
 uv run --locked --directory backend ruff format --check
-uv run --locked --directory backend python -m unittest discover -s tests -v
-# The texts people read keep the rules of docs/WRITING.md.
-uv run --locked --directory backend python ../bin/copy_check.py
+# The tests ask no model: an address nobody answers on, so a key in the environment is never spent.
+LAB_MODEL_URL=http://127.0.0.1:9/v1 uv run --locked --directory backend python -m unittest discover -s tests -v
 npm --prefix frontend run lint
 npm --prefix frontend run format:check
 npm --prefix frontend run build

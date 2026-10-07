@@ -1,4 +1,4 @@
-# Real bank data never enters this public repository: logs, cards, runs, settings, addresses, certificates.
+# Real bank data never enters this repository: logs, cards, runs, settings, addresses, certificates.
 /data/
 /certs/
 *.xlsx
@@ -14,7 +14,6 @@
 /backend/.test-data/
 __pycache__/
 .ruff_cache/
-/backend/bridge/node_modules/
 /frontend/node_modules/
 /frontend/dist/
 .DS_Store
@@ -27,7 +26,11 @@ __pycache__/
 
 # Earlier experiments (LangWatch, Latitude, FutureAGI, review UI, old scripts), kept on this computer only.
 /archive/
-/.claude/*
 
-# Claude Code skills travel with the repository, so every session has them.
-!/.claude/skills/
+# Claude Code: its local settings and skills.
+/.claude/
+skills-lock.json
+
+# Local secrets and TypeScript build info.
+.env
+*.tsbuildinfo

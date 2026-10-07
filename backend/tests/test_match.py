@@ -1,6 +1,6 @@
 import unittest
 
-from lab import match
+from lab.domain import match
 
 
 def row(rule_id: str, status: str) -> dict:

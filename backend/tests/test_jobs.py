@@ -2,10 +2,16 @@ import asyncio
 import threading
 import unittest
 
+import support
+
+from lab.flows import error_text as message
 from lab.jobs import STOPPED, BusyError, Jobs
 
 
 class JobsTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        support.lab(self)
+
     async def test_upload_reserves_same_owner_as_background_commands(self) -> None:
         jobs = Jobs()
         entered, release = asyncio.Event(), asyncio.Event()
@@ -98,3 +104,12 @@ class JobsTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class JobMessageTests(unittest.TestCase):
+    def test_errors_of_a_task_group_are_told_in_their_own_words(self) -> None:
+        group = ExceptionGroup('unhandled errors in a TaskGroup', [ValueError('Нет кода агента.')])
+        self.assertEqual(message(group), 'Нет кода агента.')
+        twice = ExceptionGroup('x', [ValueError('Один.'), ExceptionGroup('y', [ValueError('Один.'), KeyError('k')])])
+        self.assertEqual(message(twice), "Один.; 'k'")
+        self.assertEqual(message(RuntimeError()), 'RuntimeError')
