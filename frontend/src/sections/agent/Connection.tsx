@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Check as CheckIcon, Code2, Globe, Monitor, PlugZap, Save } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "../../lab/api";
@@ -153,16 +154,23 @@ const scpForm = (text: string) => /^[^\s/@]+@[^\s/:]+:/.test(text);
  */
 export function ConnectionForm({
   state,
+  agent,
   context,
   onSaved,
 }: {
   state: LabState;
+  /** Who the agent is: its name and one line about it, as the list of agents shows them. */
+  agent: { id: string; name: string; description: string };
   context: AgentContext;
   onSaved: () => Promise<unknown>;
 }) {
   const { refresh } = useLabState();
   const toast = useToast();
+  const cache = useQueryClient();
   const saved = state.settings;
+  const [name, setName] = useState(agent.name);
+  const [description, setDescription] = useState(agent.description);
+  const identityDirty = name.trim() !== agent.name || description.trim() !== agent.description;
   const memory = useConnectionMemory();
   const [way, setWay] = useState(wayOf(state, memory.way) ?? "prod");
   const [prodUrl, setProdUrl] = useState(saved.prodUrl);
@@ -177,6 +185,7 @@ export function ConnectionForm({
   const nextRepo = link ? saved.repo : code.trim();
   const contextDirty = JSON.stringify(nextContext) !== JSON.stringify(context);
   const dirty =
+    identityDirty ||
     prodUrl.trim() !== saved.prodUrl ||
     nextRepo !== saved.repo ||
     words(epk).join(" ") !== saved.epk.join(" ") ||
@@ -190,7 +199,13 @@ export function ConnectionForm({
   };
   const save = () => {
     setSaving(true);
-    api("/api/settings", { prodUrl: prodUrl.trim(), epk: words(epk), repo: nextRepo })
+    (identityDirty
+      ? api("/api/agents/update", { id: agent.id, name: name.trim(), description: description.trim() }).then(() =>
+          cache.invalidateQueries({ queryKey: ["agents"] }),
+        )
+      : Promise.resolve()
+    )
+      .then(() => api("/api/settings", { prodUrl: prodUrl.trim(), epk: words(epk), repo: nextRepo }))
       .then(() => (contextDirty ? api("/api/agent/context", nextContext) : null))
       .then(() => Promise.all([refresh(), onSaved()]))
       .then(() => toast.notify("Сохранено"))
@@ -225,7 +240,28 @@ export function ConnectionForm({
       });
   };
   return (
-    <section aria-label="Подключение и код агента">
+    <section aria-label="Карточка агента">
+      <div className="space-y-4">
+        <Field label="Имя">
+          <Input
+            name="agent-name"
+            value={name}
+            maxLength={80}
+            onChange={(e) => setName(e.target.value)}
+            aria-invalid={!name.trim() || undefined}
+          />
+        </Field>
+        <Field label="Описание" hint="Одна строка о том, что это за агент: её видно в списке агентов.">
+          <Input
+            name="agent-description"
+            value={description}
+            maxLength={200}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Например: СберБизнес · чат поддержки"
+          />
+        </Field>
+      </div>
+      <h3 className="mb-3 mt-8 text-read font-semibold text-fg">Подключение</h3>
       <Label>Как подключить агента</Label>
       <div role="radiogroup" aria-label="Способ подключения" className="mt-2 border-t border-line">
         {state.targets.map((t) => (
@@ -234,7 +270,10 @@ export function ConnectionForm({
       </div>
       <div className="mt-5 space-y-4">
         {way === "prod" && (
-          <Field label="Адрес агента на тестовом стенде" hint="Открывается с рабочего компьютера.">
+          <Field
+            label="Адрес агента на тестовом стенде"
+            hint="Нужен, чтобы задавать агенту вопросы на стенде и запускать симуляции. Открывается с рабочего компьютера."
+          >
             <Input
               name="prod-url"
               type="url"
@@ -300,7 +339,7 @@ export function ConnectionForm({
         <Button
           icon={Save}
           loading={saving}
-          disabled={!dirty || state.job.running || scpForm(code.trim())}
+          disabled={!dirty || state.job.running || scpForm(code.trim()) || !name.trim()}
           onClick={save}
         >
           Сохранить

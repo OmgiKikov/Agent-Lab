@@ -10,6 +10,7 @@ import { criterionLink, launchLink } from "../../app/links";
 import { api } from "../../lab/api";
 import { useCriteria } from "../../lab/criteria";
 import { count, day, plural, thousands } from "../../lab/format";
+import { useAgent } from "../../lab/agents";
 import { useLabState } from "../../lab/LabProvider";
 import { codeSources } from "../../lab/tone";
 import { Button, buttonClass } from "../../ui/Button";
@@ -19,7 +20,6 @@ import { LoadFailed } from "../../ui/LoadFailed";
 import { useToast } from "../../ui/toast";
 import { nameOf } from "../criteria/model";
 import type { AgentContext } from "./ContextFields";
-import { Identity } from "./Identity";
 import { ConnectionForm } from "./Connection";
 
 /** The characters of prompts the criteria planner takes (backend/lab/agents/sources.py, MAX_TOTAL). */
@@ -36,6 +36,7 @@ export function AgentPage() {
   const { state, offline, refresh } = useLabState();
   const toast = useToast();
   const criteria = useCriteria("code");
+  const agent = useAgent();
   const context = useQuery({
     queryKey: ["agent-context", AGENT],
     queryFn: () => api<AgentContext>("/api/agent/context"),
@@ -99,13 +100,12 @@ export function AgentPage() {
     <div className="flex h-full flex-col">
       {header}
       <div className="min-h-0 flex-1 overflow-auto">
-        <Identity />
         <div className="grid max-w-6xl gap-x-12 gap-y-10 px-4 pb-16 pt-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] lg:px-10 lg:pt-8">
           <div>
             <h2 className="text-title font-semibold text-fg">Карточка агента</h2>
             <p className="mb-5 mt-1 text-small text-fg-3">
-              Как связаться с агентом, где его код и что о нём должен знать судья. Для проверки записанных разговоров
-              ничего из этого не нужно.
+              Кто этот агент, как с ним связаться, где его код и что о нём должен знать судья. Для проверки записанных
+              разговоров нужно только имя.
             </p>
             {context.isError ? (
               <LoadFailed
@@ -113,10 +113,11 @@ export function AgentPage() {
                 error={context.error}
                 onRetry={() => context.refetch()}
               />
-            ) : context.data ? (
+            ) : context.data && agent ? (
               <ConnectionForm
-                key={`${state.settings.prodUrl}|${state.settings.repo}|${state.settings.epk.join(" ")}|${JSON.stringify(context.data)}`}
+                key={`${agent.name}|${agent.description}|${state.settings.prodUrl}|${state.settings.repo}|${state.settings.epk.join(" ")}|${JSON.stringify(context.data)}`}
                 state={state}
+                agent={agent}
                 context={context.data}
                 onSaved={() => context.refetch()}
               />

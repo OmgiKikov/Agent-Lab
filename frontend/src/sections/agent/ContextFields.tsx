@@ -116,6 +116,9 @@ export function KnowledgeField({
         База знаний IDP
         <span className="font-normal text-fg-3"> · {value.idpIndex ? value.idpIndex : "не подключена"}</span>
       </summary>
+      <p className="mt-2 text-small text-fg-3">
+        С базой знаний судья сверяет факты в ответах агента со статьями, которые вернула IDP.
+      </p>
       <div className="mt-3 grid gap-3 sm:grid-cols-2">
         {KNOWLEDGE.map(([key, label]) => (
           <label key={key} className="block">
