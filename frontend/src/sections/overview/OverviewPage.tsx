@@ -33,6 +33,7 @@ import { Label } from "../../ui/Label";
 import { LoadFailed } from "../../ui/LoadFailed";
 import { CheckReport } from "../checks/CheckReport";
 import { CompareLine, PreviousCheck } from "../checks/Compare";
+import { FirstCheck } from "./FirstCheck";
 import { Needs, needsOf, type Need } from "../checks/Start";
 import { ProblemList } from "../problems/ProblemList";
 import { useSimRuns } from "../simulations/stage";
@@ -186,11 +187,11 @@ export function OverviewPage() {
           <h2 className="mt-1 text-page font-semibold text-fg">{first ? "С чего начать" : "Как работает агент"}</h2>
           <p className="mt-3 max-w-[66ch] text-lead text-fg-2">
             {first
-              ? "Две проверки оценивают настоящие разговоры клиентов из выгрузки чата, у каждой свои критерии. Из найденных ошибок потом собирают сценарии для синтетических клиентов."
-              : "У каждой проверки и у симуляций свои критерии и свой счёт, их числа не складываются. Каждая проверка сравнивает себя только со своей прошлой."}
+              ? "Загрузите разговоры и задайте правила. Покажем ошибки, ответы агента и то, что нужно исправить."
+              : "Итоги проверок, изменения после доработок и проблемы, требующие внимания."}
           </p>
           {first ? (
-            <StartCards state={state} />
+            <FirstCheck state={state} />
           ) : (
             <>
               <section aria-labelledby="overview-checks" className="mt-12">
@@ -220,51 +221,6 @@ export function OverviewPage() {
  * The address on this computer is built in («local-http»), so it says nothing about their agent.
  */
 const connected = (state: LabState) => state.targets.some((t) => t.ready && t.id !== "local-http");
-
-/** The first visit: the three ways in, each with what it needs and what is already here. */
-function StartCards({ state }: { state: LabState }) {
-  const ready = connected(state);
-  const cards: { title: string; what: string; begin: Begin; primary?: boolean }[] = [
-    { title: CHECK_NAME.tone, what: WHAT.tone, begin: beginOf("tone", state), primary: true },
-    { title: CHECK_NAME.code, what: WHAT.code, begin: beginOf("code", state) },
-    {
-      title: "Симуляции",
-      what: "Синтетические клиенты играют с агентом сценарии из найденных ошибок. Разговоры оценивают по критериям той же проверки.",
-      begin: {
-        status: "После первой проверки",
-        needs: [
-          { label: "Итог проверки", value: null, later: "из его ошибок соберутся сценарии" },
-          { label: "Подключение агента", value: ready ? "задано" : null, later: "задайте в «Агенте»" },
-        ],
-        // Nothing to do here before the first check, unless the agent is not connected yet.
-        action: ready ? undefined : { label: "Подключить агента", to: SECTIONS.agent },
-      },
-    },
-  ];
-  return (
-    <ul className="mt-10 grid gap-4 md:grid-cols-3">
-      {cards.map((c) => (
-        <li key={c.title} className="flex flex-col rounded-block border border-line p-5">
-          <h3 className="text-count font-semibold text-fg">{c.title}</h3>
-          {c.begin.status && <p className="mt-1 text-small font-medium text-fg-3">{c.begin.status}</p>}
-          <p className="mt-2 text-body text-fg-2">{c.what}</p>
-          <Needs needs={c.begin.needs} className="mt-4 border-t border-line pt-3" />
-          {c.begin.action && (
-            <div className="mt-auto pt-6">
-              <Link
-                to={c.begin.action.to}
-                className={buttonClass({ variant: c.primary ? "primary" : "outline", size: "lg" })}
-              >
-                {c.begin.action.label}
-                <ArrowRight aria-hidden className="size-4" />
-              </Link>
-            </div>
-          )}
-        </li>
-      ))}
-    </ul>
-  );
-}
 
 /** The head of a block: its name, the way into its section, and one line of what it is. */
 function BlockHead({ to, title, sub }: { to: string; title: string; sub: ReactNode }) {

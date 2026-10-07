@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Upload } from "lucide-react";
+import { FileText, Upload, X } from "lucide-react";
 import { SECTIONS, toneCheckLink, type Check } from "../app/links";
 import { upload } from "../lab/api";
 import { count, plural } from "../lab/format";
@@ -8,20 +8,18 @@ import { useLabState } from "../lab/LabProvider";
 import type { LabState } from "../lab/types";
 import { Button } from "../ui/Button";
 import { Modal } from "../ui/Modal";
+import { ExportFormat } from "./ExportFormat";
 import { useToast } from "../ui/toast";
 
 const ACCEPT = ".xlsx,.jsonl";
 
 /** The export reader takes the chat's Excel or a prepared .jsonl: anything else is refused before a question is asked. */
-export const exportFileError = (file: File) =>
-  /\.(xlsx|jsonl)$/i.test(file.name) ? null : "Этот файл не подходит. Загрузите выгрузку чата в .xlsx или .jsonl.";
-
-/**
- * What a new export moves or takes away (backend: store.replace_inputs): the results of both checks and the scenarios.
- * Asked first whenever there is any of them.
- */
-export const replacesResult = (state: LabState | null) =>
-  !!(state?.checks.tone || state?.checks.code || state?.cards?.cards.length);
+export const exportFileError = (file: File) => {
+  if (!/\.(xlsx|jsonl)$/i.test(file.name)) return "Этот файл не подходит. Загрузите выгрузку чата в .xlsx или .jsonl.";
+  if (!file.size) return "Файл пустой. Выберите выгрузку с разговорами.";
+  if (file.size > 50_000_000) return "Файл больше 50 МБ. Выгрузите разговоры за меньший срок.";
+  return null;
+};
 
 /**
  * What a new export does, in the order a person asks about it (backend: store.replace_inputs): what goes — the current
@@ -48,58 +46,53 @@ function whatHappens(state: LabState | null): [string, string] {
   ];
 }
 
-/**
- * The question before a new export, the same wherever the export is loaded: what goes to «История», what is compared,
- * what is reset and what stays.
- */
-export function ReplaceExport({
-  open,
-  onCancel,
-  onConfirm,
+/** One upload flow wherever conversations are added: pick, inspect the file and its consequences, upload. */
+export function UploadButton({
+  variant = "primary",
+  label = "Загрузить диалоги",
+  check,
+  disabled = false,
+  compact = false,
 }: {
-  open: boolean;
-  onCancel: () => void;
-  onConfirm: () => void;
+  variant?: "primary" | "outline";
+  label?: string;
+  check?: Check;
+  disabled?: boolean;
+  compact?: boolean;
 }) {
-  const { state } = useLabState();
-  return (
-    <Modal
-      open={open}
-      onClose={onCancel}
-      title="Загрузить новую выгрузку?"
-      footer={
-        <>
-          <Button variant="ghost" onClick={onCancel}>
-            Отмена
-          </Button>
-          <Button variant="primary" onClick={onConfirm}>
-            Загрузить
-          </Button>
-        </>
-      }
-    >
-      <div className="space-y-2 text-read text-fg-2">
-        {whatHappens(state).map((text) => (
-          <p key={text}>{text}</p>
-        ))}
-      </div>
-    </Modal>
-  );
-}
-
-/** Sends the chat's export to the service and offers the check of the page it was loaded from. */
-function useUpload(check?: Check) {
-  const { refresh } = useLabState();
+  const input = useRef<HTMLInputElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const lock = useRef(false);
+  const { state, refresh } = useLabState();
   const toast = useToast();
   const navigate = useNavigate();
+  const [open, setOpen] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+  const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const send = async (file: File) => {
+  const [over, setOver] = useState(false);
+  const running = !!state?.job.running || disabled;
+  const pick = (files: File[]) => {
+    if (lock.current || running) return;
+    if (files.length !== 1) {
+      setError("Выберите один файл выгрузки.");
+      return;
+    }
+    const wrong = exportFileError(files[0]);
+    setError(wrong ?? "");
+    setFile(wrong ? null : files[0]);
+  };
+  const send = async () => {
+    if (!file || lock.current || running) return;
+    lock.current = true;
     setBusy(true);
+    setError("");
     try {
       const { total, skipped = 0 } = await upload<{ total: number; skipped?: number }>("/api/logs", file);
       await refresh();
+      setOpen(false);
+      setFile(null);
       const next = check === "code" ? `${SECTIONS.accuracy}?assess=1` : check === "tone" ? toneCheckLink() : null;
-      // The conversations a check cannot read are left out by the service: the person learns how many and why.
       const left = skipped
         ? `. Ещё ${count(skipped, "разговор не загружен", "разговора не загружены", "разговоров не загружены")}: ${plural(skipped, "в нём", "в них", "в них")} первым пишет агент или он не отвечает.`
         : "";
@@ -114,68 +107,132 @@ function useUpload(check?: Check) {
             }
           : undefined,
       );
-    } catch (e) {
-      toast.error(e);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
+      lock.current = false;
       setBusy(false);
     }
   };
-  return { busy, send };
-}
-
-/** «Загрузить диалоги»: the chat's Excel export (sheet «Данные») or prepared .jsonl, shared by both checks. */
-export function UploadButton({
-  variant = "primary",
-  label = "Загрузить диалоги",
-  check,
-}: {
-  variant?: "primary" | "outline";
-  label?: string;
-  /** The check whose page it is on: after the upload, the way to check the new conversations by it. */
-  check?: Check;
-}) {
-  const input = useRef<HTMLInputElement>(null);
-  const { state } = useLabState();
-  const toast = useToast();
-  const { busy, send } = useUpload(check);
-  const [pending, setPending] = useState<File | null>(null);
-  const running = !!state?.job.running;
   return (
     <>
-      <input
-        ref={input}
-        type="file"
-        accept={ACCEPT}
-        className="hidden"
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          e.target.value = "";
-          if (!f) return;
-          const wrong = exportFileError(f);
-          if (wrong) toast.error(wrong);
-          else if (replacesResult(state)) setPending(f);
-          else void send(f);
-        }}
-      />
       <Button
+        ref={trigger}
+        aria-label={compact ? label : undefined}
         variant={variant}
         icon={Upload}
-        loading={busy}
         disabled={running}
-        title={running ? "Сейчас идёт другая задача" : "Excel-выгрузка чата или .jsonl"}
-        onClick={() => input.current?.click()}
-      >
-        {label}
-      </Button>
-      <ReplaceExport
-        open={!!pending}
-        onCancel={() => setPending(null)}
-        onConfirm={() => {
-          const f = pending;
-          setPending(null);
-          if (f) void send(f);
+        title={running ? "Дождитесь завершения текущей задачи" : undefined}
+        onClick={() => {
+          setOpen(true);
+          setError("");
         }}
-      />
+      >
+        <span className={compact ? "hidden sm:inline" : undefined}>{label}</span>
+      </Button>
+      <Modal
+        open={open}
+        onClose={() => {
+          if (!lock.current) setOpen(false);
+        }}
+        title="Загрузить диалоги"
+        onCloseAutoFocus={(event) => {
+          if (trigger.current?.isConnected) {
+            event.preventDefault();
+            trigger.current.focus();
+          }
+        }}
+        footer={
+          <>
+            <Button variant="ghost" disabled={busy} onClick={() => setOpen(false)}>
+              Отмена
+            </Button>
+            <Button variant="primary" loading={busy} disabled={!file || running} onClick={send}>
+              {busy ? "Загружаем…" : "Загрузить"}
+            </Button>
+          </>
+        }
+      >
+        <p className="mb-5 text-read text-fg-3">Одна выгрузка используется для Tone of voice и точности.</p>
+        <input
+          ref={input}
+          type="file"
+          accept={ACCEPT}
+          className="hidden"
+          aria-label="Файл выгрузки диалогов"
+          onChange={(e) => {
+            const files = Array.from(e.target.files ?? []);
+            e.target.value = "";
+            if (files.length) pick(files);
+          }}
+        />
+        <div
+          onDragOver={(e) => {
+            e.preventDefault();
+            if (!busy && !running) setOver(true);
+          }}
+          onDragLeave={() => setOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setOver(false);
+            pick(Array.from(e.dataTransfer.files));
+          }}
+          className={`rounded-block border border-dashed p-6 text-center transition-colors ${over ? "border-run bg-run/5" : "border-line-strong bg-inset/50"}`}
+        >
+          {file ? (
+            <div className="flex items-center gap-3 text-left">
+              <FileText aria-hidden className="size-6 shrink-0 text-fg-3" />
+              <div className="min-w-0 flex-1">
+                <p className="break-all text-body font-medium text-fg">{file.name}</p>
+                <p className="mt-1 text-small text-fg-3">
+                  {Math.max(1, Math.round(file.size / 1024)).toLocaleString("ru-RU")} КБ · готов к загрузке
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                icon={X}
+                aria-label="Убрать выбранный файл"
+                disabled={busy}
+                onClick={() => setFile(null)}
+              />
+            </div>
+          ) : (
+            <>
+              <Upload aria-hidden className="mx-auto mb-3 size-6 text-fg-3" />
+              <p className="text-read font-medium text-fg">Перетащите выгрузку сюда</p>
+              <p className="mt-1 text-small text-fg-3">Excel или JSONL · до 50 МБ</p>
+              <Button className="mt-4" disabled={busy || running} onClick={() => input.current?.click()}>
+                Выбрать файл
+              </Button>
+            </>
+          )}
+        </div>
+        {error && (
+          <p role="alert" className="mt-4 rounded-control bg-bad/5 p-3 text-body text-bad">
+            {error}
+          </p>
+        )}
+        {running && (
+          <p role="status" className="mt-4 text-body text-warn">
+            Сейчас идёт другая задача. Загрузка станет доступна после её завершения.
+          </p>
+        )}
+        {state?.logs.total ? (
+          <div className="mt-4 rounded-control bg-warn/5 p-4 text-small text-fg-2">
+            <p className="font-medium text-fg">Этот файл заменит текущую выгрузку.</p>
+            {whatHappens(state)
+              .filter(Boolean)
+              .map((text) => (
+                <p key={text} className="mt-2">
+                  {text}
+                </p>
+              ))}
+          </div>
+        ) : null}
+        <div className="mt-4">
+          <ExportFormat />
+        </div>
+      </Modal>
     </>
   );
 }

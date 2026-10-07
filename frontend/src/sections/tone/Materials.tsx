@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowRight, Check, FileText, Upload } from "lucide-react";
+import { ArrowRight, Check, FileText } from "lucide-react";
 import { api, upload } from "../../lab/api";
 import { count, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { useSource } from "../../lab/problems";
 import { rememberName, rememberText, savedName, savedText, TONE_ID, toneResult } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
-import { exportFileError, ReplaceExport, replacesResult } from "../../product/UploadLogs";
+import { UploadButton } from "../../product/UploadLogs";
 import { Button } from "../../ui/Button";
 import { Modal } from "../../ui/Modal";
 import { clarificationsOf, clarifiedText, toneDeck } from "./Criteria";
@@ -20,9 +20,8 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
   const [name, setName] = useState(savedName);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState<{ file?: File; next?: boolean } | null>(null);
+  const [pending, setPending] = useState<{ next?: boolean } | null>(null);
   const edited = useRef(!!text);
-  const logInput = useRef<HTMLInputElement>(null);
   const policyInput = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (source.data && !edited.current) {
@@ -58,11 +57,6 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
       setBusy(false);
     }
   };
-  const sendLogs = (file: File) =>
-    run(async () => {
-      await upload("/api/logs", file);
-      await refresh();
-    });
   const readPolicy = (file: File) =>
     run(async () => {
       if (file.size > 2_000_000) throw new Error("Файл больше 2 МБ. Вставьте правила текстом.");
@@ -100,22 +94,6 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
         <div>
           <h3 className="text-read font-semibold text-fg">Диалоги</h3>
           <p className="mt-1 text-body text-fg-3">Выгрузка чата в Excel (.xlsx) или JSONL.</p>
-          <input
-            ref={logInput}
-            type="file"
-            accept=".xlsx,.jsonl"
-            className="hidden"
-            aria-label="Файл выгрузки"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              e.target.value = "";
-              if (!f) return;
-              const wrong = exportFileError(f);
-              if (wrong) setError(wrong);
-              else if (replacesResult(state)) setPending({ file: f });
-              else sendLogs(f);
-            }}
-          />
           <div className="mt-4 rounded-sheet bg-inset p-5">
             {state.logs.total ? (
               <>
@@ -128,9 +106,13 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
             ) : (
               <p className="text-read text-fg-2">Диалоги ещё не загружены</p>
             )}
-            <Button className="mt-4" icon={Upload} disabled={disabled} onClick={() => logInput.current?.click()}>
-              {state.logs.total ? "Загрузить новую выгрузку" : "Загрузить диалоги"}
-            </Button>
+            <div className="mt-4">
+              <UploadButton
+                variant="outline"
+                label={state.logs.total ? "Заменить выгрузку" : "Загрузить диалоги"}
+                disabled={disabled}
+              />
+            </div>
           </div>
         </div>
         <div>
@@ -198,17 +180,12 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
         >
           {reusable ? "К критериям" : "Собрать критерии"}
         </Button>
-        {!state.logs.total && <p className="mt-2 text-body text-fg-3">Сначала загрузите диалоги.</p>}
+        {!state.logs.total ? (
+          <p className="mt-2 text-body text-fg-3">Сначала загрузите диалоги.</p>
+        ) : text.trim().length < 20 ? (
+          <p className="mt-2 text-body text-fg-3">Добавьте правила общения: минимум 20 символов.</p>
+        ) : null}
       </div>
-      <ReplaceExport
-        open={!!pending?.file}
-        onCancel={() => setPending(null)}
-        onConfirm={() => {
-          const file = pending?.file;
-          setPending(null);
-          if (file) sendLogs(file);
-        }}
-      />
       <Modal
         open={!!pending?.next}
         onClose={() => setPending(null)}

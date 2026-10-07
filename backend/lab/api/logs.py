@@ -3,7 +3,7 @@
 import asyncio
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from ..domain import export
 from ..flows import checks as results_of
@@ -12,6 +12,12 @@ from ..jobs import BusyError
 from .base import Jobs, uploaded
 
 router = APIRouter()
+
+
+@router.get('/api/logs')
+def log_page(offset: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=50)) -> dict:
+    """Browse uploaded conversations without starting a check or calling a model."""
+    return inputs.export_page(offset, limit)
 
 
 @router.post('/api/logs')

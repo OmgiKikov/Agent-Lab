@@ -223,19 +223,17 @@ export function ConnectionForm({ state }: { state: LabState }) {
             />
           </Field>
         )}
-        {way === "local-code" && (
-          <Field label="Папка с кодом агента" hint="Из неё читаются инструкции и запускается агент.">
-            <input
-              name="repo"
-              autoComplete="off"
-              value={repo}
-              onChange={(e) => setRepo(e.target.value)}
-              placeholder="~/Desktop/aigw-local"
-              className={INPUT}
-              spellCheck={false}
-            />
-          </Field>
-        )}
+        <Field label="Папка с кодом агента" hint="Нужна для проверки точности при любом способе подключения.">
+          <input
+            name="repo"
+            autoComplete="off"
+            value={repo}
+            onChange={(e) => setRepo(e.target.value)}
+            placeholder="~/Desktop/aigw-local"
+            className={INPUT}
+            spellCheck={false}
+          />
+        </Field>
         {way === "local-http" && (
           <p className="text-small text-fg-3">
             Адрес не нужен: агент уже запущен на этом компьютере{target?.where ? ` (${target.where})` : ""}.
@@ -256,14 +254,14 @@ export function ConnectionForm({ state }: { state: LabState }) {
       </div>
       {dirty && <p className="mt-4 text-small text-warn">Есть несохранённые изменения</p>}
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        <Button icon={Save} loading={saving} disabled={!dirty} onClick={save}>
+        <Button icon={Save} loading={saving} disabled={!dirty || state.job.running} onClick={save}>
           Сохранить
         </Button>
         {target && target.kind !== "code" && (
           <Button
             icon={PlugZap}
             loading={check === "pending"}
-            disabled={!target.ready || dirty}
+            disabled={!target.ready || dirty || saving || state.job.running}
             onClick={run}
             title={dirty ? "Сначала сохраните изменения" : undefined}
           >

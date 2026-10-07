@@ -5,7 +5,7 @@ import { criterionLink, scenariosLink, SECTIONS, toneCheckLink } from "./links";
 /** A task of the service: how it is called and the section where its result lives. */
 export const JOBS: Record<string, { label: string; to: string }> = {
   "tone-policy": { label: "Правила общения", to: toneCheckLink("materials") },
-  logs: { label: "Загрузка диалогов", to: toneCheckLink("materials") },
+  logs: { label: "Загрузка диалогов", to: SECTIONS.data },
   "tone-criteria": { label: "Критерии tone of voice", to: toneCheckLink("criteria") },
   "tone-check": { label: "Проверка tone of voice", to: toneCheckLink("result") },
   "tone-advice": { label: "Предложение по находке", to: toneCheckLink("result") },

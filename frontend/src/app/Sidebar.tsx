@@ -1,6 +1,7 @@
 import { NavLink, useLocation } from "react-router-dom";
 import {
   Bot,
+  Database,
   FlaskConical,
   LayoutGrid,
   MessageSquareQuote,
@@ -25,7 +26,12 @@ export type NavItem = { to: string; label: string; mobileLabel?: string; icon: L
  * as eight conversations; a running task shows in its own card.
  */
 export const GROUPS: { label?: string; items: NavItem[] }[] = [
-  { items: [{ to: SECTIONS.overview, label: "Обзор", icon: LayoutGrid }] },
+  {
+    items: [
+      { to: SECTIONS.overview, label: "Обзор", icon: LayoutGrid },
+      { to: SECTIONS.data, label: "Выгрузка диалогов", icon: Database },
+    ],
+  },
   {
     label: "Проверки разговоров",
     items: [
@@ -37,7 +43,7 @@ export const GROUPS: { label?: string; items: NavItem[] }[] = [
 ];
 
 /** The places of the work in one row, as the bottom of a phone shows them. */
-export const WORK: NavItem[] = GROUPS.flatMap((g) => g.items);
+export const WORK: NavItem[] = GROUPS.flatMap((g) => g.items).filter((item) => item.to !== SECTIONS.data);
 
 /** The agent and settings stay below the day-to-day work: they are the developer's. */
 export const SETUP: NavItem[] = [

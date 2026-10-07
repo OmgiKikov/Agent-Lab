@@ -87,7 +87,7 @@ export function AgentPage() {
           <div>
             <h2 className="text-title font-semibold text-fg">Подключение</h2>
             <p className="mb-5 mt-1 text-small text-fg-3">
-              Где работает агент и как с ним связаться. Это нужно только для симуляций.
+              Где работает агент и как с ним связаться. Адрес нужен для симуляций, код — для проверки точности.
             </p>
             <ConnectionForm
               key={`${state.settings.prodUrl}|${state.settings.repo}|${state.settings.epk.join(" ")}`}
@@ -111,7 +111,7 @@ export function AgentPage() {
                   . {plural(sources.length, "Из него", "Из них", "Из них")} дословно берутся критерии точности.
                 </>
               ) : (
-                "Код ещё не прочитан. Выберите «Запуск из кода», укажите папку с кодом и прочитайте код."
+                "Код ещё не прочитан. Укажите папку с кодом агента в форме подключения, сохраните её и нажмите «Прочитать код»."
               )}
             </p>
             {sources.length > 0 && over.length > 0 && (

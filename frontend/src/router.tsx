@@ -5,6 +5,7 @@ import { dialogLink } from "./lab/dialogs";
 import { useLabState } from "./lab/LabProvider";
 import { Shell } from "./app/Shell";
 import { ScreenError } from "./app/ScreenError";
+import { DataPage } from "./sections/data/DataPage";
 import { OverviewPage } from "./sections/overview/OverviewPage";
 import { SummaryPage } from "./sections/summary/SummaryPage";
 import { ResultPage } from "./sections/checks/ResultPage";
@@ -157,6 +158,7 @@ const productRoutes = [
     children: [
       { index: true, element: <Navigate to="/overview" replace /> },
       { path: "overview", element: <OverviewPage /> },
+      { path: "data", element: <DataPage /> },
       // One page of the agent for someone who does not use the product: numbers, answers, the ticked problems.
       { path: "summary", element: <SummaryPage /> },
       // Tone of voice: the customers' real conversations checked against a person's rules of communication.

@@ -31,6 +31,21 @@ def sources() -> list[dict]:
     return storage.documents.load(SOURCES, []) or []
 
 
+def export_page(offset: int, limit: int) -> dict:
+    """The current export before judging: short previews, its size and upload identity from one snapshot."""
+    with storage.transaction():
+        dialogues = storage.dialogues.page(offset, limit)
+        return {
+            **storage.dialogues.meta(),
+            'total': storage.dialogues.count(),
+            'offset': offset,
+            'items': [
+                {'id': item['id'], 'opening': item['messages'][0]['content'][:240], 'turns': len(item['messages'])}
+                for item in dialogues
+            ],
+        }
+
+
 def drop_deck(changed: Collection[str]) -> None:
     """The scenarios go with the result or the criteria of the check they were built from (changed); a deck that names
     no check goes with any. Written in the caller's transaction."""

@@ -8,12 +8,14 @@ export function Modal({
   title,
   children,
   footer,
+  onCloseAutoFocus,
 }: {
   open: boolean;
   onClose: () => void;
   title: string;
   children: ReactNode;
   footer: ReactNode;
+  onCloseAutoFocus?: (event: Event) => void;
 }) {
   return (
     <Dialog.Root
@@ -26,11 +28,12 @@ export function Modal({
         <Dialog.Overlay className="fixed inset-0 z-50 bg-fg/30 data-[state=open]:animate-in data-[state=open]:fade-in-0" />
         <Dialog.Content
           aria-describedby={undefined}
-          className="fixed left-1/2 top-[18%] z-50 w-[calc(100vw-32px)] max-w-[500px] -translate-x-1/2 rounded-sheet bg-side shadow-pop outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
+          onCloseAutoFocus={onCloseAutoFocus}
+          className="fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100dvh-32px)] w-[calc(100vw-32px)] max-w-[500px] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-sheet bg-side shadow-pop outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
         >
-          <Dialog.Title className="px-5 pt-5 text-body font-semibold text-fg">{title}</Dialog.Title>
-          <div className="px-5 pb-5 pt-3">{children}</div>
-          <div className="flex justify-end gap-2 border-t border-line px-5 py-3">{footer}</div>
+          <Dialog.Title className="shrink-0 px-5 pt-5 text-body font-semibold text-fg">{title}</Dialog.Title>
+          <div className="min-h-0 overflow-y-auto px-5 pb-5 pt-3">{children}</div>
+          <div className="flex shrink-0 justify-end gap-2 border-t border-line px-5 py-3">{footer}</div>
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
