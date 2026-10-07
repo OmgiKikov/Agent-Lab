@@ -8,6 +8,7 @@ import support
 
 from lab import storage
 from lab.domain import checks, export
+from lab.domain import judges as rules
 from lab.flows import agent_context, connection, datasets, judges
 
 
@@ -104,35 +105,77 @@ class JudgeLibraryTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, 'уже изменён'):
             judges.save('tone', 'Наши правила', policy, [criterion()], first['setId'], first['id'])
 
-    async def test_builtin_sets_are_real_readonly_and_custom_accuracy_is_available(self):
-        built = judges.library('code')['versions'][0]
-        self.assertTrue(built['builtin'])
-        self.assertEqual(len(built['criteria']), 3)
-        with self.assertRaisesRegex(ValueError, 'Встроенный'):
-            judges.save('code', built['name'], built['policy'], built['criteria'], built['setId'], built['id'])
-        custom = judges.save('code', 'Точность команды', built['policy'], [criterion()], None, None)
+    async def test_the_lab_offers_no_rules_of_its_own_and_custom_accuracy_is_available(self):
+        for kind in ('tone', 'code'):
+            listed = (await self.client.get(f'/api/judges/{kind}')).json()
+            self.assertEqual(listed, {'versions': [], 'selectedId': None})
+        policy = 'Отвечайте только по статьям базы знаний банка.'
+        custom = judges.save('code', 'Точность команды', policy, [criterion()], None, None)
         self.assertEqual(storage.judges.active('code')['id'], custom['id'])
         self.assertTrue(any(s['id'] == 'accuracy-judge' for s in storage.documents.load('sources.json')))
+        listed = (await self.client.get('/api/judges/code')).json()
+        self.assertEqual([version['id'] for version in listed['versions']], [custom['id']])
+        self.assertIs(listed['versions'][0]['builtin'], False)
         judges.activate('code', None)
         self.assertIsNone(storage.judges.active('code'))
 
+    async def test_rule_sets_an_earlier_lab_wrote_itself_count_as_none(self):
+        """A database may hold the rule sets an earlier Lab wrote itself, selected and copied into the agent's inputs:
+        none is offered, found or in force. Tone of voice asks for the person's own rules; accuracy, given no set,
+        judges by the agent's code again, without the copied rules."""
+        policy = 'Правила, которые написал разработчик Lab, а не банк.'
+        written = [
+            {
+                'id': f'lab-{kind}',
+                'setId': f'lab-{kind}-set',
+                'kind': kind,
+                'name': 'Набор Lab',
+                'policy': policy,
+                'criteria': [criterion()],
+                'builtin': True,
+                'version': 1,
+                'createdAt': '2026-10-07T08:00:00+00:00',
+            }
+            for kind in ('tone', 'code')
+        ]
+        storage.documents.save(storage.judges.LIBRARY, written)
+        storage.documents.save('sources.json', [rules.source(kind, 'Набор Lab', policy) for kind in ('tone', 'code')])
+        storage.documents.save('tone-of-voice-criteria.json', {'revision': 'lab-tone', 'criteria': [criterion()]})
+        storage.documents.save(checks.result('code'), {'checkId': 'judged-by-lab-rules'})
+        for kind in ('tone', 'code'):
+            storage.judges.select(kind, f'lab-{kind}')
+        for kind in ('tone', 'code'):
+            with self.subTest(kind=kind):
+                self.assertEqual(judges.library(kind), {'versions': [], 'selectedId': None})
+                self.assertIsNone(storage.judges.active(kind))
+                self.assertIsNone(storage.judges.get(f'lab-{kind}'))
+                with self.assertRaisesRegex(ValueError, 'не найден'):
+                    judges.activate(kind, f'lab-{kind}')
+        judges.activate('code', None)  # «Критерии из кода агента», as a launch of Точность without a set
+        self.assertNotIn('accuracy-judge', [source['id'] for source in storage.documents.load('sources.json')])
+        self.assertIsNone(storage.documents.load(checks.result('code')))
+        mine = judges.save('code', 'Точность команды', policy, [criterion()], 'lab-code-set', 'lab-code')
+        self.assertEqual((mine['version'], mine['builtin']), (1, False))
+        self.assertEqual([version['id'] for version in storage.judges.listed('code')], [mine['id']])
+
     async def test_failed_rule_save_is_atomic_and_export_is_the_selected_version(self):
-        built = judges.library('tone')['versions'][0]
-        response = await self.client.post('/api/judges/tone/select', json={'id': built['id']})
+        policy = 'Всегда обращайтесь к клиенту на вы.'
+        mine = judges.save('tone', 'Наши правила', policy, [criterion()], None, None)
+        response = await self.client.post('/api/judges/tone/select', json={'id': mine['id']})
         self.assertEqual(response.status_code, 200)
         before = storage.documents.load('tone-of-voice-criteria.json')
         response = await self.client.post(
             '/api/judges/tone',
             json={
                 'name': 'Новые',
-                'policy': built['policy'],
+                'policy': policy,
                 'criteria': [criterion(), criterion()],
             },
         )
         self.assertEqual(response.status_code, 400)
         self.assertEqual(storage.documents.load('tone-of-voice-criteria.json'), before)
-        download = await self.client.get(f'/api/judge-versions/{built["id"]}/download')
-        self.assertIn(built['policy'], download.text)
+        download = await self.client.get(f'/api/judge-versions/{mine["id"]}/download')
+        self.assertIn(policy, download.text)
         self.assertIn('Обращение', download.text)
 
     async def test_secrets_in_repository_or_idp_urls_are_not_saved_into_versions(self):

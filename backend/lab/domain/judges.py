@@ -1,35 +1,6 @@
-"""Versioned rubrics are user rules; built-in sets contain actual criteria, not invented model versions."""
+"""Versioned rubrics are the rules people give: the Lab writes no rules of its own."""
 
 import hashlib
-
-BUILTINS = {
-    'tone': (
-        'Базовые правила общения',
-        [
-            ('Обращение', 'Обращайтесь к клиенту вежливо и на «вы».'),
-            ('Тон', 'Сохраняйте деловой доброжелательный тон, избегайте канцелярита и лишних извинений.'),
-            ('Ясность', 'Отвечайте ясно и по существу, объясняйте незнакомые термины.'),
-        ],
-    ),
-    'code': (
-        'Точность ответа',
-        [
-            (
-                'Факты',
-                'Фактические утверждения должны подтверждаться предоставленной базой знаний. '
-                'Если доказательств нет, критерий нельзя оценить.',
-            ),
-            (
-                'Инструменты',
-                'Используйте только доступные агенту инструменты. Оценивайте вызовы только при наличии их записи.',
-            ),
-            (
-                'Отсутствие выдумок',
-                'Не придумывайте факты, ссылки и результаты действий. При недостатке информации сообщите об этом.',
-            ),
-        ],
-    ),
-}
 
 
 def brief(version: dict) -> dict:
@@ -47,25 +18,6 @@ def source(kind: str, name: str, policy: str) -> dict:
         'content': policy,
         'sha256': hashlib.sha256(policy.encode()).hexdigest(),
     }
-
-
-def builtin(kind: str) -> dict:
-    name, rows = BUILTINS[kind]
-    policy = '\n\n'.join(f'{title}: {text}' for title, text in rows)
-    criteria = [
-        {
-            'id': f'{kind}-{i}',
-            'name': title,
-            'text': text,
-            'quote': text,
-            'condition': '',
-            'acceptable': '',
-            'sourceId': source(kind, name, policy)['id'],
-            'observation': ('knowledge' if i == 1 else 'tool' if i == 2 else 'reply') if kind == 'code' else 'reply',
-        }
-        for i, (title, text) in enumerate(rows, 1)
-    ]
-    return {'name': name, 'policy': policy, 'criteria': criteria}
 
 
 def validate_criteria(criteria: list[dict], kind: str) -> list[dict]:

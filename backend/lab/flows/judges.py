@@ -9,8 +9,10 @@ DRAFT = 'tone-of-voice-criteria.json'
 
 
 def library(kind: str) -> dict:
-    storage.judges.ensure(kind)
-    if kind == 'tone' and storage.judges.active(kind) is None:
+    """The versions of rules of a kind and the one in force. Criteria of tone of voice made while no set was selected
+    (before the library) become its first version; the ones a set an earlier Lab wrote itself copied in, while it is
+    still selected, do not."""
+    if kind == 'tone' and storage.judges.selected(kind) is None:
         draft = storage.documents.load(DRAFT)
         policy = next((s for s in inputs.sources() if s['id'] == checks.TONE_OF_VOICE), None)
         if draft and policy:
@@ -27,7 +29,9 @@ def activate(kind: str, version_id: str | None) -> dict:
         if kind == 'tone' and value is None:
             raise ValueError('Выберите набор правил общения.')
         old = storage.judges.active(kind)
-        if old is None and value is None:
+        # Nothing to change only when nothing was selected: a set an earlier Lab wrote itself, still selected, goes
+        # with the rules selecting it copied into the sources.
+        if storage.judges.selected(kind) is None and value is None:
             return {'kind': 'code', 'mode': 'code'}
         if old and value and old['id'] == value['id']:
             return value
