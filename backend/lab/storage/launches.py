@@ -10,6 +10,7 @@ from . import db
 # What a line keeps of a record, of each of its modes and of a metric.
 LINE = (
     'id', 'check', 'mode', 'target', 'status', 'error', 'startedAt', 'finishedAt', 'agentVersion', 'dataset', 'version',
+    'ruleIds', 'replan',
 )  # fmt: skip
 OUTCOME = ('status', 'error', 'checkId', 'questionsId', 'runId')
 COUNTS = ('failed', 'measured', 'unmeasured', 'passed', 'assessed')

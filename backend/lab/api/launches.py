@@ -21,6 +21,10 @@ class LaunchCommand(BaseModel):
     count: int = Field(default=100, ge=1, le=300)
     modes: list[Literal['dataset', 'questions', 'simulations']] = Field(min_length=1, max_length=3)
     target: str = 'prod'
+    # Tone of voice by some of its criteria (all of them when none are named), as a person chose them.
+    ruleIds: list[str] | None = Field(default=None, min_length=1, max_length=100)
+    # Точность by the agent's code with its criteria read from the code anew: its instructions or tools changed.
+    replan: bool = False
 
 
 @router.post('/api/launches')

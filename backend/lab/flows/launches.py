@@ -48,6 +48,10 @@ def prepare(given: dict) -> dict:
             judges.activate(checks.CODE, None)
         if given['check'] == checks.TONE and not (storage.documents.load(tone.DRAFT) or {}).get('criteria'):
             raise ValueError('Выберите или сформируйте критерии Tone of voice.')
+        if given.get('ruleIds'):
+            if given['check'] != checks.TONE:
+                raise ValueError('Отдельные критерии выбираются только для Tone of voice.')
+            tone.selection(given['ruleIds'])  # each of them a criterion of the rules in force
     return given
 
 
@@ -68,6 +72,9 @@ async def run(given: dict, progress: Progress) -> dict:
             'dataset': storage.dialogues.meta(),
             'judge': storage.judges.active(given['check']),
             'inputs': given,
+            # Some of the criteria, when a person chose them; the code's criteria read anew (Точность).
+            'ruleIds': given.get('ruleIds') or None,
+            'replan': bool(given.get('replan')),
             **provenance.snapshot(given['check']),
             'modes': {mode: {'status': 'pending'} for mode in MODES if mode in given['modes']},
         }
@@ -129,9 +136,10 @@ async def _check(given: dict, progress: Progress) -> dict:
     check = given['check']
     if check == checks.TONE:
         draft = storage.documents.load(tone.DRAFT)
-        await tone.check(draft['criteria'], given['count'], progress)
+        chosen = tone.selection(given['ruleIds']) if given.get('ruleIds') else draft['criteria']
+        await tone.check(chosen, given['count'], progress)
     else:
-        await accuracy.check(given['count'], progress)
+        await accuracy.check(given['count'], progress, replan=bool(given.get('replan')))
     result = storage.documents.load(checks.result(check))
     if not result:
         raise ValueError('Проверка не сформировала результат.')
@@ -146,7 +154,13 @@ async def _mode(mode: str, given: dict, progress: Progress, launch_id: str) -> d
         return {'status': 'done', 'checkId': result['checkId'], 'metric': result['summary']}
     if mode == 'questions':
         result = await questions.run(
-            given['check'], given['target'], given['count'], progress, f'{launch_id}-questions'
+            given['check'],
+            given['target'],
+            given['count'],
+            progress,
+            f'{launch_id}-questions',
+            rule_ids=given.get('ruleIds'),
+            replan=bool(given.get('replan')),
         )
         return {
             'status': result['status'],

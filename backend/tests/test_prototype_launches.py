@@ -184,6 +184,70 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['agentVersion'], 'v-release')
         self.assertNotIn('average', result)
 
+    async def test_a_tone_launch_checks_only_the_criteria_chosen(self):
+        """«Новая проверка» can check some of the criteria, as the old step-by-step check could: the recorded answers
+        and the recorded questions are judged by those only; a criterion the rules do not have is refused before
+        anything starts."""
+        two = [criterion(), criterion('Не обещайте сроков.') | {'id': 'r2', 'name': 'Сроки'}]
+        rules = judges.save('tone', 'Правила', 'Всегда обращайтесь к клиенту на вы.', two, None, None)
+        given = {
+            'check': 'tone',
+            'datasetId': self.dataset['id'],
+            'judgeId': rules['id'],
+            'count': 1,
+            'target': 'local-http',
+            'agentVersion': '',
+            'modes': ['dataset', 'questions'],
+            'ruleIds': ['r2'],
+        }
+        launches.prepare(given)
+        metric = {'passed': 1, 'failed': 0, 'measured': 1, 'unmeasured': 0, 'total': 1, 'accuracy': 100}
+
+        async def checked(*args, **kwargs):
+            storage.documents.save(tone.RESULT, {'checkId': 'saved', 'summary': metric})
+
+        with (
+            patch('lab.flows.tone.check', new=AsyncMock(side_effect=checked)) as check,
+            patch('lab.flows.severity.propose', new=AsyncMock(return_value=None)),
+            patch(
+                'lab.flows.questions.run', new=AsyncMock(return_value={'id': 'q', 'status': 'done', 'metric': metric})
+            ) as replay,
+        ):
+            result = await launches.run(given, lambda **_: None)
+        self.assertEqual([rule['id'] for rule in check.await_args.args[0]], ['r2'])
+        self.assertEqual(replay.await_args.kwargs['rule_ids'], ['r2'])
+        self.assertEqual(result['ruleIds'], ['r2'])
+        self.assertEqual(storage.launches.listed('launch')[0]['ruleIds'], ['r2'])
+        with self.assertRaises(ValueError):
+            launches.prepare(given | {'ruleIds': ['missing']})
+
+    async def test_a_launch_by_the_agents_code_can_extract_its_criteria_anew(self):
+        """«Извлечь заново» of Точность is a choice of the launch: its check reads the agent's code again, and the
+        recorded questions are planned the same way; by default the criteria stay."""
+        for replan in (False, True):
+            with self.subTest(replan=replan):
+
+                async def checked(*args, **kwargs):
+                    storage.documents.save(checks.result('code'), {'checkId': 'saved', 'summary': {}})
+
+                with (
+                    patch('lab.flows.accuracy.check', new=AsyncMock(side_effect=checked)) as check,
+                    patch('lab.flows.severity.propose', new=AsyncMock(return_value=None)),
+                    patch(
+                        'lab.flows.questions.run',
+                        new=AsyncMock(return_value={'id': 'q', 'status': 'done', 'metric': None}),
+                    ) as replay,
+                ):
+                    await launches._check({'check': 'code', 'count': 1, 'replan': replan}, lambda **_: None)
+                    await launches._mode(
+                        'questions',
+                        {'check': 'code', 'count': 1, 'target': 'local-http', 'replan': replan},
+                        lambda **_: None,
+                        'l1',
+                    )
+                self.assertEqual(check.await_args.kwargs['replan'], replan)
+                self.assertEqual(replay.await_args.kwargs['replan'], replan)
+
     async def test_grouped_check_preserves_native_severity_proposals(self):
         for check, flow in [('tone', 'tone'), ('code', 'accuracy')]:
             with self.subTest(check=check):

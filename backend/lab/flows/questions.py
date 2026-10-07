@@ -8,10 +8,21 @@ from ..domain import checks, metric
 from . import Progress, agent_context, check_setup, connection, conversations, error_text, provenance
 
 
-async def run(check: str, target: str, count: int, progress: Progress, run_id: str) -> dict:
+async def run(
+    check: str,
+    target: str,
+    count: int,
+    progress: Progress,
+    run_id: str,
+    *,
+    rule_ids: list[str] | None = None,
+    replan: bool = False,
+) -> dict:
+    """The recorded questions asked of the agent again and its new answers judged: by the chosen criteria of tone of
+    voice (rule_ids, all when none), by the criteria of Точность read anew from the code when replan."""
     record = storage.launches.get('questions', run_id)
     if record is None:
-        record = await _new(check, target, count, progress, run_id)
+        record = await _new(check, target, count, progress, run_id, rule_ids, replan)
     if record['status'] == 'done':
         return record
     record['status'] = 'running'
@@ -75,11 +86,19 @@ def _finish(record: dict) -> None:
     storage.launches.save('questions', record)
 
 
-async def _new(check: str, target: str, count: int, progress: Progress, run_id: str) -> dict:
+async def _new(
+    check: str,
+    target: str,
+    count: int,
+    progress: Progress,
+    run_id: str,
+    rule_ids: list[str] | None = None,
+    replan: bool = False,
+) -> dict:
     dialogues = conversations.sample(count)
     if not dialogues:
         raise ValueError('В выбранном датасете нет разговоров.')
-    topics = await check_setup.topics(check, dialogues, progress)
+    topics = await check_setup.topics(check, dialogues, progress, rule_ids=rule_ids, replan=replan)
     by_dialogue = {str(i): topic for topic in topics for i in topic['dialogueIds']}
     baseline = storage.documents.load(checks.result(check)) or {}
     base_rules = {t['id']: t['rules'] for t in baseline.get('topics', [])}
