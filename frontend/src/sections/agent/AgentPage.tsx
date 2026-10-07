@@ -4,7 +4,7 @@ import { ArrowRight, Database, FileText, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Header } from "../../app/Header";
 import { SectionJob } from "../../app/SectionJob";
-import { criterionLink, stageRoot } from "../../app/links";
+import { criterionLink, launchLink } from "../../app/links";
 import { api } from "../../lab/api";
 import { useCriteria } from "../../lab/criteria";
 import { count, day, plural, thousands } from "../../lab/format";
@@ -50,7 +50,7 @@ export function AgentPage() {
       actions={
         <>
           {(back === "tone" || back === "code") && (
-            <Link to={`${stageRoot(back)}/launch`} className={buttonClass()}>
+            <Link to={launchLink(back)} className={buttonClass()}>
               К запуску
             </Link>
           )}

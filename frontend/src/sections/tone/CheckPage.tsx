@@ -1,7 +1,8 @@
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { Header } from "../../app/Header";
-import { SECTIONS } from "../../app/links";
+import { buttonClass } from "../../ui/Button";
+import { launchLink, SECTIONS } from "../../app/links";
 import { useLabState } from "../../lab/LabProvider";
 import { CHECK_STEPS, nextStep, toneResult, type CheckStep } from "../../lab/tone";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
@@ -33,7 +34,17 @@ export function CheckPage() {
   // finished check that would move forward again.
   const go = (next: CheckStep, replace = false) => setParams({ step: next }, { replace });
   const at = CHECK_STEPS.findIndex((s) => s.id === step);
-  const header = <Header title="Пошаговая проверка" crumbs={[{ label: "Tone of voice", to: SECTIONS.tone }]} />;
+  const header = (
+    <Header
+      title="Правила и отдельные критерии"
+      crumbs={[{ label: "Tone of voice", to: SECTIONS.tone }]}
+      actions={
+        <Link to={launchLink("tone")} className={buttonClass()}>
+          К запуску с режимами
+        </Link>
+      }
+    />
+  );
   if (offline && !state)
     return (
       <div className="flex h-full flex-col">

@@ -5,6 +5,7 @@ import { Header } from "../../app/Header";
 import { SectionJob } from "../../app/SectionJob";
 import {
   conversationsLink,
+  launchLink,
   reviewLink,
   scenariosLink,
   SECTIONS,
@@ -65,15 +66,15 @@ function beginOf(check: Check, state: LabState, fresh = false): Begin {
       return {
         status: FRESH,
         needs: needsOf("tone", state),
-        action: { label: "Проверить новую выгрузку", to: toneCheckLink() },
+        action: { label: "Проверить новую выгрузку", to: launchLink("tone") },
       };
     const begun = !!state.toneOfVoice || (job.running && job.kind === "tone-criteria");
     return {
       status: begun ? "Проверка начата" : undefined,
       needs: needsOf("tone", state),
       action: begun
-        ? { label: "Продолжить проверку", to: toneCheckLink() }
-        : { label: "Начать проверку", to: toneCheckLink("materials") },
+        ? { label: "Продолжить проверку", to: launchLink("tone") }
+        : { label: "Начать проверку", to: launchLink("tone") },
     };
   }
   if (job.running && job.kind === "discover")
@@ -84,17 +85,17 @@ function beginOf(check: Check, state: LabState, fresh = false): Begin {
     };
   if (!accuracySources(state).length)
     return {
-      status: "Нужен код агента",
+      status: "Выберите правила проверки",
       needs: needsOf("code", state),
-      action: { label: "Прочитать код", to: SECTIONS.agent },
+      action: { label: "Настроить проверку", to: launchLink("code") },
     };
   if (fresh)
     return {
       status: FRESH,
       needs: needsOf("code", state),
-      action: { label: "Проверить новую выгрузку", to: SECTIONS.accuracy },
+      action: { label: "Проверить новую выгрузку", to: launchLink("code") },
     };
-  return { needs: needsOf("code", state), action: { label: "Оценить разговоры", to: SECTIONS.accuracy } };
+  return { needs: needsOf("code", state), action: { label: "Оценить разговоры", to: launchLink("code") } };
 }
 
 /**

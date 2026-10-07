@@ -2,14 +2,13 @@ import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight, Check as CheckMark } from "lucide-react";
 import { Mark } from "../../app/Mark";
-import { SECTIONS, toneCheckLink, type Check } from "../../app/links";
-import { count, plural } from "../../lab/format";
+import { launchLink, toneCheckLink, type Check } from "../../app/links";
+import { count } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { codeSources, customAccuracy, TONE_ID } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
 import { UploadButton } from "../../product/UploadLogs";
-import { Button, buttonClass } from "../../ui/Button";
-import { Resumes, SizePicker, useAssess, useSampleSize } from "./AssessSheet";
+import { buttonClass } from "../../ui/Button";
 import { previousOf } from "../../lab/compare";
 import { PreviousCheck, useComparison } from "./Compare";
 
@@ -21,7 +20,7 @@ export function needsOf(check: Check, state: LabState | null): Need[] {
   const dialogs = {
     label: "Разговоры",
     value: total ? count(total, "разговор", "разговора", "разговоров") : null,
-    later: check === "tone" ? "загрузите на первом шаге" : "загрузите выгрузку чата",
+    later: "выберите датасет или загрузите выгрузку чата",
   };
   if (check === "tone") {
     const policy = state?.sources.find((s) => s.id === TONE_ID);
@@ -29,7 +28,7 @@ export function needsOf(check: Check, state: LabState | null): Need[] {
     const criteria = state?.toneOfVoice?.criteria.length ?? 0;
     return [
       dialogs,
-      { label: "Правила общения", value: policy?.origin ?? null, later: "добавьте на первом шаге" },
+      { label: "Правила общения", value: policy?.origin ?? null, later: "выберите набор или добавьте документ" },
       ...(criteria
         ? [{ label: "Критерии", value: count(criteria, "критерий", "критерия", "критериев"), later: "" }]
         : []),
@@ -41,7 +40,7 @@ export function needsOf(check: Check, state: LabState | null): Need[] {
     {
       label: customAccuracy(state) ? "Правила судьи" : "Код агента",
       value: customAccuracy(state)?.origin ?? (code ? count(code, "источник", "источника", "источников") : null),
-      later: "прочитайте в «Агенте»",
+      later: "прочитайте код или выберите набор правил",
     },
   ];
 }
@@ -126,7 +125,7 @@ export function ToneStart() {
         title="Новая выгрузка ещё не проверена"
         needs={needsOf("tone", state)}
         action={
-          <Link to={toneCheckLink()} className={primary}>
+          <Link to={launchLink("tone")} className={primary}>
             Проверить новую выгрузку
             <ArrowRight aria-hidden className="size-4" />
           </Link>
@@ -136,14 +135,13 @@ export function ToneStart() {
         <p className="mt-2">Чтобы сравнить итог с прошлой проверкой, проверьте новые разговоры по тем же критериям.</p>
       </Empty>
     );
-  const begun = !!state?.toneOfVoice || (!!job?.running && job.kind === "tone-criteria");
   return (
     <Empty
       title="Здесь появится итог tone of voice"
       needs={needsOf("tone", state)}
       action={
-        <Link to={begun ? toneCheckLink() : toneCheckLink("materials")} className={primary}>
-          {begun ? "Продолжить проверку" : "Начать проверку"}
+        <Link to={launchLink("tone")} className={primary}>
+          Настроить проверку
           <ArrowRight aria-hidden className="size-4" />
         </Link>
       }
@@ -156,15 +154,12 @@ export function ToneStart() {
 }
 
 /**
- * Accuracy before its result: the criteria come word for word from the agent's prompts and tools, so without its code
- * there is nothing to check by («Нужен код агента»); with the code, one button checks the conversations — after a new
- * export, beside the previous check.
+ * Accuracy before its result: criteria can come from the agent's code or a rule set. Both paths lead to the shared
+ * launch configuration; a previous check remains visible after a new dataset arrives.
  */
 export function AccuracyStart() {
   const { state } = useLabState();
   const previous = usePrevious("code");
-  const { sizes, size, setSize, resumes } = useSampleSize();
-  const { start, starting } = useAssess();
   const job = state?.job;
   if (job?.running && job.kind === "discover")
     return (
@@ -177,17 +172,16 @@ export function AccuracyStart() {
   if (!code && !customAccuracy(state))
     return (
       <Empty
-        title="Нужен код агента"
+        title="Выберите правила проверки точности"
         needs={needsOf("code", state)}
         action={
-          <Link to={SECTIONS.agent} className={primary}>
-            Прочитать код
+          <Link to={launchLink("code")} className={primary}>
+            Настроить проверку
             <ArrowRight aria-hidden className="size-4" />
           </Link>
         }
       >
-        Критерии точности берутся дословно из инструкций и инструментов агента. Укажите папку с его кодом в «Агенте» и
-        прочитайте код.
+        Критерии можно извлечь из инструкций и инструментов агента или выбрать готовый набор правил.
       </Empty>
     );
   const total = state?.logs.total ?? 0;
@@ -197,26 +191,15 @@ export function AccuracyStart() {
         Критерии точности готовы. Проверку проводят на настоящих разговорах клиентов из выгрузки.
       </Empty>
     );
-  const busy = !!job?.running;
   return (
     <Empty
       title={previous?.newExport ? "Новая выгрузка ещё не проверена" : "Здесь появится итог точности"}
       needs={needsOf("code", state)}
       action={
-        <div className="space-y-6">
-          <SizePicker sizes={sizes} size={size} onSize={setSize} />
-          <Resumes when={resumes} />
-          <Button
-            variant="primary"
-            size="lg"
-            loading={starting}
-            disabled={busy || !size}
-            title={busy ? "Сейчас идёт другая задача" : undefined}
-            onClick={() => start(size, false)}
-          >
-            Оценить {size} {plural(size, "разговор", "разговора", "разговоров")}
-          </Button>
-        </div>
+        <Link to={launchLink("code")} className={primary}>
+          Настроить проверку
+          <ArrowRight aria-hidden className="size-4" />
+        </Link>
       }
     >
       {previous?.newExport ? (

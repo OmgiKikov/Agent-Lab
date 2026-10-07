@@ -18,6 +18,7 @@ from . import (
     questions,
     same_work,
     scenarios,
+    severity,
     simulation,
     tone,
 )
@@ -112,6 +113,8 @@ async def _check(given: dict, progress: Progress) -> dict:
     result = storage.documents.load(checks.result(check))
     if not result:
         raise ValueError('Проверка не сформировала результат.')
+    # Unlike a standalone check, cancellation here must stop the remaining launch modes too.
+    await severity.propose(check, progress)
     return result
 
 

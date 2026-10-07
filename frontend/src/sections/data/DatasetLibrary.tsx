@@ -1,3 +1,4 @@
+import { Input } from "../../ui/Field";
 import { useState } from "react";
 import { Archive, Check, Pencil, RotateCcw } from "lucide-react";
 import { useDatasets, type Dataset } from "../../lab/datasets";
@@ -5,11 +6,18 @@ import { when, count, fileSize } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { Button } from "../../ui/Button";
 import { Modal } from "../../ui/Modal";
+import { Skeleton } from "../../ui/EmptyState";
+import { Segmented } from "../../ui/Segmented";
 import { LoadFailed } from "../../ui/LoadFailed";
 
-export function DatasetLibrary() {
+export function DatasetLibrary({
+  showArchive,
+  onArchiveChange,
+}: {
+  showArchive: boolean;
+  onArchiveChange: (value: boolean) => void;
+}) {
   const library = useDatasets(true);
-  const [showArchive, setShowArchive] = useState(false);
   const { state } = useLabState();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -35,20 +43,24 @@ export function DatasetLibrary() {
       setBusy(false);
     }
   };
-  const blocked = busy || !!state?.job.running;
+  const blocked = busy || library.changing || !!state?.job.running;
   if (library.isError)
     return <LoadFailed title="Не удалось загрузить датасеты" error={library.error} onRetry={() => library.refetch()} />;
-  if (library.data && !library.data.datasets.length) return null;
+  if (!library.data) return <Skeleton className="mt-7 h-40" />;
+  if (!library.data.datasets.length) return null;
+  const visible = library.data.datasets.filter((item) => !!item.archivedAt === showArchive);
   return (
     <section className="mt-7" aria-label="Датасеты агента">
-      <div className="mb-4 flex gap-2">
-        <Button variant={showArchive ? "ghost" : "outline"} onClick={() => setShowArchive(false)}>
-          Датасеты
-        </Button>
-        <Button variant={showArchive ? "outline" : "ghost"} onClick={() => setShowArchive(true)}>
-          Архив · {library.data?.datasets.filter((d) => d.archivedAt).length ?? 0}
-        </Button>
-      </div>
+      <Segmented
+        label="Датасеты и архив"
+        className="mb-4"
+        value={showArchive ? "archive" : "active"}
+        onChange={(value) => onArchiveChange(value === "archive")}
+        options={[
+          { value: "active", label: "Датасеты", count: library.data.datasets.filter((d) => !d.archivedAt).length },
+          { value: "archive", label: "Архив", count: library.data.datasets.filter((d) => d.archivedAt).length },
+        ]}
+      />
       {removed && (
         <div role="status" className="mb-4 flex flex-wrap items-center gap-3 rounded-control bg-inset p-3 text-body">
           «{removed.name}» в архиве.
@@ -63,69 +75,74 @@ export function DatasetLibrary() {
         </div>
       )}
       <ul className="divide-y divide-line overflow-hidden rounded-block border border-line">
-        {library.data?.datasets
-          .filter((item) => !!item.archivedAt === showArchive)
-          .map((item) => (
-            <li key={item.id} className="flex flex-wrap items-center gap-3 p-4 sm:flex-nowrap sm:px-5">
-              <button
-                type="button"
-                aria-pressed={library.data?.activeId === item.id}
-                disabled={blocked || !!item.archivedAt}
-                onClick={() => change("select", item)}
-                className="flex min-w-0 flex-1 items-start gap-3 text-left"
-              >
-                <span className="mt-1 flex size-5 shrink-0 items-center justify-center rounded-full border border-line-strong">
-                  {library.data?.activeId === item.id && <Check aria-hidden className="size-3.5 text-ok" />}
+        {visible.map((item) => (
+          <li key={item.id} className="flex flex-wrap items-center gap-3 p-4 sm:flex-nowrap sm:px-5">
+            <button
+              type="button"
+              aria-pressed={library.data?.activeId === item.id}
+              disabled={blocked || !!item.archivedAt}
+              onClick={() => change("select", item)}
+              className="flex min-w-0 flex-1 items-start gap-3 rounded-control text-left transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60 disabled:cursor-default"
+            >
+              <span className="mt-1 flex size-5 shrink-0 items-center justify-center rounded-full border border-line-strong">
+                {library.data?.activeId === item.id && <Check aria-hidden className="size-3.5 text-ok" />}
+              </span>
+              <span className="min-w-0">
+                <span className="block break-words text-read font-semibold text-fg">{item.name}</span>
+                <span className="mt-1 block break-all text-small text-fg-3">
+                  {item.file} · {count(item.total, "разговор", "разговора", "разговоров")}
+                  {item.bytes > 0 ? ` · ${fileSize(item.bytes)}` : ""} · {when(item.createdAt)}
                 </span>
-                <span className="min-w-0">
-                  <span className="block break-words text-read font-semibold text-fg">{item.name}</span>
-                  <span className="mt-1 block break-all text-small text-fg-3">
-                    {item.file} · {count(item.total, "разговор", "разговора", "разговоров")}
-                    {item.bytes > 0 ? ` · ${fileSize(item.bytes)}` : ""} · {when(item.createdAt)}
-                  </span>
-                </span>
-              </button>
-              <div className="flex items-center gap-1">
-                {item.archivedAt ? (
+              </span>
+            </button>
+            <div className="flex items-center gap-1">
+              {item.archivedAt ? (
+                <Button
+                  size="sm"
+                  icon={RotateCcw}
+                  disabled={blocked}
+                  onClick={() => change("archive", item, { undo: true })}
+                >
+                  Вернуть
+                </Button>
+              ) : (
+                <>
                   <Button
                     size="sm"
-                    icon={RotateCcw}
+                    variant="ghost"
+                    icon={Pencil}
+                    aria-label={`Переименовать ${item.name}`}
                     disabled={blocked}
-                    onClick={() => change("archive", item, { undo: true })}
-                  >
-                    Вернуть
-                  </Button>
-                ) : (
-                  <>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      icon={Pencil}
-                      aria-label={`Переименовать ${item.name}`}
-                      disabled={blocked}
-                      onClick={() => {
-                        setEditing(item);
-                        setName(item.name);
-                        setError("");
-                      }}
-                    />
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      icon={Archive}
-                      aria-label={`В архив: ${item.name}`}
-                      disabled={blocked}
-                      onClick={() => {
-                        setArchiving(item);
-                        setError("");
-                      }}
-                    />
-                  </>
-                )}
-              </div>
-            </li>
-          ))}
+                    onClick={() => {
+                      setEditing(item);
+                      setName(item.name);
+                      setError("");
+                    }}
+                  />
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    icon={Archive}
+                    aria-label={`В архив: ${item.name}`}
+                    disabled={blocked}
+                    onClick={() => {
+                      setArchiving(item);
+                      setError("");
+                    }}
+                  />
+                </>
+              )}
+            </div>
+          </li>
+        ))}
       </ul>
+      {!visible.length && (
+        <p className="py-6 text-body text-fg-3">
+          {showArchive
+            ? "Архив пуст. Здесь будут датасеты, убранные из списка выбора."
+            : "Все датасеты в архиве. Верните нужный или загрузите новый."}
+        </p>
+      )}
       {error && (
         <p role="alert" className="mt-3 text-body text-bad">
           {error}
@@ -182,13 +199,7 @@ export function DatasetLibrary() {
       >
         <label className="text-body text-fg">
           Название
-          <input
-            autoFocus
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            maxLength={160}
-            className="mt-2 w-full rounded-control border border-line-strong bg-canvas px-3 py-2"
-          />
+          <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} maxLength={160} className="mt-2" />
         </label>
         {error && (
           <p role="alert" className="mt-3 text-bad">

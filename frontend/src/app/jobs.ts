@@ -1,6 +1,6 @@
 import { PROPOSING, proposalCheck } from "../lab/severity";
 import type { Job } from "../lab/types";
-import { criterionLink, scenariosLink, SECTIONS, toneCheckLink } from "./links";
+import { criterionLink, launchLink, scenariosLink, SECTIONS, toneCheckLink } from "./links";
 
 /** A task of the service: how it is called and the section where its result lives. */
 export const JOBS: Record<string, { label: string; to: string }> = {
@@ -29,7 +29,11 @@ export const JOBS: Record<string, { label: string; to: string }> = {
  */
 export function jobOf(job: Job) {
   if (!job.kind) return undefined;
-  if (job.kind === "launch" && job.progress.launch) return { ...JOBS.launch, to: `/launches/${job.progress.launch}` };
+  if (job.kind === "launch" && job.progress.launch)
+    return {
+      ...JOBS.launch,
+      to: job.input?.check ? launchLink(job.input.check, job.progress.launch) : `/launches/${job.progress.launch}`,
+    };
   const check = job.kind === "severity" ? proposalCheck(job) : null;
   return check ? { ...JOBS.severity, to: criterionLink(check) } : JOBS[job.kind];
 }

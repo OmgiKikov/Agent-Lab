@@ -5,6 +5,7 @@ import { api } from "../../lab/api";
 import type { LabState, Probe, Target } from "../../lab/types";
 import { useLabState } from "../../lab/LabProvider";
 import { Button } from "../../ui/Button";
+import { Input } from "../../ui/Field";
 import { Label } from "../../ui/Label";
 import { useToast } from "../../ui/toast";
 import { agentKey } from "../../app/agent";
@@ -71,8 +72,7 @@ export function wayOf(state: LabState, chosen: string | null) {
   return state.settings.prodUrl ? "prod" : state.settings.repo ? "local-code" : null;
 }
 
-const INPUT =
-  "h-9 w-full rounded-control border border-line-strong bg-transparent px-3 font-mono text-small text-fg outline-none transition-colors placeholder:text-fg-4 focus:border-fg-3";
+const INPUT = "h-9 font-mono text-small";
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
@@ -211,7 +211,7 @@ export function ConnectionForm({ state }: { state: LabState }) {
       <div className="mt-5 space-y-4">
         {way === "prod" && (
           <Field label="Адрес агента на тестовом стенде" hint="Открывается с рабочего компьютера.">
-            <input
+            <Input
               name="prod-url"
               type="url"
               autoComplete="off"
@@ -224,7 +224,7 @@ export function ConnectionForm({ state }: { state: LabState }) {
           </Field>
         )}
         <Field label="Папка с кодом агента" hint="Из этой папки читаются инструкции агента для проверки точности.">
-          <input
+          <Input
             name="repo"
             autoComplete="off"
             value={repo}
@@ -240,7 +240,7 @@ export function ConnectionForm({ state }: { state: LabState }) {
           </p>
         )}
         <Field label="Клиенты для симуляций" hint="ЕПК через пробел. Если пусто, пишет тестовый клиент.">
-          <input
+          <Input
             name="epk"
             autoComplete="off"
             inputMode="numeric"

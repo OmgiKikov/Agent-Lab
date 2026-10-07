@@ -1,10 +1,11 @@
+import { Input, Select } from "../../ui/Field";
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Database, FlaskConical, MessagesSquare, Play } from "lucide-react";
 import { agentKey } from "../../app/agent";
 import { Header } from "../../app/Header";
 import { StageTabs } from "../../app/StageTabs";
-import { SECTIONS, stageRoot } from "../../app/links";
+import { historyLink, judgesLink, launchLink, SECTIONS, stageRoot, toneCheckLink } from "../../app/links";
 import { api } from "../../lab/api";
 import { CHECK_NAME } from "../../lab/checks";
 import { useDatasets } from "../../lab/datasets";
@@ -17,7 +18,6 @@ import { DatasetPicker } from "../../product/DatasetPicker";
 import { JudgePicker } from "../../product/JudgePicker";
 import { Button } from "../../ui/Button";
 import { ServiceDown } from "../../ui/EmptyState";
-import { LaunchHistory } from "./LaunchHistory";
 
 const OPTIONS = [
   {
@@ -94,6 +94,20 @@ export function LaunchPage({ check }: { check: Check }) {
     modes.length > 0 &&
     (!live || !!state?.targets.find((t) => t.id === chosenTarget)?.ready);
   const blocked = busy || !!state?.job.running;
+  const missing =
+    datasets.isError || judges.isError
+      ? "Не удалось загрузить настройки. Повторите загрузку выше."
+      : !datasets.data?.activeId || !count
+        ? "Добавьте датасет с разговорами."
+        : !rulesReady
+          ? "Выберите набор правил или подготовьте критерии."
+          : !modes.length
+            ? "Выберите хотя бы один режим проверки."
+            : live && !state?.targets.find((t) => t.id === chosenTarget)?.ready
+              ? "Для выбранных режимов настройте подключение к агенту."
+              : datasets.changing || judges.changing
+                ? "Сохраняем выбранные данные и правила…"
+                : "Загружаем настройки…";
   const start = async () => {
     if (blocked || !ready) return;
     setBusy(true);
@@ -109,7 +123,7 @@ export function LaunchPage({ check }: { check: Check }) {
         target: chosenTarget,
       });
       await refresh();
-      navigate(`/launches/${r.id}`);
+      navigate(launchLink(check, r.id));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -129,13 +143,8 @@ export function LaunchPage({ check }: { check: Check }) {
           </p>
           <div className="mt-7 grid items-start gap-8 lg:grid-cols-[minmax(0,1.6fr)_minmax(260px,1fr)]">
             <div className="min-w-0 space-y-6">
-              <div className="space-y-4 rounded-block border border-line p-5">
+              <div className="space-y-5 rounded-block border border-line p-5">
                 <DatasetPicker />
-                {!state?.logs.total && (
-                  <Link to={SECTIONS.data} className="text-body text-run">
-                    Добавить датасет →
-                  </Link>
-                )}
                 <JudgePicker check={check} />
                 {check === "code" && !judges.selected && !codeSources(state).length && (
                   <Link to={`${SECTIONS.agent}?return=code`} className="text-small text-run">
@@ -143,24 +152,24 @@ export function LaunchPage({ check }: { check: Check }) {
                   </Link>
                 )}
                 {!rulesReady && (
-                  <Link className="text-small text-run" to={`${stageRoot(check)}/judges`}>
+                  <Link className="text-small text-run" to={judgesLink(check)}>
                     Подготовьте правила судьи →
                   </Link>
                 )}
                 <label className="block text-body text-fg">
                   Версия или метка агента <span className="text-fg-3">· по желанию</span>
-                  <input
+                  <Input
                     value={version}
                     disabled={blocked}
                     onChange={(e) => setVersion(e.target.value)}
                     maxLength={80}
                     placeholder="Например: v2.4 · после правки промпта"
-                    className="mt-2 w-full rounded-control border border-line-strong bg-canvas px-3 py-2"
+                    className="mt-2"
                   />
                 </label>
                 <label className="flex flex-wrap items-center gap-3 text-body text-fg">
                   Разговоров из датасета
-                  <input
+                  <Input
                     aria-label="Сколько разговоров проверить"
                     type="number"
                     min={1}
@@ -168,7 +177,7 @@ export function LaunchPage({ check }: { check: Check }) {
                     value={count || size}
                     disabled={blocked}
                     onChange={(e) => setSize(Math.max(1, Math.min(300, Number(e.target.value) || 1)))}
-                    className="w-20 rounded-control border border-line-strong bg-canvas px-3 py-2"
+                    className="w-20"
                   />
                   <span className="text-small text-fg-3">из {state?.logs.total ?? 0}</span>
                 </label>
@@ -202,11 +211,11 @@ export function LaunchPage({ check }: { check: Check }) {
                 <div className="rounded-block border border-line p-5">
                   <label className="block text-body font-medium text-fg">
                     Подключение агента
-                    <select
+                    <Select
                       value={chosenTarget}
                       disabled={blocked}
                       onChange={(e) => setTarget(e.target.value)}
-                      className="mt-2 w-full rounded-control border border-line-strong bg-canvas px-3 py-2"
+                      className="mt-2"
                     >
                       {state?.targets.map((t) => (
                         <option value={t.id} key={t.id} disabled={!t.ready}>
@@ -214,7 +223,7 @@ export function LaunchPage({ check }: { check: Check }) {
                           {!t.ready ? " · не настроено" : ""}
                         </option>
                       ))}
-                    </select>
+                    </Select>
                   </label>
                   <Link className="mt-3 inline-block text-small text-run" to={`${SECTIONS.agent}?return=${check}`}>
                     Настроить или проверить связь →
@@ -260,11 +269,7 @@ export function LaunchPage({ check }: { check: Check }) {
               >
                 Запустить проверку
               </Button>
-              {!ready && (
-                <p className="mt-3 text-small text-fg-3">
-                  Выберите датасет, подготовленные правила и хотя бы один режим.
-                </p>
-              )}
+              {!ready && <p className="mt-3 text-small text-fg-3">{missing}</p>}
               {state?.job.running && (
                 <p className="mt-3 text-small text-warn">Сейчас выполняется другая задача этого агента.</p>
               )}
@@ -275,7 +280,17 @@ export function LaunchPage({ check }: { check: Check }) {
               )}
             </aside>
           </div>
-          <LaunchHistory check={check} />
+          <div className="mt-8 flex flex-wrap gap-x-6 gap-y-3 border-t border-line pt-5 text-body">
+            <Link to={historyLink(check)} className="text-run hover:underline">
+              История проверок →
+            </Link>
+            <Link
+              to={check === "tone" ? toneCheckLink("criteria") : `${stageRoot(check)}?assess=1`}
+              className="text-fg-3 hover:text-fg hover:underline"
+            >
+              {check === "tone" ? "Проверить отдельные критерии" : "Переизвлечь критерии и проверить"}
+            </Link>
+          </div>
         </div>
       )}
     </div>

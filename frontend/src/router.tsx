@@ -163,6 +163,8 @@ const productRoutes = [
       { index: true, element: <Navigate to="/overview" replace /> },
       { path: "launches", element: <AllLaunches /> },
       { path: "launches/:id", element: <LaunchReport /> },
+      { path: "tone/launches/:id", element: <LaunchReport /> },
+      { path: "accuracy/launches/:id", element: <LaunchReport /> },
       { path: "tone/launch", element: <LaunchPage key="tone" check="tone" /> },
       { path: "accuracy/launch", element: <LaunchPage key="code" check="code" /> },
       { path: "overview", element: <OverviewPage /> },

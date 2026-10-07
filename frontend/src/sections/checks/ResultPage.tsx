@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { FileText, RotateCcw } from "lucide-react";
-import { conversationsLink, toneCheckLink, type Check } from "../../app/links";
+import { conversationsLink, launchLink, type Check } from "../../app/links";
 import { resultOf } from "../../lab/checks";
 import { useCriteria } from "../../lab/criteria";
 import { longDay } from "../../lab/format";
@@ -28,9 +28,8 @@ const PART = { bad: "fail", ok: "pass", none: "none" } as const;
  * «Итог» of a check: the real conversations of the export as this check judged them — one number, the conversations
  * with a serious error and whose decision that is, and how it stands to the check's previous check; then the
  * problems it is made of, serious first, then most frequent, each beside its previous count, and the criteria whose
- * errors are no longer found. Without a result, how to get one. «Проверить снова», the same words in both checks,
- * repeats tone of voice step by step; accuracy is checked again here (?assess=1), by the same criteria or by criteria
- * read from the code anew.
+ * errors are no longer found. «Проверить снова» opens the shared launch configuration. The explicit ?assess=1 link
+ * keeps the advanced accuracy workflow for re-extracting criteria or resuming an earlier standalone check.
  */
 export function ResultPage({ check }: { check: Check }) {
   const { state, offline } = useLabState();
@@ -66,7 +65,7 @@ export function ResultPage({ check }: { check: Check }) {
             <UploadButton variant="outline" check={check} />
           </span>
           {result && (
-            <Button variant="primary" icon={FileText} aria-label="Отчёт для письма" onClick={() => setReport(true)}>
+            <Button variant="outline" icon={FileText} aria-label="Отчёт для письма" onClick={() => setReport(true)}>
               <span className="hidden sm:inline">Отчёт для письма</span>
             </Button>
           )}
@@ -125,13 +124,9 @@ export function ResultPage({ check }: { check: Check }) {
         </span>
         <button
           type="button"
-          onClick={() => (check === "tone" ? navigate(toneCheckLink("criteria")) : setAssess(true))}
+          onClick={() => navigate(launchLink(check))}
           disabled={!state.logs.total || busy}
-          title={
-            check === "tone"
-              ? "Проверить снова по шагам, с теми же или уточнёнными критериями"
-              : "Проверить разговоры выгрузки заново по критериям из кода агента"
-          }
+          title="Выбрать данные, правила и режимы новой проверки"
           className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-small font-medium text-fg-3 transition-colors hover:bg-hover hover:text-fg disabled:pointer-events-none disabled:opacity-40"
         >
           <RotateCcw aria-hidden className="size-3.5" />

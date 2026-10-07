@@ -237,7 +237,7 @@ export function Criteria({ state, onBack, onStarted }: { state: LabState; onBack
             disabled={running || !ids.length || !total}
             onClick={start}
           >
-            {resumes ? "Продолжить проверку" : "Запустить проверку"}
+            {resumes ? "Продолжить проверку" : "Проверить выбранные критерии"}
           </Button>
         )}
         {!generating && (

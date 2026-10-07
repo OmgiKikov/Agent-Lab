@@ -1,8 +1,9 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowRight, Check, Database, FileText, MessageSquareQuote, Target } from "lucide-react";
+import { ArrowRight, Database, MessageSquareQuote, Target } from "lucide-react";
 import { Header } from "../../app/Header";
 import { SectionJob } from "../../app/SectionJob";
-import { SECTIONS, stageRoot, toneCheckLink, type Check as CheckKind } from "../../app/links";
+import { SECTIONS, stageRoot, launchLink, type Check as CheckKind } from "../../app/links";
 import { CHECK_NAME, resultOf } from "../../lab/checks";
 import { count, when } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
@@ -19,16 +20,7 @@ function CheckRoute({ check, state }: { check: CheckKind; state: LabState }) {
   const result = resultOf(state, check);
   const running = state.job.running && state.job.kind === (check === "tone" ? "tone-check" : "discover");
   const hasRules = check === "tone" ? state.sources.some((s) => s.id === TONE_ID) : accuracySources(state).length > 0;
-  const to =
-    result || running
-      ? stageRoot(check)
-      : check === "tone"
-        ? state.toneOfVoice?.criteria.length
-          ? "/tone/launch"
-          : toneCheckLink()
-        : hasRules
-          ? "/accuracy/launch"
-          : SECTIONS.agent;
+  const to = result || running ? stageRoot(check) : launchLink(check);
   const Icon = check === "tone" ? MessageSquareQuote : Target;
   return (
     <Link
@@ -47,7 +39,7 @@ function CheckRoute({ check, state }: { check: CheckKind; state: LabState }) {
                 ? "Данные и правила готовы к проверке"
                 : check === "tone"
                   ? "Добавьте правила общения"
-                  : "Прочитайте код агента"}
+                  : "Выберите правила или прочитайте код агента"}
         </p>
         <span className="mt-3 inline-flex items-center gap-1.5 text-body font-medium text-fg">
           {running
@@ -67,6 +59,7 @@ function CheckRoute({ check, state }: { check: CheckKind; state: LabState }) {
 /** One shared export belongs to the agent; its two independent checks keep their own results and histories. */
 export function DataPage() {
   const { state, offline } = useLabState();
+  const [showArchive, setShowArchive] = useState(false);
   const loaded = !!state?.logs.total;
   const header = (
     <Header
@@ -92,8 +85,8 @@ export function DataPage() {
         <p className="mt-3 max-w-[65ch] text-read text-fg-3">
           Выберите датасет для проверки. Файлы, прошлые результаты и критерии сохраняются отдельно.
         </p>
-        <DatasetLibrary />
-        {!loaded ? (
+        <DatasetLibrary showArchive={showArchive} onArchiveChange={setShowArchive} />
+        {showArchive ? null : !loaded ? (
           <div className="mt-7 grid items-start gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(260px,2fr)]">
             <div className="flex flex-col items-center rounded-block border border-dashed border-line-strong bg-inset/40 px-6 py-12 text-center">
               <span className="mb-5 flex size-12 items-center justify-center rounded-block bg-hover text-fg-3">
@@ -108,24 +101,15 @@ export function DataPage() {
           </div>
         ) : (
           <>
-            <div className="mt-7 flex flex-wrap items-center gap-4 rounded-block border border-line p-5">
-              <span className="flex size-11 shrink-0 items-center justify-center rounded-control bg-inset text-fg-3">
-                <FileText aria-hidden className="size-5" />
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="mb-1 text-small text-fg-3">Выбранный датасет</p>
-                <p className="break-all text-read font-semibold text-fg">
-                  {state.logs.name || state.logs.file || "Выбранный датасет"}
-                </p>
-                <p className="mt-1 text-small text-fg-3">
-                  {count(state.logs.total, "разговор", "разговора", "разговоров")}
-                  {state.logs.updatedAt ? ` · загружено ${when(state.logs.updatedAt)}` : ""}
-                </p>
-              </div>
-              <span className="inline-flex w-full items-center gap-1.5 pl-[60px] text-small font-medium text-ok sm:w-auto sm:pl-0">
-                <Check aria-hidden className="size-4" />
-                Файл прочитан
-              </span>
+            <div className="mt-8 border-t border-line pt-6">
+              <p className="text-small text-fg-3">Просмотр выбранного датасета</p>
+              <h3 className="mt-1 break-words text-title font-semibold text-fg">
+                {state.logs.name || state.logs.file}
+              </h3>
+              <p className="mt-2 text-small text-fg-3">
+                {count(state.logs.total, "разговор", "разговора", "разговоров")}
+                {state.logs.updatedAt ? ` · загружено ${when(state.logs.updatedAt)}` : ""}
+              </p>
             </div>
             <div className="mt-5 grid gap-4 sm:grid-cols-2">
               <CheckRoute check="tone" state={state} />

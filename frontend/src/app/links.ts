@@ -72,3 +72,7 @@ export const toneCheckLink = (step?: CheckStep) => `${SECTIONS.tone}/check${quer
 
 /** The saved checks of a check, one of them open when given. */
 export const historyLink = (check: Check, id?: string | null) => `${ROOT[check]}/history${query({ id })}`;
+
+/** New work and its frozen report live inside the check they belong to. */
+export const launchLink = (check: Check, id?: string) => `${ROOT[check]}/${id ? `launches/${enc(id)}` : "launch"}`;
+export const judgesLink = (check: Check) => `${ROOT[check]}/judges`;

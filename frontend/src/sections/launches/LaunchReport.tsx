@@ -1,9 +1,9 @@
 import { KnowledgeEvidence } from "../../product/KnowledgeEvidence";
 import { useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigate, useParams } from "react-router-dom";
 import { ArrowRight, RotateCcw, Square } from "lucide-react";
 import { Header } from "../../app/Header";
-import { historyLink, runLink, stageRoot } from "../../app/links";
+import { historyLink, launchLink, runLink, stageRoot } from "../../app/links";
 import { api } from "../../lab/api";
 import { CHECK_NAME } from "../../lab/checks";
 import { MODE_NAME, useLaunch, useQuestions, type Mode, type Pair } from "../../lab/launches";
@@ -14,7 +14,9 @@ import { Button, buttonClass } from "../../ui/Button";
 import { LoadFailed } from "../../ui/LoadFailed";
 import { Skeleton } from "../../ui/EmptyState";
 import { Sheet } from "../../ui/Sheet";
-import { STATUS } from "./LaunchHistory";
+import { LaunchStatus } from "./LaunchStatus";
+import { StageResult } from "../../product/StageResult";
+import { CheckHeader } from "../checks/CheckHeader";
 
 function pairLabel(item: Pair): string {
   if (item.comparable && item.baseline?.status === "FAIL" && item.status === "PASS") return "Исправлено";
@@ -27,7 +29,8 @@ function pairLabel(item: Pair): string {
 
 function Pairs({ id }: { id: string }) {
   const q = useQuestions(id);
-  const [chosen, setChosen] = useState<Pair | null>(null);
+  const [chosenId, setChosenId] = useState<string | null>(null);
+  const chosen = q.data?.items.find((item) => item.dialogueId === chosenId);
   if (q.isError) return <LoadFailed title="Ответы не загрузились" error={q.error} onRetry={() => q.refetch()} />;
   if (!q.data) return <Skeleton className="h-40" />;
   return (
@@ -40,8 +43,8 @@ function Pairs({ id }: { id: string }) {
         {q.data.items.map((item) => (
           <li key={item.dialogueId}>
             <button
-              className="flex w-full items-center gap-3 px-5 py-4 text-left hover:bg-hover"
-              onClick={() => setChosen(item)}
+              className="flex w-full flex-wrap items-center gap-3 px-5 py-4 text-left transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-run/60"
+              onClick={() => setChosenId(item.dialogueId)}
             >
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-body font-medium text-fg">{item.name}</span>
@@ -58,7 +61,13 @@ function Pairs({ id }: { id: string }) {
         ))}
       </ul>
       {chosen && (
-        <Sheet open width="lg" onClose={() => setChosen(null)} title={chosen.name} sub={`Диалог ${chosen.dialogueId}`}>
+        <Sheet
+          open
+          width="lg"
+          onClose={() => setChosenId(null)}
+          title={chosen.name}
+          sub={`Диалог ${chosen.dialogueId}`}
+        >
           <div className="p-5">
             <div className="grid gap-7 md:grid-cols-2">
               <section>
@@ -121,6 +130,7 @@ function Pairs({ id }: { id: string }) {
 }
 export function LaunchReport() {
   const { id } = useParams();
+  const { pathname } = useLocation();
   const q = useLaunch(id);
   const { state, refresh } = useLabState();
   const navigate = useNavigate();
@@ -128,13 +138,13 @@ export function LaunchReport() {
   const [error, setError] = useState("");
   const record = q.data;
   const retry = async () => {
-    if (!id || busy) return;
+    if (!id || !record || busy) return;
     setBusy(true);
     setError("");
     try {
       const next = await api<{ id: string }>(`/api/launches/${id}/retry`, {});
       await refresh();
-      navigate(`/launches/${next.id}`);
+      navigate(launchLink(record.check, next.id));
       await q.refetch();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -168,12 +178,13 @@ export function LaunchReport() {
         <Skeleton className="m-6 h-60" />
       </>
     );
+  if (pathname !== launchLink(record.check, record.id))
+    return <Navigate to={launchLink(record.check, record.id)} replace />;
   const questions = record.modes.questions?.questionsId;
   return (
     <div>
-      <Header
-        title="Отчёт запуска"
-        crumbs={[{ label: CHECK_NAME[record.check], to: stageRoot(record.check) }]}
+      <CheckHeader
+        check={record.check}
         actions={
           record.status === "running" ? (
             <Button
@@ -186,7 +197,13 @@ export function LaunchReport() {
             </Button>
           ) : (
             <Button icon={RotateCcw} loading={busy} disabled={!!state?.job.running} onClick={retry}>
-              {record.status === "done" ? "Повторить запуск" : "Продолжить"}
+              {record.status === "done" ? (
+                <>
+                  Повторить<span className="hidden sm:inline"> запуск</span>
+                </>
+              ) : (
+                "Продолжить"
+              )}
             </Button>
           )
         }
@@ -202,44 +219,47 @@ export function LaunchReport() {
               {record.judge ? `${record.judge.name} · v${record.judge.version}` : "Критерии из кода агента"}
             </p>
           </div>
-          <span
-            role="status"
-            className={`rounded-full px-3 py-1 text-body ${record.status === "failed" ? "bg-bad/5 text-bad" : "bg-inset text-fg-2"}`}
-          >
-            {STATUS[record.status] ?? record.status}
+          <span role="status">
+            <LaunchStatus status={record.status} />
           </span>
         </div>
-        {error && (
+        {(error || record.error) && (
           <p role="alert" className="mt-4 text-bad">
-            {error}
+            {error || record.error}
           </p>
         )}
-        <div className="mt-7 grid gap-4 md:grid-cols-3">
+        <div className="mt-7 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {Object.entries(record.modes).map(([mode, result]) => {
             const m = result.metric;
             const href = result.checkId
-              ? historyLink(record.check, result.checkId)
+              ? state?.checks[record.check]?.checkId === result.checkId
+                ? stageRoot(record.check)
+                : historyLink(record.check, result.checkId)
               : result.runId
                 ? runLink(result.runId)
                 : null;
             return (
               <section key={mode} className="flex flex-col rounded-block border border-line p-5">
                 <h3 className="text-read font-semibold text-fg">{MODE_NAME[mode as Mode]}</h3>
-                <p className="mt-2 text-small text-fg-3">{STATUS[result.status] ?? result.status}</p>
-                {m && (
-                  <>
-                    {m.measured > 0 ? (
-                      <p className={`mt-5 text-display font-semibold ${m.failed ? "text-bad" : "text-fg"}`}>
-                        {m.failed}
-                        <span className="ml-2 text-read font-normal text-fg-3">с ошибками</span>
-                      </p>
-                    ) : (
-                      <p className="mt-5 text-title font-semibold text-fg-3">Нет оценки</p>
-                    )}
-                    <p className="mt-2 text-body text-fg-3">
-                      Оценено {m.measured ?? m.passed + m.failed} · без оценки {m.unmeasured ?? 0}
-                    </p>
-                  </>
+                <div className="mt-2">
+                  <LaunchStatus status={result.status} />
+                </div>
+                {m ? (
+                  <StageResult
+                    size="display"
+                    className="mt-5"
+                    failed={m.failed}
+                    checked={m.measured}
+                    unchecked={m.unmeasured}
+                  />
+                ) : (
+                  <p className="mt-5 text-body text-fg-3">
+                    {result.status === "pending"
+                      ? "Начнётся после предыдущего режима."
+                      : result.status === "running"
+                        ? "Собираем диалоги и оценки…"
+                        : "Результат ещё не получен."}
+                  </p>
                 )}
                 {result.error && (
                   <p role="alert" className="mt-4 text-small text-bad">
@@ -247,7 +267,7 @@ export function LaunchReport() {
                   </p>
                 )}
                 {href && (
-                  <Link to={href} className={`mt-5 ${buttonClass({ variant: "outline" })}`}>
+                  <Link to={href} className={`mt-5 self-start ${buttonClass({ variant: "outline" })}`}>
                     Разобрать результат
                     <ArrowRight className="size-3.5" />
                   </Link>
@@ -258,8 +278,8 @@ export function LaunchReport() {
         </div>
         <p className="mt-4 text-small text-fg-3">Для каждого режима сохранены свои диалоги и оценки.</p>
         {questions && <Pairs id={questions} />}
-        <Link to="/launches" className="mt-8 inline-flex items-center gap-2 text-body text-run">
-          Все запуски
+        <Link to={historyLink(record.check)} className="mt-8 inline-flex items-center gap-2 text-body text-run">
+          История этой проверки
           <ArrowRight className="size-3.5" />
         </Link>
       </div>

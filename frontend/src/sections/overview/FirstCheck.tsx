@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { ArrowRight, Check, Database, FlaskConical, MessageSquareQuote, Target } from "lucide-react";
-import { SECTIONS, toneCheckLink } from "../../app/links";
+import { SECTIONS, launchLink } from "../../app/links";
 import { count } from "../../lab/format";
 import { codeSources, customAccuracy, TONE_ID } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
@@ -13,7 +13,6 @@ export function FirstCheck({ state }: { state: LabState }) {
   const policy = state.sources.find((source) => source.id === TONE_ID);
   const code = codeSources(state);
   const custom = customAccuracy(state);
-  const started = !!state.toneOfVoice || (state.job.running && state.job.kind === "tone-criteria");
   const cards = [
     {
       title: "Tone of voice",
@@ -21,8 +20,8 @@ export function FirstCheck({ state }: { state: LabState }) {
       description: "Соблюдает ли агент правила общения: тон, обращение и ясность ответа.",
       ready: !!policy,
       need: policy ? policy.origin : "Нужны правила общения — текст или документ",
-      to: started ? "/tone/launch" : toneCheckLink("materials"),
-      action: started ? "Продолжить" : policy ? "К проверке" : "Добавить правила",
+      to: launchLink("tone"),
+      action: "Настроить проверку",
     },
     {
       title: "Точность",
@@ -33,8 +32,8 @@ export function FirstCheck({ state }: { state: LabState }) {
         ? `Правила: ${custom.origin}`
         : code.length
           ? `Код прочитан · ${count(code.length, "источник", "источника", "источников")}`
-          : "Нужен код агента — промпты и инструменты",
-      to: "/accuracy/launch",
+          : "Выберите набор правил или прочитайте код агента",
+      to: launchLink("code"),
       action: custom || code.length ? "К проверке" : "Настроить проверку",
     },
   ];

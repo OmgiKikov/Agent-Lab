@@ -1,17 +1,19 @@
 import { useState } from "react";
-import { Check as CheckIcon, Download, Plus, Pencil, Sparkles } from "lucide-react";
-import { Header } from "../../app/Header";
-import { StageTabs } from "../../app/StageTabs";
-import { CHECK_NAME } from "../../lab/checks";
+import { Link } from "react-router-dom";
+import { Download, Plus, Sparkles } from "lucide-react";
+import { toneCheckLink } from "../../app/links";
 import { useJudges, type JudgeVersion } from "../../lab/judges";
-import { api, textFile } from "../../lab/api";
+import { textFile } from "../../lab/api";
 import { useLabState } from "../../lab/LabProvider";
 import { download } from "../../lab/problemReport";
-import { count, when } from "../../lab/format";
 import type { Check } from "../../lab/types";
-import { Button } from "../../ui/Button";
+import { Button, buttonClass } from "../../ui/Button";
+import { Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
+import { CheckHeader } from "../checks/CheckHeader";
+import { CriteriaNav } from "../criteria/CriteriaNav";
 import { RuleEditor } from "./RuleEditor";
+import { RuleSet } from "./RuleSet";
 
 export function JudgesPage({ check }: { check: Check }) {
   const library = useJudges(check);
@@ -30,114 +32,88 @@ export function JudgesPage({ check }: { check: Check }) {
       setBusy(false);
     }
   };
-  const blocked = busy || !!state?.job.running;
+  const blocked = busy || library.changing || !!state?.job.running;
+  const groups = new Map<string, JudgeVersion[]>();
+  for (const version of library.data?.versions ?? [])
+    groups.set(version.setId, [...(groups.get(version.setId) ?? []), version]);
+  const sets = [...groups.values()].sort(
+    (a, b) =>
+      Number(b.some((v) => v.id === library.data?.selectedId)) -
+      Number(a.some((v) => v.id === library.data?.selectedId)),
+  );
   return (
     <div>
-      <Header
-        title={`${CHECK_NAME[check]} · Правила судьи`}
-        tabs={<StageTabs stage={check} />}
-        actions={
-          <Button variant="primary" icon={Plus} disabled={blocked} onClick={() => setEditing(null)}>
+      <CheckHeader check={check} />
+      <CriteriaNav check={check} />
+      <div className="max-w-[1120px] px-4 py-8 lg:px-10">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="max-w-[65ch]">
+            <h2 className="text-title font-semibold text-fg">Правила для следующей проверки</h2>
+            <p className="mt-2 text-read text-fg-3">
+              Каждый набор хранит свои версии. Новая версия применяется к следующим запускам; оценки и ответы людей в
+              истории сохраняются.
+            </p>
+          </div>
+          <Button icon={Plus} disabled={blocked || !library.data} onClick={() => setEditing(null)}>
             Новый набор
           </Button>
-        }
-      />
-      <div className="max-w-[1120px] px-4 py-8 lg:px-10">
-        <h2 className="text-title font-semibold text-fg">Наборы правил и версии</h2>
-        <p className="mt-2 max-w-[65ch] text-read text-fg-3">
-          Выберите правила перед запуском. Изменения сохраняются новой версией, старые проверки остаются
-          воспроизводимыми.
-        </p>
-        {check === "code" && (
+        </div>
+        <div className="mt-5 flex flex-wrap gap-2">
+          {check === "tone" && (
+            <Link to={toneCheckLink("materials")} className={buttonClass({ variant: "ghost" })}>
+              <Sparkles aria-hidden className="size-3.5" />
+              Собрать из документа
+            </Link>
+          )}
+          {check === "code" && (
+            <Button disabled={blocked || !library.data?.selectedId} onClick={() => act(() => library.select(null))}>
+              Использовать критерии из кода агента
+            </Button>
+          )}
           <Button
-            className="mt-5"
-            disabled={blocked || !library.data?.selectedId}
-            onClick={() => act(() => library.select(null))}
-          >
-            Использовать критерии из кода агента
-          </Button>
-        )}
-        {check === "tone" && library.selected && (
-          <Button
-            className="mt-5"
-            icon={Sparkles}
-            disabled={blocked || !state?.logs.total}
+            variant="ghost"
+            icon={Download}
+            disabled={busy || !library.data}
             onClick={() =>
-              act(async () => {
-                await api("/api/tone-of-voice/criteria", {});
-                await library.reload();
-              })
+              act(async () => download(`rules-${check}.md`, await textFile(`/api/judges/${check}/export`)))
             }
           >
-            Сформировать критерии из выбранных правил
+            Скачать текущие правила
           </Button>
+        </div>
+        {check === "code" && library.data && !library.selected && (
+          <p className="mt-3 text-body text-fg-3">
+            Для запуска выбраны критерии из кода агента. Наборы ниже можно использовать вместо них.
+          </p>
         )}
-        <Button
-          className="mt-5 ml-2"
-          icon={Download}
-          onClick={() => act(async () => download(`rules-${check}.md`, await textFile(`/api/judges/${check}/export`)))}
-        >
-          Скачать текущие правила
-        </Button>
         {error && (
           <p role="alert" className="mt-4 text-bad">
             {error}
           </p>
         )}
-        {library.isError && (
+        {library.isError ? (
           <LoadFailed title="Не удалось загрузить правила" error={library.error} onRetry={() => library.refetch()} />
-        )}
-        <div className="mt-6 space-y-4">
-          {library.data?.versions
-            .slice()
-            .reverse()
-            .map((v) => (
-              <section key={v.id} className="rounded-block border border-line p-5">
-                <div className="flex flex-wrap items-start gap-3">
-                  <div className="min-w-0 flex-1">
-                    <h3 className="text-read font-semibold text-fg">
-                      {v.name} <span className="font-normal text-fg-3">· v{v.version}</span>
-                    </h3>
-                    <p className="mt-1 text-small text-fg-3">
-                      {count(v.criteria.length, "критерий", "критерия", "критериев")} ·{" "}
-                      {v.builtin ? "Встроенный набор" : when(v.createdAt)}
-                    </p>
-                  </div>
-                  <Button
-                    icon={v.id === library.data?.selectedId ? CheckIcon : undefined}
-                    disabled={blocked || v.id === library.data?.selectedId}
-                    onClick={() => act(() => library.select(v.id))}
-                  >
-                    {v.id === library.data?.selectedId ? "Выбран" : "Выбрать"}
-                  </Button>
-                  <Button variant="ghost" icon={Pencil} disabled={blocked} onClick={() => setEditing(v)}>
-                    {v.builtin ? "Создать копию" : "Изменить"}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    icon={Download}
-                    aria-label={`Скачать ${v.name} v${v.version}`}
-                    onClick={() =>
-                      act(async () =>
-                        download(`rules-v${v.version}.md`, await textFile(`/api/judge-versions/${v.id}/download`)),
-                      )
-                    }
-                  />
-                </div>
-                <details className="mt-4 border-t border-line pt-3">
-                  <summary className="cursor-pointer text-body text-fg-3">Посмотреть критерии</summary>
-                  <ol className="mt-3 list-inside list-decimal space-y-3">
-                    {v.criteria.map((r) => (
-                      <li key={r.id} className="text-body text-fg">
-                        <b>{r.name}</b>
-                        <p className="mt-1 whitespace-pre-wrap text-fg-3">{r.text}</p>
-                      </li>
-                    ))}
-                  </ol>
-                </details>
-              </section>
+        ) : !library.data ? (
+          <Skeleton className="mt-6 h-60" />
+        ) : (
+          <div className="mt-6 divide-y divide-line overflow-hidden rounded-block border border-line">
+            {sets.map((versions) => (
+              <RuleSet
+                key={versions[0].setId}
+                versions={versions}
+                selectedId={library.data.selectedId}
+                blocked={blocked}
+                onSelect={(id) => void act(() => library.select(id))}
+                onEdit={setEditing}
+                onDownload={(v) =>
+                  void act(async () =>
+                    download(`rules-v${v.version}.md`, await textFile(`/api/judge-versions/${v.id}/download`)),
+                  )
+                }
+              />
             ))}
-        </div>
+          </div>
+        )}
       </div>
       {editing !== undefined && (
         <RuleEditor

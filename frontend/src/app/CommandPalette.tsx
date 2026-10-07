@@ -42,7 +42,7 @@ import {
   scenariosLink,
   SECTIONS,
   stageRoot,
-  toneCheckLink,
+  launchLink,
 } from "./links";
 
 type Entry = { id: string; group: string; label: string; sub?: string; icon: LucideIcon; run: () => void };
@@ -186,17 +186,17 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         id: "a-tone",
         group: "Действия",
         label: "Проверить tone of voice",
-        sub: "По шагам: материалы, критерии, проверка, итог",
+        sub: "Датасет, правила и режимы проверки",
         icon: Play,
-        run: go(toneCheckLink()),
+        run: go(launchLink("tone")),
       },
       {
         id: "a-code",
         group: "Действия",
         label: "Проверить точность",
-        sub: "Разговоры по критериям из кода агента",
+        sub: "Критерии из кода или выбранного набора правил",
         icon: Play,
-        run: go(`${SECTIONS.accuracy}?assess=1`),
+        run: go(launchLink("code")),
       },
       ...results.flatMap((c): Entry[] => [
         {

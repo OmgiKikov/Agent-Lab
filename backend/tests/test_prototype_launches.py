@@ -147,6 +147,40 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['agentVersion'], 'v-release')
         self.assertNotIn('average', result)
 
+    async def test_grouped_check_preserves_native_severity_proposals(self):
+        for check, flow in [('tone', 'tone'), ('code', 'accuracy')]:
+            with self.subTest(check=check):
+
+                async def checked(*args, selected=check, **kwargs):
+                    storage.documents.save(checks.result(selected), {'checkId': 'saved', 'summary': {}})
+
+                with (
+                    patch(f'lab.flows.{flow}.check', new=AsyncMock(side_effect=checked)),
+                    patch('lab.flows.severity.propose', new=AsyncMock(return_value=None)) as propose,
+                ):
+                    result = await launches._check({'check': check, 'count': 1}, lambda **_: None)
+                self.assertEqual(result['checkId'], 'saved')
+                self.assertEqual(propose.await_args.args[0], check)
+
+    async def test_stopping_severity_does_not_start_remaining_launch_modes(self):
+        given = {'check': 'tone', 'count': 1, 'modes': ['dataset', 'questions']}
+
+        async def checked(*args, **kwargs):
+            storage.documents.save(tone.RESULT, {'checkId': 'saved', 'summary': {}})
+
+        with (
+            patch('lab.flows.tone.check', new=AsyncMock(side_effect=checked)),
+            patch('lab.flows.severity.propose', new=AsyncMock(side_effect=asyncio.CancelledError)),
+            patch('lab.flows.questions.run', new=AsyncMock()) as replay,
+            self.assertRaises(asyncio.CancelledError),
+        ):
+            await launches.run(given, lambda **_: None)
+        replay.assert_not_awaited()
+        self.assertEqual(storage.documents.load(tone.RESULT)['checkId'], 'saved')
+        record = storage.launches.listed('launch')[0]
+        self.assertEqual(record['status'], 'stopped')
+        self.assertEqual(record['modes']['questions']['status'], 'pending')
+
     async def test_real_pipeline_publishes_history_questions_and_simulation(self):
         def judged(rules, shown, *args, **kwargs):
             text = next(row['text'] for row in shown if row['role'] == 'AGENT')
@@ -186,6 +220,15 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
             patch('lab.roles.judge.run_verdict', new=AsyncMock(side_effect=run_judged)),
             patch('lab.roles.scenario.scenario', new=AsyncMock(return_value=situation)),
             patch(
+                'lab.roles.severity.propose',
+                new=AsyncMock(
+                    return_value=SimpleNamespace(
+                        value={'c1': {'serious': False, 'reason': 'Тестовое предложение'}},
+                        model='test',
+                    )
+                ),
+            ),
+            patch(
                 'lab.roles.customer.reply', new=AsyncMock(return_value=SimpleNamespace(value='[КОНЕЦ]', model='test'))
             ),
             patch('lab.agents.world.templates', return_value=None),
@@ -201,6 +244,7 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(self.jobs.state['running'])
         result = storage.launches.get('launch', launch_id)
         self.assertEqual(result['status'], 'done', result)
+        self.assertTrue(storage.severity.proposed()['tone']['proposals'])
         baseline = storage.history.get('tone', result['modes']['dataset']['checkId'])
         self.assertEqual(baseline['check']['dataset']['datasetId'], self.dataset['id'])
         self.assertEqual(baseline['check']['agentVersion'], 'v-checkpoint')

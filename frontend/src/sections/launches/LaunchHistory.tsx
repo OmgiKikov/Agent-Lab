@@ -1,5 +1,8 @@
 import { Link } from "react-router-dom";
 import { ChevronRight } from "lucide-react";
+import { launchLink } from "../../app/links";
+import { Skeleton } from "../../ui/EmptyState";
+import { LaunchStatus } from "./LaunchStatus";
 import { Header } from "../../app/Header";
 import { MODE_NAME, useLaunches, type Mode } from "../../lab/launches";
 import { when } from "../../lab/format";
@@ -7,13 +10,6 @@ import { CHECK_NAME } from "../../lab/checks";
 import type { Check } from "../../lab/types";
 import { LoadFailed } from "../../ui/LoadFailed";
 
-export const STATUS: Record<string, string> = {
-  pending: "В очереди",
-  running: "Выполняется",
-  done: "Завершён",
-  failed: "Есть ошибки выполнения",
-  stopped: "Остановлен",
-};
 export function LaunchHistory({ check }: { check?: Check }) {
   const q = useLaunches(check);
   return (
@@ -21,11 +17,17 @@ export function LaunchHistory({ check }: { check?: Check }) {
       <h2 className="text-read font-semibold text-fg">История запусков</h2>
       {q.isError ? (
         <LoadFailed title="История не загрузилась" error={q.error} onRetry={() => q.refetch()} />
+      ) : !q.data ? (
+        <Skeleton className="mt-3 h-24" />
       ) : (
         <div className="mt-3 divide-y divide-line rounded-block border border-line">
           {q.data?.launches.map((r) => (
-            <Link key={r.id} to={`/launches/${r.id}`} className="flex items-center gap-3 px-5 py-4 hover:bg-hover">
-              <div className="min-w-0 flex-1">
+            <Link
+              key={r.id}
+              to={launchLink(r.check, r.id)}
+              className="flex flex-wrap items-center gap-3 px-5 py-4 transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-run/60"
+            >
+              <div className="min-w-0 flex-1 basis-52">
                 <p className="text-body font-medium text-fg">
                   {r.agentVersion || CHECK_NAME[r.check]} · {r.dataset?.name || r.dataset?.file || "Датасет"}
                 </p>
@@ -36,9 +38,7 @@ export function LaunchHistory({ check }: { check?: Check }) {
                     .join(" + ")}
                 </p>
               </div>
-              <span className={`text-small ${r.status === "failed" ? "text-bad" : "text-fg-3"}`}>
-                {STATUS[r.status] ?? r.status}
-              </span>
+              <LaunchStatus status={r.status} />
               <ChevronRight className="size-4 shrink-0 text-fg-3" />
             </Link>
           ))}

@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { Input, Textarea } from "../../ui/Field";
+import { useEffect, useState } from "react";
+import { agentKey } from "../../app/agent";
 import { Plus, Trash2, Upload } from "lucide-react";
 import { api, upload } from "../../lab/api";
 import { useJudges, type JudgeVersion } from "../../lab/judges";
@@ -7,7 +9,6 @@ import type { Check, ToneCriterion } from "../../lab/types";
 import { Button } from "../../ui/Button";
 import { Sheet } from "../../ui/Sheet";
 
-const FIELD = "mt-1 w-full rounded-control border border-line-strong bg-canvas px-3 py-2 text-body text-fg";
 const fresh = (): ToneCriterion => ({
   id: crypto.randomUUID(),
   name: "",
@@ -28,11 +29,31 @@ export function RuleEditor({
   onClose: () => void;
 }) {
   const library = useJudges(check);
-  const [expectedBase] = useState(baseId ?? version?.id);
+  const draftKey = agentKey(`rule-draft-${check}-${version?.id ?? "new"}`);
+  const [savedDraft] = useState(() => {
+    try {
+      const value = JSON.parse(localStorage.getItem(draftKey) ?? "null");
+      return value && typeof value.name === "string" && typeof value.policy === "string" && Array.isArray(value.rules)
+        ? (value as { name: string; policy: string; rules: ToneCriterion[]; baseId?: string })
+        : null;
+    } catch {
+      return null;
+    }
+  });
+  const [expectedBase] = useState(savedDraft?.baseId ?? baseId ?? version?.id);
   const { state } = useLabState();
-  const [name, setName] = useState(version ? `${version.name}${version.builtin ? " · моя версия" : ""}` : "");
-  const [policy, setPolicy] = useState(version?.policy ?? "");
-  const [rules, setRules] = useState<ToneCriterion[]>(version?.criteria ?? [fresh()]);
+  const [name, setName] = useState(
+    savedDraft?.name ?? (version ? `${version.name}${version.builtin ? " · моя версия" : ""}` : ""),
+  );
+  const [policy, setPolicy] = useState(savedDraft?.policy ?? version?.policy ?? "");
+  const [rules, setRules] = useState<ToneCriterion[]>(savedDraft?.rules ?? version?.criteria ?? [fresh()]);
+  useEffect(() => {
+    try {
+      localStorage.setItem(draftKey, JSON.stringify({ name, policy, rules, baseId: expectedBase }));
+    } catch {
+      /* Editing still works when storage is unavailable. */
+    }
+  }, [draftKey, name, policy, rules, expectedBase]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const patch = (i: number, change: Partial<ToneCriterion>) =>
@@ -65,6 +86,11 @@ export function RuleEditor({
         baseId: version && !version.builtin ? expectedBase : null,
       });
       await library.reload();
+      try {
+        localStorage.removeItem(draftKey);
+      } catch {
+        /* Optional local draft. */
+      }
       onClose();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -79,7 +105,7 @@ export function RuleEditor({
       open
       onClose={() => !busy && onClose()}
       title={version ? "Новая версия правил" : "Новый набор правил"}
-      sub="Предыдущие версии и результаты проверок сохранятся."
+      sub="Черновик сохраняется в этом браузере. Предыдущие версии и результаты проверок сохранятся."
       actions={
         <Button variant="primary" loading={busy} disabled={!valid || state?.job.running} onClick={save}>
           Сохранить и выбрать
@@ -90,17 +116,17 @@ export function RuleEditor({
       <fieldset disabled={busy || state?.job.running} className="space-y-6 p-5 sm:p-7">
         <label className="block text-body font-medium text-fg">
           Название набора
-          <input autoFocus maxLength={160} value={name} onChange={(e) => setName(e.target.value)} className={FIELD} />
+          <Input autoFocus maxLength={160} value={name} onChange={(e) => setName(e.target.value)} className="mt-1" />
         </label>
         <div>
           <label className="block text-body font-medium text-fg">
             Правила
-            <textarea
+            <Textarea
               rows={5}
               value={policy}
               maxLength={50000}
               onChange={(e) => setPolicy(e.target.value)}
-              className={FIELD}
+              className="mt-1"
             />
           </label>
           <label className="mt-2 inline-flex cursor-pointer items-center gap-2 text-body font-medium text-fg">
@@ -117,8 +143,8 @@ export function RuleEditor({
             />
           </label>
           <p className="mt-2 text-small text-fg-3">
-            Из файла сначала добавляется один критерий со всем текстом. Разделите его на отдельные требования или
-            сформируйте критерии автоматически после сохранения.
+            Из файла сначала добавляется один критерий со всем текстом. Разделите его на отдельные требования.
+            {check === "tone" && " Для автоматической сборки используйте «Собрать из документа» в библиотеке правил."}
           </p>
         </div>
         <section>
@@ -128,13 +154,12 @@ export function RuleEditor({
               <div key={rule.id} className="rounded-block border border-line bg-canvas p-4">
                 <div className="flex items-center gap-3">
                   <span className="text-small text-fg-3">{i + 1}</span>
-                  <input
+                  <Input
                     aria-label={`Название критерия ${i + 1}`}
                     value={rule.name}
                     maxLength={200}
                     onChange={(e) => patch(i, { name: e.target.value })}
                     placeholder="Название критерия"
-                    className={`${FIELD} !mt-0`}
                   />
                   <Button
                     variant="ghost"
@@ -145,32 +170,32 @@ export function RuleEditor({
                 </div>
                 <label className="mt-3 block text-small text-fg-3">
                   Что должен делать агент
-                  <textarea
+                  <Textarea
                     rows={3}
                     value={rule.text}
                     maxLength={50000}
                     onChange={(e) => patch(i, { text: e.target.value, quote: "" })}
-                    className={FIELD}
+                    className="mt-1"
                   />
                 </label>
                 <details className="mt-3">
                   <summary className="cursor-pointer text-small text-fg-3">Условия и допустимые ответы</summary>
                   <label className="mt-2 block text-small text-fg-3">
                     Когда применять
-                    <input
+                    <Input
                       value={rule.condition}
                       onChange={(e) => patch(i, { condition: e.target.value })}
                       maxLength={5000}
-                      className={FIELD}
+                      className="mt-1"
                     />
                   </label>
                   <label className="mt-2 block text-small text-fg-3">
                     Что считать допустимым
-                    <textarea
+                    <Textarea
                       value={rule.acceptable}
                       maxLength={5000}
                       onChange={(e) => patch(i, { acceptable: e.target.value })}
-                      className={FIELD}
+                      className="mt-1"
                     />
                   </label>
                 </details>

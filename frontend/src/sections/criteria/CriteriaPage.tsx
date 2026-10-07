@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { ChevronDown, PencilLine, RotateCcw } from "lucide-react";
-import { SECTIONS, toneCheckLink, type Check } from "../../app/links";
+import { ChevronDown, RotateCcw } from "lucide-react";
+import { launchLink, type Check } from "../../app/links";
 import { useWide } from "../../app/useWide";
 import { useCriteria, type Criterion } from "../../lab/criteria";
 import { count, day, plural } from "../../lab/format";
@@ -17,6 +17,7 @@ import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
 import { Menu } from "../../ui/Menu";
 import { Segmented } from "../../ui/Segmented";
+import { CriteriaNav } from "./CriteriaNav";
 import { CheckHeader } from "../checks/CheckHeader";
 import { Reextract } from "./Reextract";
 import { CodeView } from "./CodeView";
@@ -116,30 +117,24 @@ export function CriteriaPage({ check }: { check: Check }) {
     ] as const
   ).filter(([k]) => (k === "log" ? !!data?.log : !!data?.sim));
   const header = (
-    <CheckHeader
-      check={check}
-      actions={
-        tone ? (
-          <Link
-            to={`${tone ? "/tone" : "/accuracy"}/judges`}
-            title="Изменить набор правил для следующей проверки"
-            className={buttonClass()}
-          >
-            <PencilLine aria-hidden className="size-3.5" />
-            Изменить критерии
-          </Link>
-        ) : (
-          <Button
-            icon={RotateCcw}
-            onClick={() => setReextract(true)}
-            disabled={busy || !codeSources(state).length}
-            title="Модель прочитает код агента заново и извлечёт критерии дословно"
-          >
-            Извлечь заново
-          </Button>
-        )
-      }
-    />
+    <>
+      <CheckHeader
+        check={check}
+        actions={
+          !tone && !customAccuracy(state) ? (
+            <Button
+              icon={RotateCcw}
+              onClick={() => setReextract(true)}
+              disabled={busy || !codeSources(state).length}
+              title="Модель прочитает код агента заново и извлечёт критерии дословно"
+            >
+              Извлечь заново
+            </Button>
+          ) : undefined
+        }
+      />
+      <CriteriaNav check={check} />
+    </>
   );
   if (offline && !state)
     return (
@@ -174,20 +169,14 @@ export function CriteriaPage({ check }: { check: Check }) {
           title="Критериев пока нет"
           className="flex-1 justify-center"
           action={
-            tone ? (
-              <Link to={toneCheckLink()} className={buttonClass({ variant: "primary" })}>
-                Начать проверку
-              </Link>
-            ) : (
-              <Link to={SECTIONS.accuracy} className={buttonClass({ variant: "primary" })}>
-                {accuracySources(state).length ? "Оценить разговоры" : "Прочитать код"}
-              </Link>
-            )
+            <Link to={launchLink(check)} className={buttonClass({ variant: "primary" })}>
+              Настроить проверку
+            </Link>
           }
         >
           {tone
-            ? "Здесь будут критерии из ваших правил общения."
-            : "Здесь будут критерии из кода агента. Модель извлечёт их дословно при первой оценке разговоров."}
+            ? "Здесь появятся оценки по каждому критерию после проверки. Правила можно подготовить во вкладке «Правила для запуска»."
+            : "После проверки здесь появятся критерии из кода агента или выбранного набора правил и найденные нарушения."}
         </EmptyState>
       </div>
     );

@@ -1,3 +1,4 @@
+import { Input, Textarea } from "../../ui/Field";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Pencil } from "lucide-react";
@@ -67,23 +68,23 @@ export function Identity() {
         <div className="space-y-4">
           <label className="block text-body text-fg">
             Имя
-            <input
+            <Input
               autoFocus
               value={name}
               onChange={(e) => setName(e.target.value)}
               maxLength={80}
               disabled={busy}
-              className="mt-1 w-full rounded-control border border-line-strong bg-canvas px-3 py-2"
+              className="mt-1"
             />
           </label>
           <label className="block text-body text-fg">
             Описание
-            <textarea
+            <Textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               maxLength={200}
               disabled={busy}
-              className="mt-1 w-full rounded-control border border-line-strong bg-canvas px-3 py-2"
+              className="mt-1"
             />
           </label>
           {error && (

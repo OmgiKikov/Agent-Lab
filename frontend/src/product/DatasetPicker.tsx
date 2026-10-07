@@ -1,59 +1,67 @@
-import { useState } from "react";
-import { Database } from "lucide-react";
+import { useId, useState } from "react";
+import { Link } from "react-router-dom";
+import { SECTIONS } from "../app/links";
 import { count } from "../lab/format";
 import { useDatasets } from "../lab/datasets";
 import { useLabState } from "../lab/LabProvider";
-import { Button } from "../ui/Button";
+import { Select } from "../ui/Field";
+import { LoadFailed } from "../ui/LoadFailed";
+import { Skeleton } from "../ui/EmptyState";
 
-/** Dataset selection is shared by checks and simulations; changes are disabled while an agent job is running. */
+/** Only preparation screens change the working dataset; evidence screens keep their result's provenance. */
 export function DatasetPicker() {
+  const id = useId();
   const { state } = useLabState();
   const library = useDatasets();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  if (!library.data?.datasets.length) return null;
+  if (library.isError)
+    return <LoadFailed title="Датасеты не загрузились" error={library.error} onRetry={() => library.refetch()} />;
+  if (!library.data) return <Skeleton className="h-16" />;
   return (
-    <div className="flex flex-wrap items-center gap-2 text-body">
-      <Database aria-hidden className="size-4 text-fg-3" />
-      <label htmlFor="working-dataset" className="text-fg-3">
-        Датасет
-      </label>
-      <select
-        id="working-dataset"
-        value={library.data.activeId ?? ""}
-        disabled={busy || state?.job.running}
-        onChange={async (event) => {
-          setBusy(true);
-          setError("");
-          try {
-            await library.change("select", event.target.value);
-          } catch (cause) {
-            setError(cause instanceof Error ? cause.message : String(cause));
-          } finally {
-            setBusy(false);
-          }
-        }}
-        className="min-w-0 max-w-full flex-1 rounded-control border border-line-strong bg-canvas px-3 py-2 text-body text-fg sm:max-w-sm"
-      >
-        {!library.data.activeId && <option value="">Выберите датасет</option>}
-        {library.data.datasets.map((d) => (
-          <option key={d.id} value={d.id}>
-            {d.name} · {count(d.total, "разговор", "разговора", "разговоров")}
-          </option>
-        ))}
-      </select>
-      {busy && (
-        <span role="status" className="text-small text-fg-3">
-          Открываем…
-        </span>
+    <div className="text-body">
+      <div className="mb-2 flex items-baseline justify-between gap-3">
+        <label htmlFor={id} className="font-medium text-fg">
+          Датасет
+        </label>
+        <Link to={SECTIONS.data} className="text-small text-run hover:underline">
+          Библиотека данных
+        </Link>
+      </div>
+      {library.data.datasets.length ? (
+        <Select
+          id={id}
+          value={library.data.activeId ?? ""}
+          disabled={busy || library.changing || state?.job.running}
+          onChange={async (event) => {
+            setBusy(true);
+            setError("");
+            try {
+              await library.change("select", event.target.value);
+            } catch (cause) {
+              setError(cause instanceof Error ? cause.message : String(cause));
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          {!library.data.activeId && <option value="">Выберите датасет</option>}
+          {library.data.datasets.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.name} · {count(d.total, "разговор", "разговора", "разговоров")}
+            </option>
+          ))}
+        </Select>
+      ) : (
+        <p className="text-small text-fg-3">Добавьте выгрузку чата в библиотеку данных.</p>
       )}
-      {library.isError && (
-        <Button size="sm" onClick={() => library.refetch()}>
-          Обновить список
-        </Button>
+      {busy && (
+        <p role="status" className="mt-2 text-small text-fg-3">
+          Открываем…
+        </p>
       )}
       {error && (
-        <p role="alert" className="w-full text-small text-bad">
+        <p role="alert" className="mt-2 text-small text-bad">
           {error}
         </p>
       )}

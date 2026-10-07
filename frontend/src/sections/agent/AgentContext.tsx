@@ -1,3 +1,4 @@
+import { Input } from "../../ui/Field";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { BookOpen, Check, Plus, X } from "lucide-react";
@@ -15,7 +16,6 @@ type Context = {
   idpEmbedder: string;
   idpFilter: string;
 };
-const INPUT = "mt-1 w-full rounded-control border border-line-strong bg-canvas px-3 py-2 text-body text-fg";
 function Editor({ saved, onSaved }: { saved: Context; onSaved: () => Promise<unknown> }) {
   const { state, refresh } = useLabState();
   const [form, setForm] = useState(saved);
@@ -56,12 +56,12 @@ function Editor({ saved, onSaved }: { saved: Context; onSaved: () => Promise<unk
       <fieldset disabled={busy || state?.job.running} className="mt-5 space-y-5">
         <label className="block text-body font-medium text-fg">
           Ссылка на репозиторий <span className="font-normal text-fg-3">· вместо локальной папки</span>
-          <input
+          <Input
             type="url"
             value={form.repositoryUrl}
             onChange={(e) => patch("repositoryUrl", e.target.value)}
             placeholder="https://git.example/team/agent.git"
-            className={INPUT}
+            className="mt-1"
           />
           <span className="mt-1 block text-small font-normal text-fg-3">
             После сохранения нажмите «Прочитать код». Используется ваш настроенный доступ Git.
@@ -94,7 +94,7 @@ function Editor({ saved, onSaved }: { saved: Context; onSaved: () => Promise<unk
             ))}
           </div>
           <div className="mt-2 flex gap-2">
-            <input
+            <Input
               id="manual-tool"
               value={tool}
               maxLength={200}
@@ -106,7 +106,6 @@ function Editor({ saved, onSaved }: { saved: Context; onSaved: () => Promise<unk
                 }
               }}
               placeholder="Название инструмента"
-              className={`${INPUT} !mt-0`}
             />
             <Button icon={Plus} disabled={!tool.trim() || form.tools.length >= 100} onClick={add}>
               Добавить
@@ -130,7 +129,7 @@ function Editor({ saved, onSaved }: { saved: Context; onSaved: () => Promise<unk
             ).map(([key, label]) => (
               <label key={key} className="text-body text-fg">
                 {label}
-                <input value={form[key]} onChange={(e) => patch(key, e.target.value)} className={INPUT} />
+                <Input value={form[key]} onChange={(e) => patch(key, e.target.value)} className="mt-1" />
               </label>
             ))}
           </div>

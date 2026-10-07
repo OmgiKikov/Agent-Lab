@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
 export type SegmentedOption<T extends string> = {
@@ -25,6 +25,9 @@ export function Segmented<T extends string>({
   size?: "sm" | "md";
   label?: string;
 }) {
+  const refs = useRef(new Map<T, HTMLButtonElement>());
+  const enabled = options.filter((o) => !o.disabled);
+  const tabbable = enabled.some((o) => o.value === value) ? value : enabled[0]?.value;
   return (
     <div
       role="radiogroup"
@@ -38,6 +41,31 @@ export function Segmented<T extends string>({
             key={o.value}
             type="button"
             role="radio"
+            ref={(node) => {
+              if (node) refs.current.set(o.value, node);
+              else refs.current.delete(o.value);
+            }}
+            tabIndex={o.value === tabbable ? 0 : -1}
+            onKeyDown={(event) => {
+              const direction = ["ArrowRight", "ArrowDown"].includes(event.key)
+                ? 1
+                : ["ArrowLeft", "ArrowUp"].includes(event.key)
+                  ? -1
+                  : 0;
+              if (!direction && event.key !== "Home" && event.key !== "End") return;
+              event.preventDefault();
+              const index = enabled.findIndex((item) => item.value === o.value);
+              const next =
+                event.key === "Home"
+                  ? enabled[0]
+                  : event.key === "End"
+                    ? enabled[enabled.length - 1]
+                    : enabled[(index + direction + enabled.length) % enabled.length];
+              if (next) {
+                onChange(next.value);
+                refs.current.get(next.value)?.focus();
+              }
+            }}
             aria-checked={on}
             title={o.title}
             disabled={o.disabled}

@@ -1,3 +1,4 @@
+import { useDialogFocus } from "./dialogFocus";
 import * as Dialog from "@radix-ui/react-dialog";
 import type { ReactNode } from "react";
 
@@ -17,6 +18,7 @@ export function Modal({
   footer: ReactNode;
   onCloseAutoFocus?: (event: Event) => void;
 }) {
+  const focus = useDialogFocus(open, onCloseAutoFocus);
   return (
     <Dialog.Root
       open={open}
@@ -28,7 +30,7 @@ export function Modal({
         <Dialog.Overlay className="fixed inset-0 z-50 bg-fg/30 data-[state=open]:animate-in data-[state=open]:fade-in-0" />
         <Dialog.Content
           aria-describedby={undefined}
-          onCloseAutoFocus={onCloseAutoFocus}
+          {...focus}
           className="fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100dvh-32px)] w-[calc(100vw-32px)] max-w-[500px] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-sheet bg-side shadow-pop outline-none data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95"
         >
           <Dialog.Title className="shrink-0 px-5 pt-5 text-body font-semibold text-fg">{title}</Dialog.Title>

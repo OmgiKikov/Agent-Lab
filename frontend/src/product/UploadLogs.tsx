@@ -1,11 +1,12 @@
 import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { FileText, Upload, X } from "lucide-react";
-import { SECTIONS, toneCheckLink, type Check } from "../app/links";
+import { launchLink, type Check } from "../app/links";
 import { upload } from "../lab/api";
 import { count, plural } from "../lab/format";
 import { useLabState } from "../lab/LabProvider";
 import { Button } from "../ui/Button";
+import { Input } from "../ui/Field";
 import { Modal } from "../ui/Modal";
 import { ExportFormat } from "./ExportFormat";
 import { useToast } from "../ui/toast";
@@ -86,7 +87,7 @@ export function UploadButton({
       setOpen(false);
       setFile(null);
       setDatasetName("");
-      const next = check === "code" ? `${SECTIONS.accuracy}?assess=1` : check === "tone" ? toneCheckLink() : null;
+      const next = check ? launchLink(check) : null;
       const left = skipped
         ? `. Ещё ${count(skipped, "разговор не загружен", "разговора не загружены", "разговоров не загружены")}: ${plural(skipped, "в нём", "в них", "в них")} первым пишет агент или он не отвечает.`
         : "";
@@ -152,13 +153,13 @@ export function UploadButton({
         </p>
         <label className="mb-4 block text-body font-medium text-fg">
           Название датасета <span className="font-normal text-fg-3">· по желанию</span>
-          <input
+          <Input
             value={datasetName}
             onChange={(event) => setDatasetName(event.target.value)}
             maxLength={160}
             disabled={busy}
             placeholder={file?.name || "Например: Диалоги за октябрь"}
-            className="mt-2 w-full rounded-control border border-line-strong bg-canvas px-3 py-2"
+            className="mt-2"
           />
         </label>
         <input

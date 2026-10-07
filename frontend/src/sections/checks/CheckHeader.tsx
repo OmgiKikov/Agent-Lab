@@ -1,9 +1,11 @@
 import type { ReactNode } from "react";
-import { DatasetPicker } from "../../product/DatasetPicker";
+import { Link } from "react-router-dom";
+import { Plus } from "lucide-react";
+import { buttonClass } from "../../ui/Button";
 import { Header } from "../../app/Header";
 import { SectionJob } from "../../app/SectionJob";
 import { StageTabs } from "../../app/StageTabs";
-import type { Check } from "../../app/links";
+import { launchLink, type Check } from "../../app/links";
 import { CHECK_NAME } from "../../lab/checks";
 import { useLabState } from "../../lab/LabProvider";
 import { useProblems } from "../../lab/problems";
@@ -15,8 +17,11 @@ import { queueOf } from "../../lab/verdicts";
 const TASKS: Record<Check, string[]> = { tone: ["tone-check", "tone-criteria"], code: ["discover"] };
 
 /** With them, the proposal of which errors are serious (lab/severity) of this check: its task says its check. */
-const tasksOf = (check: Check, job: Job | undefined) =>
-  proposalCheck(job) === check ? [...TASKS[check], "severity"] : TASKS[check];
+const tasksOf = (check: Check, job: Job | undefined) => [
+  ...TASKS[check],
+  ...(proposalCheck(job) === check ? ["severity"] : []),
+  ...(job?.kind === "launch" && job.input?.check === check ? ["launch"] : []),
+];
 
 /** The tabs of a check with their counts: every conversation its result judged, the cases where two checks disagree. */
 function CheckTabs({ check }: { check: Check }) {
@@ -40,15 +45,16 @@ export function CheckHeader({ check, actions }: { check: Check; actions?: ReactN
     <Header
       title={CHECK_NAME[check]}
       tabs={<CheckTabs check={check} />}
-      actions={actions}
-      below={
+      actions={
         <>
-          <div className="border-t border-line px-4 py-3 lg:px-10">
-            <DatasetPicker />
-          </div>
-          <SectionJob kinds={tasksOf(check, state?.job)} />
+          {actions}
+          <Link to={launchLink(check)} className={buttonClass({ variant: "primary" })}>
+            <Plus aria-hidden className="size-3.5" />
+            Новая проверка
+          </Link>
         </>
       }
+      below={<SectionJob kinds={tasksOf(check, state?.job)} />}
     />
   );
 }
