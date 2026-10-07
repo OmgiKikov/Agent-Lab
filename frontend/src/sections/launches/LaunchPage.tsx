@@ -317,7 +317,7 @@ export function LaunchPage({ check }: { check: Check }) {
                       />
                       <span className="whitespace-nowrap text-small text-fg-3">из {total}</span>
                     </div>
-                    {total > MAX && <p className="mt-1.5 text-small text-fg-3">За один раз — до {MAX} разговоров.</p>}
+                    {total > MAX && <p className="mt-1.5 text-small text-fg-3">За раз — до {MAX}.</p>}
                   </>
                 )}
               </Row>

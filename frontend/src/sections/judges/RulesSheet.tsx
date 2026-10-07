@@ -76,6 +76,7 @@ export function RulesSheet({ check, open, onClose }: { check: Check; open: boole
           </div>
           {check === "code" &&
             library.data &&
+            sets.length > 0 &&
             (library.selected ? (
               <p className="text-body text-fg-3">
                 Точность проверяется по набору «{library.selected.name}».{" "}
