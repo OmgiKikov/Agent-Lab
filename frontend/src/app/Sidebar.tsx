@@ -29,7 +29,7 @@ export const GROUPS: { label?: string; items: NavItem[] }[] = [
   {
     items: [
       { to: SECTIONS.overview, label: "Обзор", icon: LayoutGrid },
-      { to: SECTIONS.data, label: "Выгрузка диалогов", icon: Database },
+      { to: SECTIONS.data, label: "Датасеты", icon: Database },
     ],
   },
   {

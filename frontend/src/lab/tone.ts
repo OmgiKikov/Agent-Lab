@@ -14,7 +14,9 @@ export const CHECK_STEPS: { id: CheckStep; label: string }[] = [
 export const toneResult = (state: LabState | null) => state?.checks.tone ?? null;
 
 /** What was read from the agent's code; the rules of communication beside it are a person's own document. */
-export const codeSources = (state: LabState | null) => state?.sources.filter((s) => s.id !== TONE_ID) ?? [];
+export const accuracySources = (state: LabState | null) => state?.sources.filter((s) => s.id !== TONE_ID) ?? [];
+export const codeSources = (state: LabState | null) => accuracySources(state).filter((s) => s.id !== "accuracy-judge");
+export const customAccuracy = (state: LabState | null) => state?.sources.find((s) => s.id === "accuracy-judge");
 
 export function nextStep(state: LabState | null): CheckStep {
   if (state?.job.running && state.job.kind === "tone-check") return "checking";

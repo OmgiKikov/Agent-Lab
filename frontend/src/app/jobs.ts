@@ -5,6 +5,10 @@ import { criterionLink, scenariosLink, SECTIONS, toneCheckLink } from "./links";
 /** A task of the service: how it is called and the section where its result lives. */
 export const JOBS: Record<string, { label: string; to: string }> = {
   "tone-policy": { label: "Правила общения", to: toneCheckLink("materials") },
+  launch: { label: "Проверка агента", to: "/launches" },
+  "judge-rules": { label: "Правила судьи", to: "/overview" },
+  datasets: { label: "Датасеты", to: "/data" },
+  "agent-context": { label: "Контекст агента", to: "/agent" },
   logs: { label: "Загрузка диалогов", to: SECTIONS.data },
   "tone-criteria": { label: "Критерии tone of voice", to: toneCheckLink("criteria") },
   "tone-check": { label: "Проверка tone of voice", to: toneCheckLink("result") },
@@ -25,6 +29,7 @@ export const JOBS: Record<string, { label: string; to: string }> = {
  */
 export function jobOf(job: Job) {
   if (!job.kind) return undefined;
+  if (job.kind === "launch" && job.progress.launch) return { ...JOBS.launch, to: `/launches/${job.progress.launch}` };
   const check = job.kind === "severity" ? proposalCheck(job) : null;
   return check ? { ...JOBS.severity, to: criterionLink(check) } : JOBS[job.kind];
 }

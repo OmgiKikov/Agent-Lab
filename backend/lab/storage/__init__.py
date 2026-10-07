@@ -14,15 +14,32 @@ flows/, which holds a transaction (transaction) around the writes one change mak
 database becomes them: schema.py.
 """
 
-from . import calls, db, dialogues, documents, history, registry, reviews, runs, severity, tasks
+from . import (
+    calls,
+    datasets,
+    db,
+    dialogues,
+    documents,
+    history,
+    judges,
+    launches,
+    registry,
+    reviews,
+    runs,
+    severity,
+    tasks,
+)
 from .db import now, transaction
 
 __all__ = [
     'calls',
+    'datasets',
     'db',
     'dialogues',
     'documents',
     'history',
+    'judges',
+    'launches',
     'now',
     'registry',
     'reviews',

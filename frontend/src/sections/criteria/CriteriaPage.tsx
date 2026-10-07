@@ -10,7 +10,7 @@ import { secondOf } from "../../lab/problemStats";
 import { decisions } from "../../lab/verdicts";
 import { useKeys } from "../../app/keys";
 import { useLabState } from "../../lab/LabProvider";
-import { codeSources, TONE_ID } from "../../lab/tone";
+import { accuracySources, codeSources, customAccuracy, TONE_ID } from "../../lab/tone";
 import { SeverityHint } from "../../product/Severity";
 import { Button, buttonClass } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
@@ -63,7 +63,7 @@ export function CriteriaPage({ check }: { check: Check }) {
   const ordered = useMemo(() => byFrequency(list, side), [list, side]);
   // Tone of voice is written in one document, the person's rules; accuracy in the prompts and tools of the agent.
   const sources = useMemo(
-    () => (tone ? (state?.sources.filter((s) => s.id === TONE_ID) ?? []) : codeSources(state)),
+    () => (tone ? (state?.sources.filter((s) => s.id === TONE_ID) ?? []) : accuracySources(state)),
     [tone, state],
   );
   const asked = params.get("c");
@@ -121,8 +121,8 @@ export function CriteriaPage({ check }: { check: Check }) {
       actions={
         tone ? (
           <Link
-            to={toneCheckLink("criteria")}
-            title="Выбрать критерии для следующей проверки"
+            to={`${tone ? "/tone" : "/accuracy"}/judges`}
+            title="Изменить набор правил для следующей проверки"
             className={buttonClass()}
           >
             <PencilLine aria-hidden className="size-3.5" />
@@ -180,7 +180,7 @@ export function CriteriaPage({ check }: { check: Check }) {
               </Link>
             ) : (
               <Link to={SECTIONS.accuracy} className={buttonClass({ variant: "primary" })}>
-                {codeSources(state).length ? "Оценить разговоры" : "Прочитать код"}
+                {accuracySources(state).length ? "Оценить разговоры" : "Прочитать код"}
               </Link>
             )
           }
@@ -213,7 +213,8 @@ export function CriteriaPage({ check }: { check: Check }) {
             <span className="text-fg-2">
               {list.length}
               {"\u00a0"}
-              {plural(list.length, "критерий", "критерия", "критериев")} {tone ? "из правил общения" : "из кода агента"}
+              {plural(list.length, "критерий", "критерия", "критериев")}{" "}
+              {tone ? "из правил общения" : customAccuracy(state) ? "из правил судьи" : "из кода агента"}
             </span>
             {data.log?.rulesSince && (
               <>
@@ -261,7 +262,7 @@ export function CriteriaPage({ check }: { check: Check }) {
             onChange={(v) => set((n) => n.set("view", v))}
             options={[
               { value: "list", label: "Списком" },
-              { value: "code", label: tone ? "В правилах" : "В коде агента" },
+              { value: "code", label: tone || customAccuracy(state) ? "В правилах" : "В коде агента" },
             ]}
           />
         </div>

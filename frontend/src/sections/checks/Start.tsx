@@ -5,7 +5,7 @@ import { Mark } from "../../app/Mark";
 import { SECTIONS, toneCheckLink, type Check } from "../../app/links";
 import { count, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
-import { codeSources, TONE_ID } from "../../lab/tone";
+import { codeSources, customAccuracy, TONE_ID } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
 import { UploadButton } from "../../product/UploadLogs";
 import { Button, buttonClass } from "../../ui/Button";
@@ -39,8 +39,8 @@ export function needsOf(check: Check, state: LabState | null): Need[] {
   return [
     dialogs,
     {
-      label: "Код агента",
-      value: code ? count(code, "источник", "источника", "источников") : null,
+      label: customAccuracy(state) ? "Правила судьи" : "Код агента",
+      value: customAccuracy(state)?.origin ?? (code ? count(code, "источник", "источника", "источников") : null),
       later: "прочитайте в «Агенте»",
     },
   ];
@@ -174,7 +174,7 @@ export function AccuracyStart() {
       </Empty>
     );
   const code = codeSources(state).length;
-  if (!code)
+  if (!code && !customAccuracy(state))
     return (
       <Empty
         title="Нужен код агента"
@@ -194,7 +194,7 @@ export function AccuracyStart() {
   if (!total)
     return (
       <Empty title="Нужна выгрузка чата" needs={needsOf("code", state)} action={<UploadButton check="code" />}>
-        Код агента прочитан. Точность проверяют на настоящих разговорах клиентов из выгрузки.
+        Критерии точности готовы. Проверку проводят на настоящих разговорах клиентов из выгрузки.
       </Empty>
     );
   const busy = !!job?.running;
@@ -229,8 +229,8 @@ export function AccuracyStart() {
         </>
       ) : (
         <>
-          Модель извлечёт критерии из кода агента и проверит по ним разговоры. Сам агент не запускается, итог tone of
-          voice не изменится.
+          Модель проверит разговоры по выбранным критериям точности. Сам агент не запускается, итог tone of voice не
+          изменится.
           {previous && <PreviousCheck check="code" line={previous.line} className="mt-3" />}
         </>
       )}

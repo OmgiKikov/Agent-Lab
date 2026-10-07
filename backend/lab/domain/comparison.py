@@ -50,6 +50,8 @@ def comparison(check: dict, previous: dict | None) -> dict:
     if check['evaluationFingerprint'] != previous['evaluationFingerprint']:
         return {**base, 'kind': 'incompatible', 'reason': 'Изменились модели или инструкции проверки.'}
     if check['datasetFingerprint'] == previous['datasetFingerprint']:
+        if check.get('knowledgeFingerprint') != previous.get('knowledgeFingerprint'):
+            return {**base, 'kind': 'incompatible', 'reason': 'Изменились источники базы знаний.'}
         return {**base, 'kind': 'same-data', 'reason': 'Те же разговоры, критерии и модели. Это повторная оценка.'}
     return {
         **base,

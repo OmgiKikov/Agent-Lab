@@ -6,6 +6,8 @@ inserted to this schema the same way (legacy.py).
 Schema 7: the export's conversations are rows (dialogues), the saved checks of both checks one table (history), and
 the answers people gave on verdicts rows of their own (reviews): a result, a saved check and a run keep verdicts only.
 Schema 8: long work is kept as it goes (tasks, steps), never only in memory.
+Schema 9: immutable datasets alongside the selected working export.
+Schema 10: grouped launches and recorded-question runs.
 """
 
 import json
@@ -21,12 +23,18 @@ from ..domain.metric import metric
 
 # The database's user_version once these tables are in place. Raise it with every change here: a database is set up
 # again only when its user_version differs.
-SCHEMA = 8
+SCHEMA = 10
 EXPORT = 'logs.json'  # where a database before schema 7 kept the export's conversations, as one document
 EXPORT_META = 'logs-meta.json'  # the name of the export's file and when it was uploaded
 PERSON, LAB = 'person', 'lab'  # who gave an answer: a person on a screen, or the Lab (storage.reviews)
 
 TABLES = (
+    'CREATE TABLE IF NOT EXISTS launches (id TEXT PRIMARY KEY, kind TEXT NOT NULL, '
+    'summary TEXT NOT NULL, value TEXT NOT NULL)',
+    'CREATE TABLE IF NOT EXISTS datasets (id TEXT PRIMARY KEY, name TEXT NOT NULL, file TEXT, '
+    'created_at TEXT NOT NULL, bytes INTEGER NOT NULL DEFAULT 0, archived_at TEXT, context TEXT)',
+    'CREATE TABLE IF NOT EXISTS dataset_dialogues (dataset_id TEXT NOT NULL, position INTEGER NOT NULL, '
+    'id TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (dataset_id, position), UNIQUE (dataset_id, id))',
     'CREATE TABLE IF NOT EXISTS documents (name TEXT PRIMARY KEY, value TEXT NOT NULL)',
     # The export's conversations in its order (position), each by its id: one is read without the others.
     'CREATE TABLE IF NOT EXISTS dialogues (position INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, value TEXT NOT NULL)',

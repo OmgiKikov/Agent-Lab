@@ -56,7 +56,7 @@ export function BottomNav() {
         items={[
           {
             key: "data",
-            label: "Выгрузка диалогов",
+            label: "Датасеты",
             on: pathname === SECTIONS.data,
             run: () => navigate(SECTIONS.data),
           },

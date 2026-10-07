@@ -1,3 +1,4 @@
+import { KnowledgeEvidence } from "../../product/KnowledgeEvidence";
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ArrowLeft, Download } from "lucide-react";
@@ -218,6 +219,7 @@ export function Dialog({
             </Button>
           </div>
         </div>
+        <KnowledgeEvidence articles={row.knowledge} error={row.contextError} />
         <div className="mt-5">
           <Facts
             facts={[

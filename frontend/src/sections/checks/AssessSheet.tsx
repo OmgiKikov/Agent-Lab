@@ -8,7 +8,7 @@ import { count, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { previousOf } from "../../lab/compare";
 import { checkedIn } from "../../lab/problemReport";
-import { codeSources } from "../../lab/tone";
+import { accuracySources } from "../../lab/tone";
 import { Button, buttonClass } from "../../ui/Button";
 import { Label } from "../../ui/Label";
 import { Segmented } from "../../ui/Segmented";
@@ -115,7 +115,7 @@ export function AssessSheet({ open, onClose }: { open: boolean; onClose: () => v
   const total = state?.logs.total ?? 0;
   const deck = state?.cards?.check === "code" && !!state.cards.cards.length;
   // The service checks only with the code read (backend/lab/flows/accuracy.py): without it, every start would fail.
-  const code = codeSources(state).length > 0;
+  const code = accuracySources(state).length > 0;
   const why = state?.job.running
     ? "Сейчас идёт другая задача"
     : !code

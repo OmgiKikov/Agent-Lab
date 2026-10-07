@@ -1,3 +1,4 @@
+import { LaunchHistory } from "../launches/LaunchHistory";
 import { useMemo, useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
@@ -104,13 +105,14 @@ function codeSaved(data: CodeSnapshot): Saved {
     numbers.set(rule.id, byQuote.get(key)!);
   }
   const sources = data.result.sources ?? [];
+  const custom = sources.some((source) => source.id === "accuracy-judge");
   return {
     ...data,
     criteria,
     numberOf: (ruleId) => numbers.get(ruleId) ?? 0,
-    basis: "Основание в коде агента",
+    basis: custom ? "Основание в правилах судьи" : "Основание в коде агента",
     source: {
-      title: `Код агента · ${count(sources.length, "источник", "источника", "источников")}`,
+      title: `${custom ? "Правила судьи" : "Код агента"} · ${count(sources.length, "источник", "источника", "источников")}`,
       body: (
         <ul className="mt-4 space-y-2 text-body text-fg-3">
           {sources.map((source) => (
@@ -485,7 +487,8 @@ export function HistoryPage({ check }: { check: Check }) {
           <ServiceDown />
         ) : (
           <div className="max-w-[880px] px-4 pb-24 pt-8 lg:px-10 lg:pt-10">
-            <h2 className="text-title font-semibold text-fg">История проверок</h2>
+            <LaunchHistory check={check} />
+            <h2 className="mt-10 text-title font-semibold text-fg">Сохранённые оценки диалогов</h2>
             <p className="mt-1 max-w-[64ch] text-read text-fg-3">{KEEPS[check]}</p>
             <div className="mt-6">
               {(isLoading || !state) && <Skeleton className="h-40" />}

@@ -42,6 +42,13 @@ export function ExportFormat() {
             Скачать пример JSONL
           </Button>
         </div>
+        <div className="border-t border-line pt-4">
+          <h3 className="font-medium text-fg">JSON и CSV</h3>
+          <p className="mt-1">
+            JSON: массив разговоров с id и messages. CSV: колонки id, role, content — по одной реплике в строке; либо id
+            и messages с JSON-списком реплик. UTF-8, разделитель — запятая или точка с запятой.
+          </p>
+        </div>
         <p className="text-small text-fg-3">
           До 50 МБ. В разговоре клиент пишет первым, а агент отвечает. Разговоры без ответа или с первой репликой агента
           не попадут в проверку.

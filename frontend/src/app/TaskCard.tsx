@@ -67,7 +67,7 @@ export function JobNotices() {
     const label = info?.label ?? "Задача";
     if (job.error !== STOPPED) markTab(job.error ? "Не удалось" : "Готово");
     // Upload reports the exact imported/skipped counts or an inline error; the task card keeps failures visible.
-    if (job.kind === "logs") return;
+    if (["logs", "datasets", "judge-rules", "agent-context"].includes(job.kind ?? "")) return;
     if (job.error === STOPPED)
       toast.notify(
         job.continuable

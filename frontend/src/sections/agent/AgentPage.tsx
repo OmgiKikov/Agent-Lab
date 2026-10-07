@@ -1,21 +1,23 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { ArrowRight, Database, FileText, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Header } from "../../app/Header";
 import { SectionJob } from "../../app/SectionJob";
-import { criterionLink } from "../../app/links";
+import { criterionLink, stageRoot } from "../../app/links";
 import { api } from "../../lab/api";
 import { useCriteria } from "../../lab/criteria";
 import { count, day, plural, thousands } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { codeSources } from "../../lab/tone";
-import { Button } from "../../ui/Button";
+import { Button, buttonClass } from "../../ui/Button";
 import { Label } from "../../ui/Label";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
 import { useToast } from "../../ui/toast";
 import { nameOf } from "../criteria/model";
+import { AgentContext } from "./AgentContext";
+import { Identity } from "./Identity";
 import { ConnectionForm } from "./Connection";
 
 /** The characters of prompts the criteria planner takes (backend/lab/agents/sources.py, MAX_TOTAL). */
@@ -27,6 +29,8 @@ const BUDGET = "60\u00a0000";
  * that did not fit the planner's budget, so no criterion comes from them.
  */
 export function AgentPage() {
+  const [params] = useSearchParams();
+  const back = params.get("return");
   const { state, offline, refresh } = useLabState();
   const toast = useToast();
   const criteria = useCriteria("code");
@@ -44,18 +48,25 @@ export function AgentPage() {
     <Header
       title="Агент"
       actions={
-        <Button
-          variant="primary"
-          icon={RotateCcw}
-          loading={reading}
-          disabled={busy || !state?.settings.repo}
-          onClick={readCode}
-          title={
-            state?.settings.repo ? `Папка с кодом: ${state.settings.repo}` : "Сначала укажите папку с кодом агента"
-          }
-        >
-          {codeSources(state).length ? "Прочитать код заново" : "Прочитать код"}
-        </Button>
+        <>
+          {(back === "tone" || back === "code") && (
+            <Link to={`${stageRoot(back)}/launch`} className={buttonClass()}>
+              К запуску
+            </Link>
+          )}
+          <Button
+            variant="primary"
+            icon={RotateCcw}
+            loading={reading}
+            disabled={busy || !state?.settings.repo}
+            onClick={readCode}
+            title={
+              state?.settings.repo ? `Папка с кодом: ${state.settings.repo}` : "Сначала укажите папку с кодом агента"
+            }
+          >
+            {codeSources(state).length ? "Прочитать код заново" : "Прочитать код"}
+          </Button>
+        </>
       }
       below={<SectionJob kinds={["sources"]} />}
     />
@@ -83,11 +94,12 @@ export function AgentPage() {
     <div className="flex h-full flex-col">
       {header}
       <div className="min-h-0 flex-1 overflow-auto">
+        <Identity />
         <div className="grid max-w-6xl gap-x-12 gap-y-10 px-4 pb-16 pt-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] lg:px-10 lg:pt-8">
           <div>
             <h2 className="text-title font-semibold text-fg">Подключение</h2>
             <p className="mb-5 mt-1 text-small text-fg-3">
-              Где работает агент и как с ним связаться. Адрес нужен для симуляций, код — для проверки точности.
+              Адрес нужен для живых вопросов и симуляций. Из кода можно собрать критерии точности.
             </p>
             <ConnectionForm
               key={`${state.settings.prodUrl}|${state.settings.repo}|${state.settings.epk.join(" ")}`}
@@ -183,6 +195,9 @@ export function AgentPage() {
               </>
             )}
           </section>
+          <div className="lg:col-span-2">
+            <AgentContext />
+          </div>
         </div>
       </div>
     </div>

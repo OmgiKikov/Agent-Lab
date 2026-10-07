@@ -18,6 +18,8 @@ from zipfile import ZIP_DEFLATED, ZIP_STORED, BadZipFile, ZipFile
 from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
 
+from . import export_formats
+
 LIMIT = 50_000_000  # an uploaded export
 INFLATED = 500_000_000  # the parts of a workbook, unpacked together
 SHEET = 'Данные'
@@ -202,6 +204,10 @@ def read_export(name: str, data: bytes) -> tuple[list[dict], int]:
     never answered): the person is told how many were left out."""
     if name.lower().endswith('.jsonl'):
         dialogues = from_jsonl(data)
+    elif name.lower().endswith('.json'):
+        dialogues = export_formats.from_json(data)
+    elif name.lower().endswith('.csv'):
+        dialogues = export_formats.from_csv(data, turns)
     elif name.lower().endswith('.xlsx'):
         try:
             _check_parts(data)
@@ -209,6 +215,6 @@ def read_export(name: str, data: bytes) -> tuple[list[dict], int]:
         except UNREADABLE as error:
             raise ValueError('Файл .xlsx повреждён или зашифрован. Сохраните выгрузку заново.') from error
     else:
-        raise ValueError('Нужна выгрузка в .xlsx или .jsonl.')
+        raise ValueError('Нужна выгрузка в .xlsx, .jsonl, .json или .csv.')
     usable = _validated(dialogues)
     return usable, len(dialogues) - len(usable)

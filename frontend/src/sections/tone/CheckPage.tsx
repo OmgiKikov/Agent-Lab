@@ -92,7 +92,13 @@ export function CheckPage() {
                 </button>
               </p>
             )}
-            {step === "materials" && <Materials state={state} onNext={() => go("criteria")} />}
+            {step === "materials" && (
+              <Materials
+                key={state.toneOfVoice?.revision ?? state.sources.find((s) => s.id === "tone-of-voice")?.sha256}
+                state={state}
+                onNext={() => go("criteria")}
+              />
+            )}
             {step === "criteria" && (
               <Criteria state={state} onBack={() => go("materials")} onStarted={() => go("checking")} />
             )}

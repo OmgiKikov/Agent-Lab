@@ -21,7 +21,7 @@ import { longDay, count } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { isRunning } from "../../lab/runs";
 import { seriousOf } from "../../lab/severity";
-import { codeSources } from "../../lab/tone";
+import { accuracySources } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
 import { queueOf as verdictQueue } from "../../lab/verdicts";
 import { SeverityStatus } from "../../product/Severity";
@@ -82,7 +82,7 @@ function beginOf(check: Check, state: LabState, fresh = false): Begin {
       needs: needsOf("code", state),
       action: { label: "Открыть проверку", to: SECTIONS.accuracy },
     };
-  if (!codeSources(state).length)
+  if (!accuracySources(state).length)
     return {
       status: "Нужен код агента",
       needs: needsOf("code", state),

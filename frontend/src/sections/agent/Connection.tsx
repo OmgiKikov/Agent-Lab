@@ -223,7 +223,7 @@ export function ConnectionForm({ state }: { state: LabState }) {
             />
           </Field>
         )}
-        <Field label="Папка с кодом агента" hint="Нужна для проверки точности при любом способе подключения.">
+        <Field label="Папка с кодом агента" hint="Из этой папки читаются инструкции агента для проверки точности.">
           <input
             name="repo"
             autoComplete="off"

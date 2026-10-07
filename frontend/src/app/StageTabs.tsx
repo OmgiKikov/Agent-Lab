@@ -33,10 +33,12 @@ export function StageTabs({
           { to: `${SECTIONS.simulations}/review${keep}`, label: "Ответы людей", count: counts.review },
         ]
       : [
+          { to: `${root}/launch`, label: "Запуск" },
           { to: root, label: "Итог", end: true },
           { to: `${root}/conversations`, label: "Разговоры", count: counts.conversations },
           { to: `${root}/review`, label: "Ответы людей", count: counts.review },
           { to: `${root}/criteria`, label: "Критерии" },
+          { to: `${root}/judges`, label: "Правила судьи" },
           { to: historyLink(stage), label: "История" },
         ];
   const problemsOpen = pathname.includes("/problems/");

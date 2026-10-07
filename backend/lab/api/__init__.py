@@ -16,8 +16,22 @@
 
 from fastapi import APIRouter
 
-from . import agent, agents, checks, logs, reviews, runs, scenarios, settings, severity, state, tone
+from . import agent, agents, checks, judges, launches, logs, reviews, runs, scenarios, settings, severity, state, tone
 
 router = APIRouter()
-for section in (state, agents, agent, settings, logs, checks, tone, severity, scenarios, runs, reviews):
+for section in (
+    state,
+    agents,
+    agent,
+    settings,
+    logs,
+    judges,
+    launches,
+    checks,
+    tone,
+    severity,
+    scenarios,
+    runs,
+    reviews,
+):
     router.include_router(section.router)

@@ -5,17 +5,17 @@ import { SECTIONS, toneCheckLink, type Check } from "../app/links";
 import { upload } from "../lab/api";
 import { count, plural } from "../lab/format";
 import { useLabState } from "../lab/LabProvider";
-import type { LabState } from "../lab/types";
 import { Button } from "../ui/Button";
 import { Modal } from "../ui/Modal";
 import { ExportFormat } from "./ExportFormat";
 import { useToast } from "../ui/toast";
 
-const ACCEPT = ".xlsx,.jsonl";
+const ACCEPT = ".xlsx,.jsonl,.json,.csv";
 
 /** The export reader takes the chat's Excel or a prepared .jsonl: anything else is refused before a question is asked. */
 export const exportFileError = (file: File) => {
-  if (!/\.(xlsx|jsonl)$/i.test(file.name)) return "Этот файл не подходит. Загрузите выгрузку чата в .xlsx или .jsonl.";
+  if (!/\.(xlsx|jsonl|json|csv)$/i.test(file.name))
+    return "Этот файл не подходит. Загрузите выгрузку чата в XLSX, JSONL, JSON или CSV.";
   if (!file.size) return "Файл пустой. Выберите выгрузку с разговорами.";
   if (file.size > 50_000_000) return "Файл больше 50 МБ. Выгрузите разговоры за меньший срок.";
   return null;
@@ -27,22 +27,10 @@ export const exportFileError = (file: File) => {
  * runs and the answers of people, with the saved checks they were given on (store.set_log_review), so the new
  * conversations can be checked by the same criteria and compared with the previous ones.
  */
-function whatHappens(state: LabState | null): [string, string] {
-  const tone = !!state?.checks.tone;
-  const code = !!state?.checks.code;
-  const deck = state?.cards?.cards.length ? state.cards : null;
-  const results =
-    tone && code
-      ? "Текущие итоги tone of voice и точности уйдут в «Историю»."
-      : tone
-        ? "Текущий итог tone of voice уйдёт в «Историю»."
-        : code
-          ? "Текущий итог точности уйдёт в «Историю»."
-          : "";
-  const scenarios = deck ? `Сценарии из итога ${deck.check === "tone" ? "tone of voice" : "точности"} сбросятся.` : "";
+function whatHappens(): [string, string] {
   return [
-    [results, scenarios].filter(Boolean).join(" "),
-    "Критерии, прогоны симуляций и ответы людей останутся. Новые разговоры можно проверить по тем же критериям и сравнить с прошлыми.",
+    "После загрузки будет выбран новый датасет. Переключиться обратно можно в разделе «Датасеты».",
+    "История проверок и прогоны сохранят свои исходные диалоги и критерии.",
   ];
 }
 
@@ -68,6 +56,7 @@ export function UploadButton({
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [file, setFile] = useState<File | null>(null);
+  const [datasetName, setDatasetName] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [over, setOver] = useState(false);
@@ -88,10 +77,15 @@ export function UploadButton({
     setBusy(true);
     setError("");
     try {
-      const { total, skipped = 0 } = await upload<{ total: number; skipped?: number }>("/api/logs", file);
+      const { total, skipped = 0 } = await upload<{ total: number; skipped?: number }>(
+        "/api/logs",
+        file,
+        datasetName.trim() ? { title: datasetName.trim() } : {},
+      );
       await refresh();
       setOpen(false);
       setFile(null);
+      setDatasetName("");
       const next = check === "code" ? `${SECTIONS.accuracy}?assess=1` : check === "tone" ? toneCheckLink() : null;
       const left = skipped
         ? `. Ещё ${count(skipped, "разговор не загружен", "разговора не загружены", "разговоров не загружены")}: ${plural(skipped, "в нём", "в них", "в них")} первым пишет агент или он не отвечает.`
@@ -153,7 +147,20 @@ export function UploadButton({
           </>
         }
       >
-        <p className="mb-5 text-read text-fg-3">Одна выгрузка используется для Tone of voice и точности.</p>
+        <p className="mb-5 text-read text-fg-3">
+          Новый датасет сохранится рядом с предыдущими и станет выбранным для проверки.
+        </p>
+        <label className="mb-4 block text-body font-medium text-fg">
+          Название датасета <span className="font-normal text-fg-3">· по желанию</span>
+          <input
+            value={datasetName}
+            onChange={(event) => setDatasetName(event.target.value)}
+            maxLength={160}
+            disabled={busy}
+            placeholder={file?.name || "Например: Диалоги за октябрь"}
+            className="mt-2 w-full rounded-control border border-line-strong bg-canvas px-3 py-2"
+          />
+        </label>
         <input
           ref={input}
           type="file"
@@ -200,7 +207,7 @@ export function UploadButton({
             <>
               <Upload aria-hidden className="mx-auto mb-3 size-6 text-fg-3" />
               <p className="text-read font-medium text-fg">Перетащите выгрузку сюда</p>
-              <p className="mt-1 text-small text-fg-3">Excel или JSONL · до 50 МБ</p>
+              <p className="mt-1 text-small text-fg-3">XLSX, JSONL, JSON или CSV · до 50 МБ</p>
               <Button className="mt-4" disabled={busy || running} onClick={() => input.current?.click()}>
                 Выбрать файл
               </Button>
@@ -219,8 +226,8 @@ export function UploadButton({
         )}
         {state?.logs.total ? (
           <div className="mt-4 rounded-control bg-warn/5 p-4 text-small text-fg-2">
-            <p className="font-medium text-fg">Этот файл заменит текущую выгрузку.</p>
-            {whatHappens(state)
+            <p className="font-medium text-fg">Предыдущий датасет и его результаты останутся доступны.</p>
+            {whatHappens()
               .filter(Boolean)
               .map((text) => (
                 <p key={text} className="mt-2">

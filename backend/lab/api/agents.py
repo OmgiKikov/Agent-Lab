@@ -56,3 +56,17 @@ def delete_agent(jobs: Jobs, payload: DeleteCommand) -> dict:
     except LookupError as error:  # removed meanwhile, from another tab
         raise HTTPException(404, 'Агент не найден.') from error
     return {'ok': True}
+
+
+class UpdateCommand(AgentCommand):
+    id: str
+
+
+@router.post('/api/agents/update')
+def update_agent(payload: UpdateCommand) -> dict:
+    try:
+        return registry.update(payload.id, payload.name, payload.description)
+    except LookupError as error:
+        raise HTTPException(404, str(error)) from error
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error

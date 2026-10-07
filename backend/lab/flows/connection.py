@@ -5,6 +5,7 @@ import uuid
 from pathlib import Path
 
 from .. import agents, storage
+from . import agent_context
 
 SETTINGS = 'settings.json'
 CHECK_QUESTION = 'Какой процент эквайринга?'  # what «Проверить связь» asks the agent
@@ -23,12 +24,12 @@ def save_settings(values: dict) -> dict:
 
 def repo() -> Path:
     """The folder of the agent's code."""
-    return Path(settings()['repo']).expanduser()
+    return agent_context.checkout_path() or Path(settings()['repo']).expanduser()
 
 
 def ways() -> dict[str, dict]:
     """The ways to reach the agent, by its settings."""
-    return agents.configs(settings())
+    return agents.configs(settings() | {'repo': str(repo())})
 
 
 def connect(key: str) -> agents.HttpAgent:

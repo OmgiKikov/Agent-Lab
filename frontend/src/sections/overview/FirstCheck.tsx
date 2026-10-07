@@ -2,7 +2,7 @@ import { Link } from "react-router-dom";
 import { ArrowRight, Check, Database, FlaskConical, MessageSquareQuote, Target } from "lucide-react";
 import { SECTIONS, toneCheckLink } from "../../app/links";
 import { count } from "../../lab/format";
-import { codeSources, TONE_ID } from "../../lab/tone";
+import { codeSources, customAccuracy, TONE_ID } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
 import { UploadButton } from "../../product/UploadLogs";
 import { buttonClass } from "../../ui/Button";
@@ -12,6 +12,7 @@ export function FirstCheck({ state }: { state: LabState }) {
   const loaded = state.logs.total > 0;
   const policy = state.sources.find((source) => source.id === TONE_ID);
   const code = codeSources(state);
+  const custom = customAccuracy(state);
   const started = !!state.toneOfVoice || (state.job.running && state.job.kind === "tone-criteria");
   const cards = [
     {
@@ -20,19 +21,21 @@ export function FirstCheck({ state }: { state: LabState }) {
       description: "Соблюдает ли агент правила общения: тон, обращение и ясность ответа.",
       ready: !!policy,
       need: policy ? policy.origin : "Нужны правила общения — текст или документ",
-      to: toneCheckLink(started ? undefined : "materials"),
+      to: started ? "/tone/launch" : toneCheckLink("materials"),
       action: started ? "Продолжить" : policy ? "К проверке" : "Добавить правила",
     },
     {
       title: "Точность",
       icon: Target,
       description: "Следует ли агент своим инструкциям и корректно ли использует инструменты.",
-      ready: code.length > 0,
-      need: code.length
-        ? `Код прочитан · ${count(code.length, "источник", "источника", "источников")}`
-        : "Нужен код агента — промпты и инструменты",
-      to: code.length ? SECTIONS.accuracy : SECTIONS.agent,
-      action: code.length ? "К проверке" : "Добавить код",
+      ready: !!custom || code.length > 0,
+      need: custom
+        ? `Правила: ${custom.origin}`
+        : code.length
+          ? `Код прочитан · ${count(code.length, "источник", "источника", "источников")}`
+          : "Нужен код агента — промпты и инструменты",
+      to: "/accuracy/launch",
+      action: custom || code.length ? "К проверке" : "Настроить проверку",
     },
   ];
   return (
@@ -51,7 +54,7 @@ export function FirstCheck({ state }: { state: LabState }) {
           <p className="mt-1 break-words text-body text-fg-3">
             {loaded
               ? `${count(state.logs.total, "разговор", "разговора", "разговоров")}${state.logs.file ? ` · ${state.logs.file}` : ""}`
-              : "Одна выгрузка чата для обеих проверок. Excel или JSONL."}
+              : "Одна выгрузка чата для обеих проверок. XLSX, JSONL, JSON или CSV."}
           </p>
         </div>
         <div className="col-span-2 sm:col-span-1">

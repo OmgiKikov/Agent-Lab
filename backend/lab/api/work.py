@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from fastapi import HTTPException
 
 from .. import storage
-from ..flows import accuracy, inputs, scenarios, severity, simulation, tone
+from ..flows import accuracy, inputs, launches, scenarios, severity, simulation, tone
 from ..jobs import BusyError, PerAgent, Work, view
 
 
@@ -21,6 +21,7 @@ class Kind:
 
 
 KINDS: dict[str, Kind] = {
+    'launch': Kind(lambda given: lambda progress: launches.run(given, progress), launches.fingerprint),
     'tone-check': Kind(
         lambda given: lambda progress: tone.check(
             tone.selection(given['ruleIds'], given['revision']), given['count'], progress, propose=given['propose']

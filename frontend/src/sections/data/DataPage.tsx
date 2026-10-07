@@ -6,25 +6,28 @@ import { SECTIONS, stageRoot, toneCheckLink, type Check as CheckKind } from "../
 import { CHECK_NAME, resultOf } from "../../lab/checks";
 import { count, when } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
-import { codeSources, TONE_ID } from "../../lab/tone";
+import { accuracySources, TONE_ID } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
 import { ExportFormat } from "../../product/ExportFormat";
 import { UploadButton } from "../../product/UploadLogs";
 import { buttonClass } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
+import { DatasetLibrary } from "./DatasetLibrary";
 import { ExportConversations } from "./ExportConversations";
 
 function CheckRoute({ check, state }: { check: CheckKind; state: LabState }) {
   const result = resultOf(state, check);
   const running = state.job.running && state.job.kind === (check === "tone" ? "tone-check" : "discover");
-  const hasRules = check === "tone" ? state.sources.some((s) => s.id === TONE_ID) : codeSources(state).length > 0;
+  const hasRules = check === "tone" ? state.sources.some((s) => s.id === TONE_ID) : accuracySources(state).length > 0;
   const to =
     result || running
       ? stageRoot(check)
       : check === "tone"
-        ? toneCheckLink()
+        ? state.toneOfVoice?.criteria.length
+          ? "/tone/launch"
+          : toneCheckLink()
         : hasRules
-          ? SECTIONS.accuracy
+          ? "/accuracy/launch"
           : SECTIONS.agent;
   const Icon = check === "tone" ? MessageSquareQuote : Target;
   return (
@@ -67,8 +70,8 @@ export function DataPage() {
   const loaded = !!state?.logs.total;
   const header = (
     <Header
-      title="Выгрузка диалогов"
-      actions={loaded && <UploadButton variant="outline" label="Заменить выгрузку" compact />}
+      title="Датасеты"
+      actions={loaded && <UploadButton variant="outline" label="Добавить датасет" compact />}
       below={<SectionJob kinds={["logs"]} />}
     />
   );
@@ -87,8 +90,9 @@ export function DataPage() {
           {loaded ? "Разговоры для проверки" : "Начните с настоящих разговоров"}
         </h2>
         <p className="mt-3 max-w-[65ch] text-read text-fg-3">
-          Загрузите диалоги один раз. Tone of voice и точность проверят их по своим критериям.
+          Выберите датасет для проверки. Файлы, прошлые результаты и критерии сохраняются отдельно.
         </p>
+        <DatasetLibrary />
         {!loaded ? (
           <div className="mt-7 grid items-start gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(260px,2fr)]">
             <div className="flex flex-col items-center rounded-block border border-dashed border-line-strong bg-inset/40 px-6 py-12 text-center">
@@ -96,7 +100,7 @@ export function DataPage() {
                 <Database aria-hidden className="size-6" />
               </span>
               <h3 className="text-read font-semibold text-fg">Добавьте выгрузку чата</h3>
-              <p className="mb-6 mt-2 text-body text-fg-3">Excel или JSONL · до 50 МБ</p>
+              <p className="mb-6 mt-2 text-body text-fg-3">XLSX, JSONL, JSON или CSV · до 50 МБ</p>
               <UploadButton />
               <p className="mt-4 text-small text-fg-3">Подключение к агенту не требуется.</p>
             </div>
@@ -109,7 +113,10 @@ export function DataPage() {
                 <FileText aria-hidden className="size-5" />
               </span>
               <div className="min-w-0 flex-1">
-                <p className="break-all text-read font-semibold text-fg">{state.logs.file || "Текущая выгрузка"}</p>
+                <p className="mb-1 text-small text-fg-3">Выбранный датасет</p>
+                <p className="break-all text-read font-semibold text-fg">
+                  {state.logs.name || state.logs.file || "Выбранный датасет"}
+                </p>
                 <p className="mt-1 text-small text-fg-3">
                   {count(state.logs.total, "разговор", "разговора", "разговоров")}
                   {state.logs.updatedAt ? ` · загружено ${when(state.logs.updatedAt)}` : ""}

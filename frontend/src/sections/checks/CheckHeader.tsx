@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { DatasetPicker } from "../../product/DatasetPicker";
 import { Header } from "../../app/Header";
 import { SectionJob } from "../../app/SectionJob";
 import { StageTabs } from "../../app/StageTabs";
@@ -40,7 +41,14 @@ export function CheckHeader({ check, actions }: { check: Check; actions?: ReactN
       title={CHECK_NAME[check]}
       tabs={<CheckTabs check={check} />}
       actions={actions}
-      below={<SectionJob kinds={tasksOf(check, state?.job)} />}
+      below={
+        <>
+          <div className="border-t border-line px-4 py-3 lg:px-10">
+            <DatasetPicker />
+          </div>
+          <SectionJob kinds={tasksOf(check, state?.job)} />
+        </>
+      }
     />
   );
 }

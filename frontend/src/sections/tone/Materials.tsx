@@ -6,6 +6,8 @@ import { useLabState } from "../../lab/LabProvider";
 import { useSource } from "../../lab/problems";
 import { rememberName, rememberText, savedName, savedText, TONE_ID, toneResult } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
+import { JudgePicker } from "../../product/JudgePicker";
+import { DatasetPicker } from "../../product/DatasetPicker";
 import { UploadButton } from "../../product/UploadLogs";
 import { Button } from "../../ui/Button";
 import { Modal } from "../../ui/Modal";
@@ -86,6 +88,9 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
   const disabled = busy || state.job.running;
   return (
     <section aria-labelledby="materials-title">
+      <div className="mb-6">
+        <JudgePicker check="tone" />
+      </div>
       <h2 id="materials-title" className="text-title font-semibold text-fg">
         Добавьте диалоги и правила общения
       </h2>
@@ -93,7 +98,10 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
       <div className="mt-8 grid gap-8 md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
         <div>
           <h3 className="text-read font-semibold text-fg">Диалоги</h3>
-          <p className="mt-1 text-body text-fg-3">Выгрузка чата в Excel (.xlsx) или JSONL.</p>
+          <div className="mt-3">
+            <DatasetPicker />
+          </div>
+          <p className="mt-1 text-body text-fg-3">Выгрузка чата в XLSX, JSONL, JSON или CSV.</p>
           <div className="mt-4 rounded-sheet bg-inset p-5">
             {state.logs.total ? (
               <>
@@ -109,7 +117,7 @@ export function Materials({ state, onNext }: { state: LabState; onNext: () => vo
             <div className="mt-4">
               <UploadButton
                 variant="outline"
-                label={state.logs.total ? "Заменить выгрузку" : "Загрузить диалоги"}
+                label={state.logs.total ? "Добавить датасет" : "Загрузить диалоги"}
                 disabled={disabled}
               />
             </div>

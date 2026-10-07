@@ -94,7 +94,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       {
         id: "s-data",
         group: "Разделы",
-        label: "Выгрузка диалогов",
+        label: "Датасеты",
         sub: "Загрузить и просмотреть разговоры для обеих проверок",
         icon: FileText,
         run: go(SECTIONS.data),

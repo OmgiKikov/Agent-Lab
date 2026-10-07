@@ -8,6 +8,7 @@ from collections.abc import Awaitable, Callable
 from .. import config, models, storage
 from ..domain import export, sampling, verdicts
 from ..roles import judge
+from . import agent_context
 
 
 async def published_once(check: str, made: Callable[[str], Awaitable[dict]]) -> dict | None:
@@ -36,6 +37,7 @@ def same_material(count: int) -> dict:
     return {
         'export': [export.get('file'), export.get('updatedAt'), storage.dialogues.count()],
         'count': count,
+        'agentContext': agent_context.current(),
         'judges': [models.endpoints().main, models.second_judge()],
     }
 
@@ -44,10 +46,23 @@ async def judge_dialogue(dialogue: dict, topic: dict) -> dict:
     """One conversation judged by the criteria of its topic, by both judges. A conversation the model could not judge
     stays «не удалось проверить», with the reason, and never fails the check."""
     rules, shown = topic['rules'], export.conversation(dialogue)
+    knowledge, context_error = [], None
+    extra = agent_context.current()
+    contextual = any(rule.get('sourceId') != 'tone-of-voice' for rule in rules) and bool(
+        extra['idpIndex'] or extra['tools']
+    )
+    if contextual:
+        knowledge, context_error = await agent_context.knowledge(dialogue['messages'][0]['content'])
     try:
-        verdict = await judge.log_verdict(rules, shown)
+        if contextual:
+            context = {'knowledge': knowledge, 'availableTools': extra['tools']}
+            verdict = await judge.contextual_verdict(rules, shown, context)
+            second = await judge.second_opinion(judge.contextual_verdict, rules, shown, context)
+        else:
+            verdict = await judge.log_verdict(rules, shown)
+            second = await judge.second_opinion(judge.log_verdict, rules, shown)
         rows, status, model, version = verdict.rows, verdict.status, verdict.model, verdict.version
-        second, error = await judge.second_opinion(judge.log_verdict, rules, shown), None
+        error = None
     except models.ModelError as exc:
         rows = verdicts.checked([], rules, '')
         status, second, error, model, version = verdicts.verdict_of(rows), None, str(exc), None, None
@@ -61,6 +76,7 @@ async def judge_dialogue(dialogue: dict, topic: dict) -> dict:
         'error': error,
         'model': model,
         'judgeVersion': version,
+        **({'knowledge': knowledge, 'contextError': context_error} if contextual else {}),
     }
 
 
