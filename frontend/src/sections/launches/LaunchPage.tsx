@@ -1,7 +1,7 @@
-import { Input, Select } from "../../ui/Field";
-import { useEffect, useId, useState, type ReactNode } from "react";
+import { Select } from "../../ui/Field";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowRight, Database, FlaskConical, MessagesSquare, Play } from "lucide-react";
+import { ArrowRight, Check as Tick, ChevronDown, Database, FlaskConical, MessagesSquare, Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { agentKey } from "../../app/agent";
 import { Header } from "../../app/Header";
@@ -21,8 +21,11 @@ import { UploadButton } from "../../product/UploadLogs";
 import { shownName } from "../data/DatasetInfo";
 import { DocumentRules } from "../judges/DocumentRules";
 import { useConnectionMemory } from "../agent/Connection";
-import { ServiceDown, Skeleton } from "../../ui/EmptyState";
+import { ServiceDown } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
+import { Menu } from "../../ui/Menu";
+import { Sheet } from "../../ui/Sheet";
+import { MarkNo } from "../../product/MarkNo";
 
 const MAX = 300; // conversations one launch takes at most (api/launches.py, LaunchCommand)
 const OPTIONS: { id: Mode; icon: typeof Database; description: string; live: boolean }[] = [
@@ -96,78 +99,193 @@ function ruleChoices(versions: JudgeVersion[], selectedId: string | null): Judge
 const versionWord = (v: JudgeVersion, all: JudgeVersion[]) =>
   all.some((other) => other.setId === v.setId && other.id !== v.id) ? ` · версия ${v.version}` : "";
 
-/** The parts of a launch, each a line of the form that opens its editor under it. */
-type Part = "dataset" | "rules" | "size" | "modes" | "version";
+/** A small capital label over a value, as the figures of a card name theirs. */
+function Caps({ children, className }: { children: ReactNode; className?: string }) {
+  return <p className={cn("text-label font-semibold uppercase tracking-caps text-fg-3", className)}>{children}</p>;
+}
 
-/**
- * One line of the launch in words: what it is, what is chosen, «Изменить». `below` stays under it whatever is open
- * (what this part still lacks and the way to it); the editor opens under it on «Изменить».
- */
-function Line({
-  label,
-  value,
-  open,
-  onEdit,
-  below,
-  children,
-}: {
-  label: string;
-  value: ReactNode;
-  open?: boolean;
-  onEdit?: () => void;
-  below?: ReactNode;
-  children?: ReactNode;
-}) {
-  const id = useId();
+const bar = "block h-1.5 rounded-full bg-fg/10";
+/** The grid paper the pictures of the ways lie on. */
+const PAPER =
+  "rounded-control bg-inset [background-image:radial-gradient(rgb(var(--fg-4)/0.35)_1px,transparent_1px)] [background-size:8px_8px]";
+
+/** What checking the recorded answers gives: the agent's reply with the quote the check found marked. */
+function RecordedPicture() {
   return (
-    <div className="py-4">
-      <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-        <span className="w-full text-small text-fg-3 sm:w-32 sm:text-body">{label}</span>
-        <span className="min-w-0 flex-1 break-words text-read text-fg">{value}</span>
-        {onEdit && (
-          <button
-            type="button"
-            onClick={onEdit}
-            aria-expanded={!!open}
-            aria-controls={id}
-            className="rounded-sm text-body text-run hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
-          >
-            {open ? "Готово" : "Изменить"}
-          </button>
-        )}
+    <div className="flex h-full flex-col justify-center gap-1.5 px-5">
+      <span className="ml-auto block h-2.5 w-16 rounded-full bg-customer" />
+      <div className="w-4/5 space-y-1.5 rounded-lg bg-list p-2 ring-1 ring-line">
+        <span className={cn(bar, "w-4/5")} />
+        <span className="flex items-center gap-1">
+          <span className="block h-1.5 w-1/2 rounded-full bg-mark" />
+          <MarkNo n={1} className="h-3 min-w-3 px-0.5 text-[8px]" />
+        </span>
+        <span className={cn(bar, "w-3/5")} />
       </div>
-      {below && <div className="mt-2 sm:pl-36">{below}</div>}
-      {open && (
-        <div id={id} className="mt-3 sm:pl-36">
-          {children}
-        </div>
-      )}
     </div>
   );
 }
 
-/** A choice of a list: a round mark, its words and a line under them. */
-function Choice({
-  name,
-  checked,
-  onChange,
-  title,
-  sub,
-}: {
-  name: string;
-  checked: boolean;
-  onChange: () => void;
-  title: ReactNode;
-  sub?: ReactNode;
-}) {
+/** What asking the live agent gives: the same question, the recorded reply beside the new one. */
+function LivePicture() {
   return (
-    <label className="flex cursor-pointer items-start gap-3 rounded-control px-2 py-2 hover:bg-hover">
-      <input type="radio" name={name} checked={checked} onChange={onChange} className="mt-1 size-4 accent-primary" />
-      <span className="min-w-0">
-        <span className="block text-body text-fg">{title}</span>
-        {sub && <span className="block text-small text-fg-3">{sub}</span>}
+    <div className="flex h-full flex-col justify-center gap-1.5 px-5">
+      <span className="ml-auto block h-2.5 w-16 rounded-full bg-customer" />
+      <div className="flex gap-1.5">
+        <div className="flex-1 space-y-1.5 rounded-lg bg-list p-2 opacity-50 ring-1 ring-line">
+          <span className={cn(bar, "w-4/5")} />
+          <span className={cn(bar, "w-1/2")} />
+        </div>
+        <div className="flex-1 space-y-1.5 rounded-lg bg-list p-2 ring-1 ring-line-strong">
+          <span className={cn(bar, "w-3/4")} />
+          <span className={cn(bar, "w-3/5")} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** What the simulations give: clients of different kinds playing the scenarios through. */
+function SimulationPicture() {
+  return (
+    <div className="flex h-full flex-col justify-center gap-2 px-5">
+      <div className="flex -space-x-1.5">
+        {["bg-mark", "bg-run/40", "bg-fg/20", "bg-ok/40"].map((tint) => (
+          <span key={tint} className={cn("size-5 rounded-full ring-2 ring-inset", tint)} />
+        ))}
+      </div>
+      <div className="w-4/5 space-y-1.5 rounded-lg bg-list p-2 ring-1 ring-line">
+        <span className={cn(bar, "w-3/4")} />
+        <span className={cn(bar, "w-1/2")} />
+      </div>
+    </div>
+  );
+}
+
+const PICTURE: Record<Mode, () => ReactNode> = {
+  dataset: RecordedPicture,
+  questions: LivePicture,
+  simulations: SimulationPicture,
+};
+
+/**
+ * One way to check as a card to tick: a picture of what it gives, its name, what it does. A way that cannot run now
+ * stays in its place, dashed, saying what it needs.
+ */
+function WayCard({
+  id,
+  on,
+  off,
+  onToggle,
+  children,
+}: {
+  id: Mode;
+  on: boolean;
+  off: boolean;
+  onToggle: () => void;
+  children?: ReactNode;
+}) {
+  const option = OPTIONS.find((o) => o.id === id)!;
+  const Picture = PICTURE[id];
+  return (
+    <label
+      className={cn(
+        "relative flex flex-col rounded-block border bg-canvas p-3 transition-[border-color,box-shadow] has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-run/60",
+        on ? "border-fg shadow-card" : "border-line",
+        off ? "cursor-default border-dashed" : "cursor-pointer hover:border-line-strong",
+      )}
+    >
+      <input type="checkbox" className="sr-only" checked={on} disabled={off} onChange={onToggle} />
+      <span
+        aria-hidden
+        className={cn(
+          "absolute right-5 top-5 z-10 grid size-5 place-items-center rounded-full transition-colors",
+          on ? "bg-fg text-canvas" : "bg-canvas ring-1 ring-line-strong",
+        )}
+      >
+        {on && <Tick className="size-3" strokeWidth={3} />}
       </span>
+      <div aria-hidden className={cn("h-24", PAPER, off && "opacity-50")}>
+        <Picture />
+      </div>
+      <span className={cn("mt-3 px-1 text-body font-semibold", off ? "text-fg-3" : "text-fg")}>{MODE_NAME[id]}</span>
+      <span className="mt-1 px-1 text-small text-fg-3">{option.description}</span>
+      {children && <span className="mt-2 px-1 text-small text-fg-3">{children}</span>}
     </label>
+  );
+}
+
+/** The conversations a launch takes, as a fan of small chats on the right of its card; the front one with a quote marked. */
+function ConversationFan() {
+  const chat = (front: boolean) => (
+    <div className="flex h-full flex-col justify-center gap-2 p-4">
+      <span className="ml-auto block h-3 w-20 rounded-full bg-customer" />
+      <div className="w-4/5 space-y-1.5 rounded-lg bg-list p-2.5 ring-1 ring-line">
+        <span className={cn(bar, "w-4/5")} />
+        {front ? (
+          <span className="flex items-center gap-1">
+            <span className="block h-1.5 w-1/2 rounded-full bg-mark" />
+            <MarkNo n={1} className="h-3.5 min-w-3.5 px-0.5 text-[9px]" />
+          </span>
+        ) : (
+          <span className={cn(bar, "w-1/2")} />
+        )}
+        <span className={cn(bar, "w-3/5")} />
+      </div>
+      <span className="ml-auto block h-3 w-14 rounded-full bg-customer" />
+    </div>
+  );
+  return (
+    <div
+      aria-hidden
+      className="pointer-events-none absolute right-12 top-1/2 hidden h-40 w-60 -translate-y-1/2 xl:block"
+    >
+      <div className="absolute inset-0 -rotate-[9deg] rounded-block bg-canvas/80 shadow-card ring-1 ring-line">
+        {chat(false)}
+      </div>
+      <div className="absolute inset-0 rotate-[6deg] rounded-block bg-canvas/90 shadow-card ring-1 ring-line">
+        {chat(false)}
+      </div>
+      <div className="absolute inset-0 rounded-block bg-canvas shadow-card ring-1 ring-line">{chat(true)}</div>
+    </div>
+  );
+}
+
+/**
+ * How many conversations, as a bar to drag: filled as far as the count goes, the ends of what one launch takes under
+ * it. The keyboard moves it by one.
+ */
+function CountBar({ value, most, onChange }: { value: number; most: number; onChange: (n: number) => void }) {
+  const share = most > 1 ? ((value - 1) / (most - 1)) * 100 : 100;
+  return (
+    <div>
+      <div className="relative h-10 rounded-full bg-fg/[0.06] has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-run/60">
+        <div
+          aria-hidden
+          className="absolute inset-y-0 left-0 rounded-full bg-[linear-gradient(90deg,rgb(var(--mark)),rgb(var(--run)/0.35))]"
+          style={{ width: `max(2.5rem, ${share}%)` }}
+        />
+        {/* The handle at the end of the fill: the bar is dragged by it. */}
+        <span
+          aria-hidden
+          className="absolute top-1.5 size-7 rounded-full bg-canvas shadow-card ring-1 ring-line"
+          style={{ left: `calc(max(2.5rem, ${share}%) - 2rem)` }}
+        />
+        <input
+          type="range"
+          min={1}
+          max={Math.max(1, most)}
+          value={value}
+          onChange={(e) => onChange(Number(e.target.value))}
+          aria-label="Сколько разговоров проверить"
+          className="absolute inset-0 h-full w-full cursor-ew-resize opacity-0"
+        />
+      </div>
+      <div className="mt-1.5 flex justify-between text-small tabular-nums text-fg-3">
+        <span>1</span>
+        <span>{most}</span>
+      </div>
+    </div>
   );
 }
 
@@ -198,9 +316,6 @@ export function LaunchPage({ check }: { check: Check }) {
   const [replan, setReplan] = useState(query.get("replan") === "1");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  // One line's editor open at a time; «Извлечь заново» opens the rules where its choice is.
-  const [open, setOpen] = useState<Part | null>(query.get("replan") === "1" ? "rules" : null);
-  const edit = (part: Part) => () => setOpen((now) => (now === part ? null : part));
   // The rules of communication collected right over the form, without leaving it.
   const [collect, setCollect] = useState(false);
 
@@ -297,17 +412,6 @@ export function LaunchPage({ check }: { check: Check }) {
                 : scenariosWait
                   ? "Сценарии собираются из ошибок в записанных ответах: чтобы сыграть их по выбранным критериям, отметьте и «Ответы в датасете»."
                   : null;
-  const plan =
-    dataset && conversations
-      ? `Проверим ${count(conversations, "разговор", "разговора", "разговоров")} из «${shownName(dataset)}» ${
-          rules
-            ? `${subset ? `по ${subset.length} из ${count(criteria.length, "критерия", "критериев", "критериев")} правил` : "по правилам"} «${rules.name}»${versionWord(rules, versions)}`
-            : replan && extractedBefore
-              ? "по критериям, которые извлечём из кода агента заново"
-              : "по критериям из кода агента"
-        }.`
-      : "";
-
   const start = async () => {
     if (blocked || !ready || !dataset) return;
     setBusy(true);
@@ -334,57 +438,61 @@ export function LaunchPage({ check }: { check: Check }) {
   };
 
   const collecting = !!state?.job.running && state.job.kind === "tone-criteria";
-  const words = chosen.map((m, i) => (i ? MODE_NAME[m].toLowerCase() : MODE_NAME[m]));
-  const what = words.length > 1 ? `${words.slice(0, -1).join(", ")} и ${words[words.length - 1]}` : words[0];
-  const rulesWords = rules
-    ? `${rules.name}${versionWord(rules, versions)} · ${
-        subset ? `${subset.length} из ${criteria.length}` : `все ${criteria.length}`
-      } ${plural(criteria.length, "критерий", "критерия", "критериев")}`
+  // The next step is the screen's one black button: what is missing first, the launch when nothing is.
+  const step: ReactNode = !library ? null : !dataset ? (
+    <UploadButton label="Загрузить выгрузку" />
+  ) : judges.data && !rulesReady ? (
+    check === "tone" ? (
+      <Button size="lg" variant="primary" disabled={collecting || blocked} onClick={() => setCollect(true)}>
+        {collecting ? "Собираем критерии…" : "Добавить правила"}
+      </Button>
+    ) : (
+      <Link to={`${SECTIONS.agent}?return=code`} className={buttonClass({ variant: "primary", size: "lg" })}>
+        Подключить код агента
+      </Link>
+    )
+  ) : (
+    <Button size="lg" variant="primary" icon={Play} loading={busy} disabled={!ready || blocked} onClick={start}>
+      Запустить проверку
+    </Button>
+  );
+  const why =
+    state?.job.running && !collecting
+      ? "Сейчас идёт другая задача этого агента."
+      : !dataset
+        ? "Проверка идёт по выгрузке чата с настоящими разговорами."
+        : judges.data && !rulesReady
+          ? check === "tone"
+            ? collecting
+              ? "Модель собирает критерии из документа — потом можно запускать."
+              : "Критерии соберутся из правил общения банка: документ или текст."
+            : "Критерии соберутся из кода агента. Или выберите готовый набор правил ниже."
+          : ready
+            ? null
+            : missing;
+  const by = rules
+    ? `по ${subset ? `${subset.length} из ${criteria.length}` : criteria.length} ${plural(
+        subset ? subset.length : criteria.length,
+        "критерию",
+        "критериям",
+        "критериям",
+      )} «${rules.name}»`
     : fromCode
-      ? `Критерии из кода агента${extractedBefore && replan ? " · извлечём заново" : ""}`
+      ? extractedBefore && replan
+        ? "по критериям, которые заново извлечём из кода агента"
+        : "по критериям из кода агента"
       : check === "tone"
-        ? "Правил ещё нет"
-        : "Критериев ещё нет";
-  // What the rules still lack, and the way to it, said under their line whatever is open.
-  const rulesLack =
-    judges.data && !rulesReady ? (
-      check === "tone" ? (
-        collecting ? (
-          <p className="text-body text-fg-3">Собираем критерии из документа — проверку можно будет запустить потом.</p>
-        ) : (
-          <div className="space-y-3">
-            <p className="text-body text-fg-3">Критерии соберутся из правил общения банка: документ или текст.</p>
-            <Button size="sm" variant="primary" onClick={() => setCollect(true)}>
-              Добавить правила
-            </Button>
-          </div>
-        )
-      ) : (
-        <div className="space-y-3">
-          <p className="text-body text-fg-3">
-            Критерии соберутся из кода агента, когда он подключён. Или выберите готовый набор правил.
-          </p>
-          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-            <Link to={`${SECTIONS.agent}?return=code`} className={buttonClass({ variant: "primary", size: "sm" })}>
-              Подключить код агента
-            </Link>
-            <Link to={criterionLink("code", null, { rules: "1" })} className="text-body text-run hover:underline">
-              Выбрать набор правил
-            </Link>
-          </div>
-        </div>
-      )
-    ) : null;
+        ? "по правилам общения — их ещё нет"
+        : "по критериям — их ещё нет";
   return (
     <div>
       <Header title={CHECK_NAME[check]} tabs={<StageTabs stage={check} />} />
       {offline && !state ? (
         <ServiceDown />
       ) : (
-        <div className="max-w-[760px] px-4 pb-16 pt-8 lg:px-10">
-          <h2 className="text-page font-semibold text-fg">Новая проверка</h2>
+        <div className="max-w-[1040px] px-4 pb-16 pt-6 lg:px-10 lg:pt-8">
           {failed && (
-            <div className="mt-6">
+            <div className="mb-6">
               <LoadFailed
                 title="Не удалось загрузить датасеты или правила"
                 error={datasets.error ?? judges.error}
@@ -395,264 +503,237 @@ export function LaunchPage({ check }: { check: Check }) {
               />
             </div>
           )}
-          <fieldset disabled={blocked} className="mt-6 divide-y divide-line rounded-block border border-line px-5">
-            <Line
-              label="Датасет"
-              value={
-                !library ? (
-                  <Skeleton className="h-6 w-56" />
-                ) : dataset ? (
+          {/* The launch in one sentence, its number first: how many conversations, from what, by what. */}
+          <section
+            aria-label="Новая проверка"
+            className="relative overflow-hidden rounded-sheet border border-line p-6 sm:p-8"
+            style={{
+              backgroundImage:
+                "radial-gradient(55% 90% at 92% 0%, rgb(var(--customer)) 0%, transparent 70%), radial-gradient(45% 75% at 100% 100%, rgb(var(--mark) / 0.4) 0%, transparent 70%)",
+            }}
+          >
+            {dataset && <ConversationFan />}
+            <Caps>Новая проверка · {CHECK_NAME[check]}</Caps>
+            <h2 className="mt-4 flex flex-wrap items-baseline gap-x-3">
+              <span className="text-display font-semibold tabular-nums text-fg sm:text-hero">
+                {conversations || "—"}
+              </span>
+              <span className="text-lead text-fg-2">
+                {plural(conversations, "разговор", "разговора", "разговоров")}
+                {dataset && (
                   <>
-                    {shownName(dataset)}{" "}
-                    <span className="text-fg-3">· {count(dataset.total, "разговор", "разговора", "разговоров")}</span>
+                    {" "}
+                    из <span className="font-medium text-fg">«{shownName(dataset)}»</span>
                   </>
-                ) : (
-                  "Датасетов пока нет"
-                )
-              }
-              open={open === "dataset"}
-              onEdit={library && library.datasets.length > 1 ? edit("dataset") : undefined}
-              below={
-                library && !dataset ? (
-                  <div className="space-y-3">
-                    <p className="text-body text-fg-3">Проверка идёт по выгрузке чата с настоящими разговорами.</p>
-                    <UploadButton label="Загрузить выгрузку" />
-                  </div>
-                ) : null
-              }
-            >
-              <div className="space-y-0.5">
-                {library?.datasets.map((d) => (
-                  <Choice
-                    key={d.id}
-                    name="dataset"
-                    checked={d.id === dataset?.id}
-                    onChange={() => setDatasetId(d.id)}
-                    title={shownName(d)}
-                    sub={datasetFacts(d).join(" · ")}
-                  />
-                ))}
-              </div>
-              <Link to={SECTIONS.data} className="mt-2 inline-block px-2 text-small text-run hover:underline">
-                Все датасеты
-              </Link>
-            </Line>
-            <Line
-              label="Правила"
-              value={!judges.data ? <Skeleton className="h-6 w-64" /> : rulesWords}
-              open={open === "rules"}
-              onEdit={judges.data && (versions.length > 0 || fromCode) ? edit("rules") : undefined}
-              below={rulesLack}
-            >
-              <div className="space-y-0.5">
-                {check === "code" && codeSources(state).length > 0 && (
-                  <Choice
-                    name="rules"
-                    checked={rulesId === ""}
-                    onChange={() => setJudgeId("")}
-                    title="Критерии из кода агента"
-                    sub="Соберутся из инструкций и инструментов агента"
-                  />
                 )}
-                {ruleChoices(versions, rulesId).map((v) => (
-                  <Choice
-                    key={v.id}
-                    name="rules"
-                    checked={v.id === rulesId}
-                    onChange={() => setJudgeId(v.id)}
-                    title={`${v.name}${versionWord(v, versions)}`}
-                    sub={count(v.criteria.length, "критерий", "критерия", "критериев")}
-                  />
-                ))}
-              </div>
-              {check === "tone" && criteria.length > 1 && (
-                <div className="mt-3 px-2 text-body">
-                  <p className="flex flex-wrap items-baseline gap-x-2 text-fg-2">
-                    Критерии: {subset ? `${subset.length} из ${criteria.length}` : `все ${criteria.length}`}
-                    <button type="button" onClick={() => setPicking((on) => !on)} className="text-run hover:underline">
-                      {picking ? "Свернуть" : subset ? "Изменить выбор" : "Выбрать часть"}
-                    </button>
-                    {subset && (
-                      <button type="button" onClick={() => setPicked(undefined)} className="text-run hover:underline">
-                        Все
-                      </button>
-                    )}
-                  </p>
-                  {picking && (
-                    <ul className="mt-2 max-h-72 divide-y divide-line overflow-auto rounded-control border border-line">
-                      {criteria.map((c, i) => (
-                        <li key={c.id}>
-                          <label className="flex cursor-pointer items-start gap-3 px-3 py-2 hover:bg-hover">
-                            <input
-                              type="checkbox"
-                              checked={(subset ?? criteria.map((x) => x.id)).includes(c.id)}
-                              onChange={() => toggle(c.id)}
-                              className="mt-1 size-4 accent-primary"
-                            />
-                            <span className="min-w-0 text-fg">
-                              {i + 1}. {c.name}
-                            </span>
-                          </label>
-                        </li>
+              </span>
+            </h2>
+            <p className="mt-2 max-w-[60ch] text-read text-fg-2">{by}</p>
+            {dataset && most > 1 && (
+              <fieldset disabled={blocked} className="mt-6 max-w-lg">
+                <CountBar value={Math.max(1, conversations || 1)} most={most} onChange={(n) => setSize(String(n))} />
+              </fieldset>
+            )}
+            <div className="mt-6 flex flex-wrap items-center gap-x-5 gap-y-3">
+              {step}
+              {why && <p className="min-w-0 flex-1 basis-64 text-body text-fg-3">{why}</p>}
+            </div>
+            {error && (
+              <p role="alert" className="mt-3 text-body text-bad">
+                {error}
+              </p>
+            )}
+          </section>
+
+          <fieldset disabled={blocked} className="mt-10">
+            <legend>
+              <Caps>Что проверить</Caps>
+            </legend>
+            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+              {OPTIONS.map(({ id, live: needsAgent }) => {
+                const off = needsAgent && !reachable.length;
+                const on = chosen.includes(id);
+                return (
+                  <WayCard
+                    key={id}
+                    id={id}
+                    on={on}
+                    off={off}
+                    onToggle={() => setModes((all) => (all.includes(id) ? all.filter((m) => m !== id) : [...all, id]))}
+                  >
+                    {off ? (
+                      <>
+                        Нужно подключение к агенту.{" "}
+                        <Link to={`${SECTIONS.agent}?return=${check}`} className="text-run hover:underline">
+                          Настроить
+                        </Link>
+                      </>
+                    ) : id === "simulations" && on ? (
+                      "Если сценариев ещё нет, сначала найдём ошибки в выбранных разговорах."
+                    ) : null}
+                  </WayCard>
+                );
+              })}
+            </div>
+            {live && way && (
+              <p className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 text-body text-fg-3">
+                {reachable.length > 1 ? (
+                  <label className="flex flex-wrap items-center gap-2">
+                    Агент
+                    <Select value={way.id} onChange={(e) => setTarget(e.target.value)} className="w-auto">
+                      {reachable.map((t) => (
+                        <option value={t.id} key={t.id}>
+                          {t.name}
+                        </option>
                       ))}
-                    </ul>
-                  )}
-                </div>
-              )}
-              {extractedBefore && (
-                <label className="mt-3 flex cursor-pointer items-start gap-3 px-2 text-body">
-                  <input
-                    type="checkbox"
-                    checked={replan}
-                    onChange={(e) => setReplan(e.target.checked)}
-                    className="mt-1 size-4 accent-primary"
-                  />
+                    </Select>
+                  </label>
+                ) : (
                   <span>
-                    <span className="block text-fg">Извлечь критерии из кода заново</span>
-                    <span className="mt-0.5 block text-small text-fg-3">
-                      Если у агента изменились инструкции или инструменты. Прежний итог и ответы людей останутся в
-                      истории.
-                    </span>
+                    Агент: {way.name}
+                    {way.where ? ` · ${way.where}` : ""}
                   </span>
-                </label>
-              )}
-              <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 px-2 text-small">
-                <Link to={criterionLink(check, null, { rules: "1" })} className="text-run hover:underline">
-                  Изменить правила
+                )}
+                <Link to={`${SECTIONS.agent}?return=${check}`} className="text-run hover:underline">
+                  Проверить связь
                 </Link>
-                {check === "tone" && (
-                  <button type="button" onClick={() => setCollect(true)} className="text-run hover:underline">
-                    Собрать из документа
-                  </button>
+              </p>
+            )}
+          </fieldset>
+
+          <fieldset disabled={blocked} className="mt-10">
+            <legend>
+              <Caps>Из чего</Caps>
+            </legend>
+            <div className="mt-3 grid gap-x-8 gap-y-6 rounded-block border border-line p-5 sm:grid-cols-3">
+              <div className="min-w-0">
+                <Caps>Датасет</Caps>
+                {library && library.datasets.length > 1 && dataset ? (
+                  <Menu
+                    className="mt-1 max-w-full"
+                    items={library.datasets.map((d) => ({
+                      key: d.id,
+                      label: shownName(d),
+                      sub: datasetFacts(d).join(" · "),
+                      on: d.id === dataset.id,
+                      run: () => setDatasetId(d.id),
+                    }))}
+                    trigger={
+                      <span className="flex min-w-0 items-center gap-1 text-left text-lead font-semibold text-fg">
+                        <span className="min-w-0 truncate">{shownName(dataset)}</span>
+                        <ChevronDown aria-hidden className="size-4 shrink-0 text-fg-3" />
+                      </span>
+                    }
+                  />
+                ) : (
+                  <p className="mt-1 truncate text-lead font-semibold text-fg">
+                    {dataset ? shownName(dataset) : library ? "Пока нет" : "…"}
+                  </p>
+                )}
+                <p className="mt-0.5 text-small text-fg-3">
+                  {dataset ? datasetFacts(dataset).slice(0, 2).join(" · ") : "Выгрузка чата"}
+                </p>
+              </div>
+              <div className="min-w-0">
+                <Caps>Правила</Caps>
+                {judges.data && (versions.length > 0 || codeSources(state).length > 0) ? (
+                  <Menu
+                    className="mt-1 max-w-full"
+                    items={[
+                      ...(check === "code" && codeSources(state).length > 0
+                        ? [
+                            {
+                              key: "code",
+                              label: "Критерии из кода агента",
+                              sub: "Соберутся из инструкций и инструментов",
+                              on: rulesId === "",
+                              run: () => setJudgeId(""),
+                            },
+                          ]
+                        : []),
+                      ...ruleChoices(versions, rulesId).map((v) => ({
+                        key: v.id,
+                        label: `${v.name}${versionWord(v, versions)}`,
+                        sub: count(v.criteria.length, "критерий", "критерия", "критериев"),
+                        on: v.id === rulesId,
+                        run: () => setJudgeId(v.id),
+                      })),
+                      ...(check === "tone"
+                        ? [{ key: "doc", label: "Собрать из документа", run: () => setCollect(true) }]
+                        : []),
+                      {
+                        key: "edit",
+                        label: "Изменить правила",
+                        run: () => void navigate(criterionLink(check, null, { rules: "1" })),
+                      },
+                    ]}
+                    trigger={
+                      <span className="flex min-w-0 items-center gap-1 text-left text-lead font-semibold text-fg">
+                        <span className="min-w-0 truncate">
+                          {rules
+                            ? `${rules.name}${versionWord(rules, versions)}`
+                            : fromCode
+                              ? "Из кода агента"
+                              : "Выбрать"}
+                        </span>
+                        <ChevronDown aria-hidden className="size-4 shrink-0 text-fg-3" />
+                      </span>
+                    }
+                  />
+                ) : (
+                  <p className="mt-1 text-lead font-semibold text-fg-3">{judges.data ? "Пока нет" : "…"}</p>
+                )}
+                <p className="mt-0.5 text-small text-fg-3">
+                  {rules ? (
+                    <>
+                      {subset ? `${subset.length} из ${criteria.length}` : `все ${criteria.length}`}{" "}
+                      {plural(criteria.length, "критерий", "критерия", "критериев")}
+                      {check === "tone" && criteria.length > 1 && (
+                        <>
+                          {" · "}
+                          <button type="button" onClick={() => setPicking(true)} className="text-run hover:underline">
+                            {subset ? "изменить выбор" : "выбрать часть"}
+                          </button>
+                        </>
+                      )}
+                    </>
+                  ) : fromCode ? (
+                    "Соберутся при проверке"
+                  ) : check === "code" ? (
+                    <Link to={criterionLink("code", null, { rules: "1" })} className="text-run hover:underline">
+                      Выбрать набор правил
+                    </Link>
+                  ) : (
+                    "Из документа банка"
+                  )}
+                </p>
+                {extractedBefore && (
+                  <label className="mt-2 flex cursor-pointer items-start gap-2 text-small text-fg-2">
+                    <input
+                      type="checkbox"
+                      checked={replan}
+                      onChange={(e) => setReplan(e.target.checked)}
+                      className="mt-0.5 size-4 accent-primary"
+                    />
+                    Извлечь критерии из кода заново
+                  </label>
                 )}
               </div>
-            </Line>
-            <Line
-              label="Сколько"
-              value={
-                <>
-                  <span className="tabular-nums">{conversations || "—"}</span>{" "}
-                  <span className="text-fg-3">из {total}</span>
-                </>
-              }
-              open={open === "size"}
-              onEdit={total > 0 ? edit("size") : undefined}
-            >
-              <div className="flex items-center gap-3">
-                <Input
-                  aria-label="Сколько разговоров проверить"
-                  inputMode="numeric"
-                  value={size}
-                  onChange={(e) => setSize(e.target.value.replace(/\D/g, "").slice(0, 3))}
-                  onBlur={() => setSize(String(conversations || Math.min(100, most) || draft.size))}
-                  className="w-24"
+              <div className="min-w-0">
+                <Caps>Версия агента</Caps>
+                <input
+                  value={version}
+                  onChange={(e) => setVersion(e.target.value)}
+                  maxLength={80}
+                  aria-label="Версия агента"
+                  placeholder="не указана"
+                  className="mt-1 w-full border-b border-dashed border-line-strong bg-transparent pb-0.5 text-lead font-semibold text-fg placeholder:font-normal placeholder:text-fg-4 focus:border-solid focus:border-fg focus:outline-none"
                 />
-                <span className="text-small text-fg-3">
-                  из {total}
-                  {total > MAX ? ` · за раз — до ${MAX}` : ""}
-                </span>
+                <p className="mt-0.5 text-small text-fg-3">По желанию: чтобы отличать прогоны</p>
               </div>
-            </Line>
-            <Line label="Что" value={what ?? "Ничего не выбрано"} open={open === "modes"} onEdit={edit("modes")}>
-              <div className="space-y-0.5">
-                {OPTIONS.map(({ id, icon: Icon, description, live: needsAgent }) => {
-                  const off = needsAgent && !reachable.length;
-                  const on = chosen.includes(id);
-                  return (
-                    <label
-                      key={id}
-                      className={cn(
-                        "flex items-start gap-3 rounded-control px-2 py-2",
-                        off ? "cursor-default" : "cursor-pointer hover:bg-hover",
-                      )}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={on}
-                        disabled={off}
-                        onChange={() =>
-                          setModes((all) => (all.includes(id) ? all.filter((m) => m !== id) : [...all, id]))
-                        }
-                        className="mt-1 size-4 accent-primary"
-                      />
-                      <span className="min-w-0">
-                        <span className={cn("flex items-center gap-2 text-body", off ? "text-fg-3" : "text-fg")}>
-                          <Icon aria-hidden className="size-4 shrink-0 text-fg-3" />
-                          {MODE_NAME[id]}
-                        </span>
-                        <span className="mt-0.5 block text-small text-fg-3">{description}</span>
-                        {off && (
-                          <span className="mt-1 block text-small text-fg-3">
-                            Нужно подключение к агенту.{" "}
-                            <Link to={`${SECTIONS.agent}?return=${check}`} className="text-run hover:underline">
-                              Настроить в «Агенте»
-                            </Link>
-                          </span>
-                        )}
-                        {id === "simulations" && on && (
-                          <span className="mt-1 block text-small text-fg-3">
-                            Если сценариев ещё нет, сначала найдём ошибки в выбранных разговорах и соберём из них
-                            сценарии.
-                          </span>
-                        )}
-                      </span>
-                    </label>
-                  );
-                })}
-              </div>
-              {live && way && (
-                <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 px-2 text-body text-fg-3">
-                  {reachable.length > 1 ? (
-                    <label className="flex flex-wrap items-center gap-2">
-                      Агент
-                      <Select value={way.id} onChange={(e) => setTarget(e.target.value)} className="w-auto">
-                        {reachable.map((t) => (
-                          <option value={t.id} key={t.id}>
-                            {t.name}
-                          </option>
-                        ))}
-                      </Select>
-                    </label>
-                  ) : (
-                    <span>
-                      Агент: {way.name}
-                      {way.where ? ` · ${way.where}` : ""}
-                    </span>
-                  )}
-                  <Link to={`${SECTIONS.agent}?return=${check}`} className="text-run hover:underline">
-                    Проверить связь
-                  </Link>
-                </div>
-              )}
-            </Line>
-            <Line
-              label="Версия агента"
-              value={version.trim() ? version : <span className="text-fg-3">не указана · по желанию</span>}
-              open={open === "version"}
-              onEdit={edit("version")}
-            >
-              <Input
-                aria-label="Версия агента"
-                value={version}
-                onChange={(e) => setVersion(e.target.value)}
-                maxLength={80}
-                placeholder="Например: v2.4, после правки промпта"
-              />
-            </Line>
+            </div>
           </fieldset>
-          <div className="mt-6 flex flex-wrap items-center gap-x-5 gap-y-3">
-            <Button size="lg" variant="primary" icon={Play} loading={busy} disabled={!ready || blocked} onClick={start}>
-              Запустить проверку
-            </Button>
-            <p className="min-w-0 flex-1 basis-64 text-body text-fg-3">
-              {state?.job.running ? "Сейчас идёт другая задача этого агента." : (missing ?? plan)}
-            </p>
-          </div>
-          {error && (
-            <p role="alert" className="mt-3 text-body text-bad">
-              {error}
-            </p>
-          )}
+
           <Link
             to={historyLink(check)}
             className="mt-8 inline-flex flex-wrap items-center gap-x-1.5 text-body text-fg-2 hover:text-fg hover:underline"
@@ -670,6 +751,37 @@ export function LaunchPage({ check }: { check: Check }) {
             )}
             <ArrowRight aria-hidden className="size-3.5" />
           </Link>
+          <Sheet
+            open={picking}
+            onClose={() => setPicking(false)}
+            title="Критерии проверки"
+            sub={rules ? `«${rules.name}»: отметьте, по каким проверить` : undefined}
+            actions={
+              subset ? (
+                <Button size="sm" onClick={() => setPicked(undefined)}>
+                  Все
+                </Button>
+              ) : undefined
+            }
+          >
+            <ul className="divide-y divide-line px-5 sm:px-7">
+              {criteria.map((c, i) => (
+                <li key={c.id}>
+                  <label className="flex cursor-pointer items-start gap-3 py-3">
+                    <input
+                      type="checkbox"
+                      checked={(subset ?? criteria.map((x) => x.id)).includes(c.id)}
+                      onChange={() => toggle(c.id)}
+                      className="mt-1 size-4 accent-primary"
+                    />
+                    <span className="min-w-0 text-read text-fg">
+                      <span className="tabular-nums text-fg-3">{i + 1}.</span> {c.name}
+                    </span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          </Sheet>
           {check === "tone" && <DocumentRules open={collect} onClose={() => setCollect(false)} />}
         </div>
       )}
