@@ -1,25 +1,65 @@
-import { Link, useSearchParams } from "react-router-dom";
-import { ArrowRight, Database } from "lucide-react";
+import { useState } from "react";
+import { Link } from "react-router-dom";
+import { ArrowRight, Database, MessageSquareQuote, Target } from "lucide-react";
 import { Header } from "../../app/Header";
 import { SectionJob } from "../../app/SectionJob";
-import { SECTIONS } from "../../app/links";
-import { useWide } from "../../app/useWide";
+import { SECTIONS, stageRoot, launchLink, type Check as CheckKind } from "../../app/links";
+import { CHECK_NAME, resultOf } from "../../lab/checks";
+import { count, when } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
+import { accuracySources, TONE_ID } from "../../lab/tone";
+import type { LabState } from "../../lab/types";
 import { ExportFormat } from "../../product/ExportFormat";
 import { UploadButton } from "../../product/UploadLogs";
 import { buttonClass } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
-import { ArchivedOnly, DatasetHead } from "./DatasetHead";
+import { DatasetLibrary } from "./DatasetLibrary";
 import { ExportConversations } from "./ExportConversations";
 
-/**
- * The dataset the checks go by and its conversations as the file has them: the name and what was checked on top, the
- * conversations with a search on the left, one of them in full on the right. Without a dataset, where to get one.
- */
+function CheckRoute({ check, state }: { check: CheckKind; state: LabState }) {
+  const result = resultOf(state, check);
+  const running = state.job.running && state.job.kind === (check === "tone" ? "tone-check" : "discover");
+  const hasRules = check === "tone" ? state.sources.some((s) => s.id === TONE_ID) : accuracySources(state).length > 0;
+  const to = result || running ? stageRoot(check) : launchLink(check);
+  const Icon = check === "tone" ? MessageSquareQuote : Target;
+  return (
+    <Link
+      to={to}
+      className="group flex min-w-0 items-start gap-3 rounded-block border border-line p-5 transition-colors hover:bg-hover"
+    >
+      <Icon aria-hidden className="mt-0.5 size-5 shrink-0 text-fg-3" />
+      <div className="min-w-0 flex-1">
+        <h3 className="text-read font-semibold text-fg">{CHECK_NAME[check]}</h3>
+        <p className="mt-1 text-small text-fg-3">
+          {running
+            ? "Проверка выполняется"
+            : result
+              ? `Оценено ${result.summary.measured} из ${state.logs.total} разговоров`
+              : hasRules
+                ? "Данные и правила готовы к проверке"
+                : check === "tone"
+                  ? "Добавьте правила общения"
+                  : "Выберите правила или прочитайте код агента"}
+        </p>
+        <span className="mt-3 inline-flex items-center gap-1.5 text-body font-medium text-fg">
+          {running
+            ? "Открыть проверку"
+            : result
+              ? "Посмотреть результат"
+              : hasRules
+                ? "Настроить проверку"
+                : "Подготовить"}
+          <ArrowRight aria-hidden className="size-3.5 transition-transform group-hover:translate-x-0.5" />
+        </span>
+      </div>
+    </Link>
+  );
+}
+
+/** One shared export belongs to the agent; its two independent checks keep their own results and histories. */
 export function DataPage() {
   const { state, offline } = useLabState();
-  const [params] = useSearchParams();
-  const wide = useWide();
+  const [showArchive, setShowArchive] = useState(false);
   const loaded = !!state?.logs.total;
   const header = (
     <Header
@@ -35,16 +75,20 @@ export function DataPage() {
         {offline ? <ServiceDown /> : <Skeleton className="m-8 h-80" />}
       </div>
     );
-  if (!loaded)
-    return (
-      <div>
-        {header}
-        <div className="max-w-[1180px] px-4 pb-16 pt-8 lg:px-10">
-          <h2 className="text-page font-semibold text-fg">Начните с настоящих разговоров</h2>
-          <p className="mt-3 max-w-[65ch] text-read text-fg-3">
-            Выгрузка чата с настоящими разговорами клиентов: по ней проверяется агент.
-          </p>
-          <ArchivedOnly />
+  return (
+    <div>
+      {header}
+      <div className="max-w-[1180px] px-4 pb-16 pt-8 lg:px-10">
+        <h2 className="text-page font-semibold text-fg">
+          {loaded ? "Разговоры для проверки" : "Начните с настоящих разговоров"}
+        </h2>
+        <p className="mt-3 max-w-[65ch] text-read text-fg-3">
+          {loaded
+            ? "Итог и сценарии проверок показываются по датасету с галочкой. Выберите другой — вернутся его прошлые результаты."
+            : "Выгрузка чата с настоящими разговорами клиентов: по ней проверяется агент."}
+        </p>
+        <DatasetLibrary showArchive={showArchive} onArchiveChange={setShowArchive} />
+        {showArchive ? null : !loaded ? (
           <div className="mt-7 grid items-start gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(260px,2fr)]">
             <div className="flex flex-col items-center rounded-block border border-dashed border-line-strong bg-inset/40 px-6 py-12 text-center">
               <span className="mb-5 flex size-12 items-center justify-center rounded-block bg-hover text-fg-3">
@@ -57,20 +101,32 @@ export function DataPage() {
             </div>
             <ExportFormat />
           </div>
+        ) : (
+          <>
+            <div className="mt-8 border-t border-line pt-6">
+              <p className="text-small text-fg-3">Сейчас в проверках</p>
+              <h3 className="mt-1 break-words text-title font-semibold text-fg">
+                {state.logs.name || state.logs.file}
+              </h3>
+              <p className="mt-2 text-small text-fg-3">
+                {count(state.logs.total, "разговор", "разговора", "разговоров")}
+                {state.logs.updatedAt ? ` · загружено ${when(state.logs.updatedAt)}` : ""}
+              </p>
+            </div>
+            <div className="mt-5 grid gap-4 sm:grid-cols-2">
+              <CheckRoute check="tone" state={state} />
+              <CheckRoute check="code" state={state} />
+            </div>
+            <ExportConversations key={state.logs.updatedAt ?? state.logs.total} stamp={state.logs.updatedAt} />
+          </>
+        )}
+        {!loaded && (
           <Link to={SECTIONS.overview} className={`mt-7 ${buttonClass({ variant: "ghost" })}`}>
             К обзору
             <ArrowRight aria-hidden className="size-3.5" />
           </Link>
-        </div>
+        )}
       </div>
-    );
-  // On a phone an open conversation takes the whole page, as in «Разговоры».
-  const reading = !!params.get("d") && !wide;
-  return (
-    <div className="flex h-full flex-col">
-      {header}
-      {!reading && <DatasetHead state={state} />}
-      <ExportConversations key={state.logs.updatedAt ?? state.logs.total} stamp={state.logs.updatedAt} />
     </div>
   );
 }
