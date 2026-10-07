@@ -1,6 +1,7 @@
 """Whether the replayed reply says what production said (spec 2026-10-06-acquiring-replay-service-design.md). The
 trace of a replay explains production's reply only when the two match. The criterion is shown under the two replies
-and counts in no status and no metric."""
+and counts in no status and no metric; the knowledge-base summary of a replay (rag.summary) shows how many of the steps
+that used the knowledge base matched production."""
 
 FAMILY = 'replay'
 CRITERION = {

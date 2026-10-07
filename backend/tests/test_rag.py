@@ -155,8 +155,18 @@ class SummaryTests(unittest.TestCase):
         )
 
     def test_an_empty_replay_has_nothing_counted(self) -> None:
-        summary = rag.summary([])
-        self.assertEqual(
-            (summary['steps'], summary['called'], summary['match']['same'], criterion(summary, 'rag:query')['pass']),
-            (0, 0, 0, 0),
-        )
+        self.assertEqual(rag.summary([])['match'], {'same': 0, 'different': 0, 'unknown': 0, 'differentSteps': []})
+
+    def test_a_replay_without_calls_has_every_criterion_at_zero(self) -> None:
+        verdicts = {rule['id']: 'FAIL' for rule in rag.CRITERIA}
+        summary = rag.summary(replayed(step(0, NOT_ASKED, verdicts), step(1, NOT_ASKED, verdicts)))
+        counts = [
+            {key: value for key, value in row.items() if key not in ('id', 'name')} for row in summary['criteria']
+        ]
+        self.assertEqual(counts, [{'pass': 0, 'fail': 0, 'unknown': 0, 'failed': []}] * len(rag.CRITERIA))
+
+    def test_the_second_models_verdicts_do_not_count(self) -> None:
+        second = {'model': 'm', 'status': 'FAIL', 'rules': [verdict('rag:query', 'FAIL')]}
+        with_second = {**step(0, ASKED, {'rag:query': 'PASS'}), 'second': second}
+        summary = rag.summary(replayed(with_second))
+        self.assertEqual(criterion(summary, 'rag:query')['failed'], [])
