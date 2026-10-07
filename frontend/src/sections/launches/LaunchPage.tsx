@@ -8,9 +8,9 @@ import { Header } from "../../app/Header";
 import { StageTabs } from "../../app/StageTabs";
 import { criterionLink, historyLink, launchLink, SECTIONS, toneCheckLink } from "../../app/links";
 import { api } from "../../lab/api";
-import { CHECK_NAME } from "../../lab/checks";
+import { CHECK_NAME, resultOf } from "../../lab/checks";
 import { useDatasets } from "../../lab/datasets";
-import { count } from "../../lab/format";
+import { count, longDay } from "../../lab/format";
 import { useJudges, type JudgeVersion } from "../../lab/judges";
 import { useLabState } from "../../lab/LabProvider";
 import { MODE_NAME, type Mode } from "../../lab/launches";
@@ -153,6 +153,8 @@ export function LaunchPage({ check }: { check: Check }) {
   }, [check, modes, version, wanted, target, datasetId, judgeId, draft.size]);
 
   const blocked = busy || !!state?.job.running;
+  // What the last check found, beside the next one: the way into its history.
+  const last = resultOf(state, check);
   const loading = !library || !judges.data;
   const failed = datasets.isError || judges.isError;
   const ready = !loading && !failed && !!dataset && rulesReady && conversations > 0 && chosen.length > 0;
@@ -422,9 +424,19 @@ export function LaunchPage({ check }: { check: Check }) {
           )}
           <Link
             to={historyLink(check)}
-            className="mt-8 inline-flex items-center gap-1.5 text-body text-fg-2 hover:text-fg hover:underline"
+            className="mt-8 inline-flex flex-wrap items-center gap-x-1.5 text-body text-fg-2 hover:text-fg hover:underline"
           >
-            История проверок
+            {last ? (
+              <>
+                Прошлая проверка, {longDay(last.finishedAt)}:{" "}
+                <span className="tabular-nums">
+                  {last.summary.failed} из {last.summary.measured}
+                </span>{" "}
+                с ошибкой агента
+              </>
+            ) : (
+              "История проверок"
+            )}
             <ArrowRight aria-hidden className="size-3.5" />
           </Link>
         </div>
