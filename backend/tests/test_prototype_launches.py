@@ -1,6 +1,7 @@
 """Recorded questions are replayed; grouped modes recover without rerunning successes."""
 
 import asyncio
+import json
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -8,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 import support
 from test_prototype_library import criterion, dialogue
 
-from lab import storage
+from lab import models, storage
 from lab.agents import idp
 from lab.domain import checks
 from lab.domain.comparison import comparison
@@ -100,6 +101,42 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
             result = await questions.run('code', 'local-http', 1, lambda **_: None, 'changed-context')
         self.assertEqual(result['items'][0]['status'], 'PASS')
         self.assertFalse(result['items'][0]['comparable'])
+
+    async def test_the_judge_of_a_replay_sees_the_systems_the_agent_called(self):
+        """As in a simulated conversation, a criterion observed through the agent's tools is judged on the calls the
+        agent made in its new answer, shown to the judge under it; without a recorded call it stays unmeasured, and a
+        call never stands for the agent's words."""
+
+        class Calling(Agent):
+            def __init__(self, events):
+                super().__init__()
+                self.events = events
+
+            async def say(self, conversation_id, question, test_data=None):
+                return await super().say(conversation_id, question) | {'events': self.events}
+
+        rules = [criterion() | {'id': 'tariff', 'name': 'Тариф', 'observation': 'tool'}, criterion()]
+        answer = {
+            'rules': [
+                {'ruleId': rule['id'], 'status': 'PASS', 'reason': 'Тариф запрошен.', 'agentQuote': 'getLkkTariff'}
+                for rule in rules
+            ]
+        }
+        reply = models.Reply(json.dumps(answer), 'test-model')
+        for tools in ([], ['getLkkTariff']):  # without and with the agent's tools in its context (the context judge)
+            agent_context.save({'tools': tools})
+            for events in ([], [{'tool': 'Система банка · getLkkTariff'}]):
+                with self.subTest(tools=tools, events=events):
+                    item = questions._item(dialogue(), {'title': 'Тариф', 'rules': rules})
+                    with patch.object(models, 'chat', AsyncMock(return_value=reply)) as chat:
+                        await questions._play(Calling(events), item)
+                    shown = json.loads(chat.await_args.args[1])['conversation']
+                    self.assertEqual('[вызовы систем: getLkkTariff]' in shown[1]['text'], bool(events))
+                    found = {row['ruleId']: row for row in item['rules']}
+                    self.assertEqual(found['tariff']['status'], 'PASS' if events else 'UNKNOWN')
+                    self.assertEqual(found['r1']['status'], 'UNKNOWN')
+                    if not events:
+                        self.assertTrue(found['tariff']['reason'].startswith('Вызовы инструментов не записаны.'))
 
     async def test_failed_connection_is_never_a_successful_check(self):
         with patch('lab.flows.connection.connect', side_effect=RuntimeError('Нет связи')):

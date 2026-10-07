@@ -19,6 +19,7 @@ from openpyxl import load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
 
 from . import export_formats
+from .transcript import calls_line
 
 LIMIT = 50_000_000  # an uploaded export
 INFLATED = 500_000_000  # the parts of a workbook, unpacked together
@@ -31,8 +32,8 @@ MARKER = re.compile(r'(?:^|(?<=\s))(CLIENT|AGENT)(?=\s|$)')
 UNREADABLE = (BadZipFile, InvalidFileException, ParseError, KeyError, zlib.error, EOFError, NotImplementedError)
 # A chat button the agent sent, written into the export's text as «` ` ` transition-code CODE ` ` `».
 CONTROL = re.compile(r'`\s*`\s*`\s*transition-code\s*([A-Za-z0-9_-]*)\s*`\s*`\s*`')
-# The line as_seen puts under a reply for those buttons.
-BUTTONS = re.compile(r'\n\[Кнопки: [^\n]*\]\Z')
+# The lines the Lab puts under a reply: the buttons it sent (as_seen) and the systems it called (conversation).
+LAB_LINES = re.compile(r'(?:\n\[(?:Кнопки|вызовы систем): [^\n]*\])+\Z')
 
 
 def as_seen(text: str) -> str:
@@ -44,18 +45,19 @@ def as_seen(text: str) -> str:
 
 
 def words(text: str) -> str:
-    """What the agent wrote in a reply, raw or as_seen: the line of buttons is the Lab's and the code is the export's,
-    so neither is evidence of the agent's words."""
-    return BUTTONS.sub('', CONTROL.sub('', text)).strip()
+    """What the agent wrote in a reply, raw or as the judge reads it: the lines of buttons and of the systems called are
+    the Lab's and the code is the export's, so none of them is evidence of the agent's words."""
+    return LAB_LINES.sub('', CONTROL.sub('', text)).strip()
 
 
 def conversation(dialogue: dict) -> list[dict]:
     """A logged conversation as the judge reads it: the customer's words, and the agent's replies as the customer saw
-    them (as_seen)."""
+    them (as_seen). A reply the agent has just given to recorded questions also names the systems it called, as in a
+    played conversation (transcript.calls_line): an export records none."""
     return [
         {'role': 'CUSTOMER', 'text': m['content']}
         if m['role'] == 'user'
-        else {'role': 'AGENT', 'text': as_seen(m['content'])}
+        else {'role': 'AGENT', 'text': as_seen(m['content']) + calls_line(m)}
         for m in dialogue['messages']
     ]
 

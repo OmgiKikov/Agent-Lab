@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable
 
 from .. import config, models, storage
 from ..domain import export, sampling, verdicts
+from ..domain.transcript import tool_calls
 from ..roles import judge
 from . import agent_context
 
@@ -44,8 +45,11 @@ def same_material(count: int) -> dict:
 
 async def judge_dialogue(dialogue: dict, topic: dict) -> dict:
     """One conversation judged by the criteria of its topic, by both judges. A conversation the model could not judge
-    stays «не удалось проверить», with the reason, and never fails the check."""
+    stays «не удалось проверить», with the reason, and never fails the check. The systems the agent called, where its
+    replies carry them (events: its answers to recorded questions asked again), are shown to the judges under each
+    reply and are the only evidence of a call, as in a played conversation."""
     rules, shown = topic['rules'], export.conversation(dialogue)
+    tools = '\n'.join(call for message in dialogue['messages'] for call in tool_calls(message))
     knowledge, context_error = [], None
     extra = agent_context.current()
     contextual = any(rule.get('sourceId') != 'tone-of-voice' for rule in rules) and bool(
@@ -56,11 +60,11 @@ async def judge_dialogue(dialogue: dict, topic: dict) -> dict:
     try:
         if contextual:
             context = {'knowledge': knowledge, 'availableTools': extra['tools']}
-            verdict = await judge.contextual_verdict(rules, shown, context)
-            second = await judge.second_opinion(judge.contextual_verdict, rules, shown, context)
+            verdict = await judge.contextual_verdict(rules, shown, context, tools)
+            second = await judge.second_opinion(judge.contextual_verdict, rules, shown, context, tools)
         else:
-            verdict = await judge.log_verdict(rules, shown)
-            second = await judge.second_opinion(judge.log_verdict, rules, shown)
+            verdict = await judge.log_verdict(rules, shown, tools)
+            second = await judge.second_opinion(judge.log_verdict, rules, shown, tools)
         rows, status, model, version = verdict.rows, verdict.status, verdict.model, verdict.version
         error = None
     except models.ModelError as exc:

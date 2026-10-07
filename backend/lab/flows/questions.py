@@ -143,12 +143,17 @@ async def _play(agent: agents.HttpAgent, item: dict) -> None:
             item['conversation'].append({'role': 'agent', 'text': reply.get('text') or '', **reply})
             if not reply.get('ok', True):
                 break
+        # A reply keeps the systems the agent called in it (events): the judge's only evidence of a call.
         transcript = {
             'id': item['dialogueId'],
             'messages': [
-                {'role': 'user' if m['role'] == 'customer' else 'assistant', 'content': m['text']}
+                {
+                    'role': 'user' if m['role'] == 'customer' else 'assistant',
+                    'content': m['text'],
+                    'events': m.get('events') or [],
+                }
                 for m in item['conversation']
-                if m['text'].strip()
+                if m['text'].strip() or m.get('events')
             ],
         }
         result = await conversations.judge_dialogue(transcript, {'id': 'replay', 'rules': item['criteria']})
