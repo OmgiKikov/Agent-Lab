@@ -1,7 +1,23 @@
 import { Select } from "../../ui/Field";
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowRight, Check as Tick, ChevronDown, Database, FlaskConical, MessagesSquare, Play } from "lucide-react";
+import {
+  ArrowRight,
+  ChevronRight,
+  ChevronsUpDown,
+  Database,
+  FlaskConical,
+  Hash,
+  ListChecks,
+  MessageSquareQuote,
+  MessagesSquare,
+  Minus,
+  Play,
+  Plus,
+  RefreshCw,
+  ScrollText,
+  Tag,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { agentKey } from "../../app/agent";
 import { Header } from "../../app/Header";
@@ -16,7 +32,7 @@ import { useLabState } from "../../lab/LabProvider";
 import { MODE_NAME, type Mode } from "../../lab/launches";
 import { codeSources } from "../../lab/tone";
 import type { Check } from "../../lab/types";
-import { Button, buttonClass } from "../../ui/Button";
+import { Button } from "../../ui/Button";
 import { UploadButton } from "../../product/UploadLogs";
 import { shownName } from "../data/DatasetInfo";
 import { DocumentRules } from "../judges/DocumentRules";
@@ -25,13 +41,13 @@ import { ServiceDown } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
 import { Menu } from "../../ui/Menu";
 import { Sheet } from "../../ui/Sheet";
-import { MarkNo } from "../../product/MarkNo";
+import { Switch } from "../../ui/Switch";
 
 const MAX = 300; // conversations one launch takes at most (api/launches.py, LaunchCommand)
 const OPTIONS: { id: Mode; icon: typeof Database; description: string; live: boolean }[] = [
   {
     id: "dataset",
-    icon: Database,
+    icon: MessageSquareQuote,
     description: "Оценить ответы, которые уже записаны в датасете. Подключение к агенту не нужно.",
     live: false,
   },
@@ -48,6 +64,9 @@ const OPTIONS: { id: Mode; icon: typeof Database; description: string; live: boo
     live: true,
   },
 ];
+
+/** The colour of each way's tile: the recorded answers dark, the live agent blue, the simulations orange. */
+const WAY_TINT: Record<Mode, string> = { dataset: "bg-fg", questions: "bg-run", simulations: "bg-warn" };
 
 /** What the form remembers between visits, per agent and check: a choice that is gone falls back to the current one. */
 type Draft = {
@@ -99,192 +118,113 @@ function ruleChoices(versions: JudgeVersion[], selectedId: string | null): Judge
 const versionWord = (v: JudgeVersion, all: JudgeVersion[]) =>
   all.some((other) => other.setId === v.setId && other.id !== v.id) ? ` · версия ${v.version}` : "";
 
-/** A small capital label over a value, as the figures of a card name theirs. */
-function Caps({ children, className }: { children: ReactNode; className?: string }) {
-  return <p className={cn("text-label font-semibold uppercase tracking-caps text-fg-3", className)}>{children}</p>;
-}
-
-const bar = "block h-1.5 rounded-full bg-fg/10";
-/** The grid paper the pictures of the ways lie on. */
-const PAPER =
-  "rounded-control bg-inset [background-image:radial-gradient(rgb(var(--fg-4)/0.35)_1px,transparent_1px)] [background-size:8px_8px]";
-
-/** What checking the recorded answers gives: the agent's reply with the quote the check found marked. */
-function RecordedPicture() {
+/** The coloured square of a row, as a setting's icon: what the row is about at a glance. */
+function Tile({ icon: Icon, tint }: { icon: typeof Database; tint: string }) {
   return (
-    <div className="flex h-full flex-col justify-center gap-1.5 px-5">
-      <span className="ml-auto block h-2.5 w-16 rounded-full bg-customer" />
-      <div className="w-4/5 space-y-1.5 rounded-lg bg-list p-2 ring-1 ring-line">
-        <span className={cn(bar, "w-4/5")} />
-        <span className="flex items-center gap-1">
-          <span className="block h-1.5 w-1/2 rounded-full bg-mark" />
-          <MarkNo n={1} className="h-3 min-w-3 px-0.5 text-[8px]" />
-        </span>
-        <span className={cn(bar, "w-3/5")} />
-      </div>
-    </div>
+    <span aria-hidden className={cn("grid size-7 shrink-0 place-items-center rounded-[8px] text-white", tint)}>
+      <Icon className="size-4" strokeWidth={2.2} />
+    </span>
   );
 }
-
-/** What asking the live agent gives: the same question, the recorded reply beside the new one. */
-function LivePicture() {
-  return (
-    <div className="flex h-full flex-col justify-center gap-1.5 px-5">
-      <span className="ml-auto block h-2.5 w-16 rounded-full bg-customer" />
-      <div className="flex gap-1.5">
-        <div className="flex-1 space-y-1.5 rounded-lg bg-list p-2 opacity-50 ring-1 ring-line">
-          <span className={cn(bar, "w-4/5")} />
-          <span className={cn(bar, "w-1/2")} />
-        </div>
-        <div className="flex-1 space-y-1.5 rounded-lg bg-list p-2 ring-1 ring-line-strong">
-          <span className={cn(bar, "w-3/4")} />
-          <span className={cn(bar, "w-3/5")} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/** What the simulations give: clients of different kinds playing the scenarios through. */
-function SimulationPicture() {
-  return (
-    <div className="flex h-full flex-col justify-center gap-2 px-5">
-      <div className="flex -space-x-1.5">
-        {["bg-mark", "bg-run/40", "bg-fg/20", "bg-ok/40"].map((tint) => (
-          <span key={tint} className={cn("size-5 rounded-full ring-2 ring-inset", tint)} />
-        ))}
-      </div>
-      <div className="w-4/5 space-y-1.5 rounded-lg bg-list p-2 ring-1 ring-line">
-        <span className={cn(bar, "w-3/4")} />
-        <span className={cn(bar, "w-1/2")} />
-      </div>
-    </div>
-  );
-}
-
-const PICTURE: Record<Mode, () => ReactNode> = {
-  dataset: RecordedPicture,
-  questions: LivePicture,
-  simulations: SimulationPicture,
-};
 
 /**
- * One way to check as a card to tick: a picture of what it gives, its name, what it does. A way that cannot run now
- * stays in its place, dashed, saying what it needs.
+ * A white rounded list on the grey page; the line between its rows starts after the tiles, as in a list of settings.
+ * Nothing is clipped at its edge: a row's menu opens over the rows below.
  */
-function WayCard({
-  id,
-  on,
-  off,
-  onToggle,
+const LIST =
+  "rounded-block bg-canvas shadow-[0_1px_2px_rgb(0_0_0/0.04)] ring-1 ring-line [&>*+*]:relative [&>*+*]:before:pointer-events-none [&>*+*]:before:absolute [&>*+*]:before:left-14 [&>*+*]:before:right-0 [&>*+*]:before:top-0 [&>*+*]:before:h-px [&>*+*]:before:bg-line [&>*+*]:before:content-['']";
+
+/** A group of rows on the grey page: its name over it, a line under it that explains it. */
+function Group({ title, note, children }: { title?: string; note?: ReactNode; children: ReactNode }) {
+  return (
+    <section className="mt-7 first:mt-0">
+      {title && <h3 className="mb-2 px-4 text-small text-fg-3">{title}</h3>}
+      <div className={LIST}>{children}</div>
+      {note && <div className="mt-2 px-4 text-small text-fg-3">{note}</div>}
+    </section>
+  );
+}
+
+/** One row of a group: its tile and name, a line under the name, what is chosen on the right. */
+function Row({
+  tile,
+  title,
+  sub,
   children,
 }: {
-  id: Mode;
-  on: boolean;
-  off: boolean;
-  onToggle: () => void;
+  tile: ReactNode;
+  title: ReactNode;
+  sub?: ReactNode;
   children?: ReactNode;
 }) {
-  const option = OPTIONS.find((o) => o.id === id)!;
-  const Picture = PICTURE[id];
   return (
-    <label
-      className={cn(
-        "relative flex flex-col rounded-block border bg-canvas p-3 transition-[border-color,box-shadow] has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-run/60",
-        on ? "border-fg shadow-card" : "border-line",
-        off ? "cursor-default border-dashed" : "cursor-pointer hover:border-line-strong",
-      )}
-    >
-      <input type="checkbox" className="sr-only" checked={on} disabled={off} onChange={onToggle} />
-      <span
-        aria-hidden
-        className={cn(
-          "absolute right-5 top-5 z-10 grid size-5 place-items-center rounded-full transition-colors",
-          on ? "bg-fg text-canvas" : "bg-canvas ring-1 ring-line-strong",
-        )}
+    <div className="flex min-h-[52px] items-center gap-3 px-4 py-2.5">
+      {tile}
+      <div className="min-w-0 flex-1">
+        <p className="text-read text-fg">{title}</p>
+        {sub && <p className="text-small text-fg-3">{sub}</p>}
+      </div>
+      {children && <div className="flex min-w-0 shrink-0 items-center justify-end gap-2">{children}</div>}
+    </div>
+  );
+}
+
+/** The chosen value of a row that opens a list to choose from, as a pop-up button reads. */
+function Picked({ children }: { children: ReactNode }) {
+  return (
+    <span className="flex max-w-[16rem] items-center gap-1 text-read text-fg-3 hover:text-fg">
+      <span className="min-w-0 truncate">{children}</span>
+      <ChevronsUpDown aria-hidden className="size-3.5 shrink-0" />
+    </span>
+  );
+}
+
+/** A number with − and +, typed in as well: by ten, within what one launch takes. */
+function Stepper({
+  value,
+  shown,
+  most,
+  onType,
+  onSet,
+  onBlur,
+}: {
+  value: number;
+  shown: string;
+  most: number;
+  onType: (text: string) => void;
+  onSet: (n: number) => void;
+  onBlur: () => void;
+}) {
+  const button =
+    "grid size-7 place-items-center rounded-[8px] text-fg-2 transition-colors hover:bg-canvas hover:text-fg disabled:opacity-30";
+  return (
+    <div className="flex items-center rounded-control bg-fg/[0.06] p-0.5">
+      <button
+        type="button"
+        aria-label="Меньше"
+        className={button}
+        disabled={value <= 1}
+        onClick={() => onSet(Math.max(1, value - 10))}
       >
-        {on && <Tick className="size-3" strokeWidth={3} />}
-      </span>
-      <div aria-hidden className={cn("h-24", PAPER, off && "opacity-50")}>
-        <Picture />
-      </div>
-      <span className={cn("mt-3 px-1 text-body font-semibold", off ? "text-fg-3" : "text-fg")}>{MODE_NAME[id]}</span>
-      <span className="mt-1 px-1 text-small text-fg-3">{option.description}</span>
-      {children && <span className="mt-2 px-1 text-small text-fg-3">{children}</span>}
-    </label>
-  );
-}
-
-/** The conversations a launch takes, as a fan of small chats on the right of its card; the front one with a quote marked. */
-function ConversationFan() {
-  const chat = (front: boolean) => (
-    <div className="flex h-full flex-col justify-center gap-2 p-4">
-      <span className="ml-auto block h-3 w-20 rounded-full bg-customer" />
-      <div className="w-4/5 space-y-1.5 rounded-lg bg-list p-2.5 ring-1 ring-line">
-        <span className={cn(bar, "w-4/5")} />
-        {front ? (
-          <span className="flex items-center gap-1">
-            <span className="block h-1.5 w-1/2 rounded-full bg-mark" />
-            <MarkNo n={1} className="h-3.5 min-w-3.5 px-0.5 text-[9px]" />
-          </span>
-        ) : (
-          <span className={cn(bar, "w-1/2")} />
-        )}
-        <span className={cn(bar, "w-3/5")} />
-      </div>
-      <span className="ml-auto block h-3 w-14 rounded-full bg-customer" />
-    </div>
-  );
-  return (
-    <div
-      aria-hidden
-      className="pointer-events-none absolute right-12 top-1/2 hidden h-40 w-60 -translate-y-1/2 xl:block"
-    >
-      <div className="absolute inset-0 -rotate-[9deg] rounded-block bg-canvas/80 shadow-card ring-1 ring-line">
-        {chat(false)}
-      </div>
-      <div className="absolute inset-0 rotate-[6deg] rounded-block bg-canvas/90 shadow-card ring-1 ring-line">
-        {chat(false)}
-      </div>
-      <div className="absolute inset-0 rounded-block bg-canvas shadow-card ring-1 ring-line">{chat(true)}</div>
-    </div>
-  );
-}
-
-/**
- * How many conversations, as a bar to drag: filled as far as the count goes, the ends of what one launch takes under
- * it. The keyboard moves it by one.
- */
-function CountBar({ value, most, onChange }: { value: number; most: number; onChange: (n: number) => void }) {
-  const share = most > 1 ? ((value - 1) / (most - 1)) * 100 : 100;
-  return (
-    <div>
-      <div className="relative h-10 rounded-full bg-fg/[0.06] has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-run/60">
-        <div
-          aria-hidden
-          className="absolute inset-y-0 left-0 rounded-full bg-[linear-gradient(90deg,rgb(var(--mark)),rgb(var(--run)/0.35))]"
-          style={{ width: `max(2.5rem, ${share}%)` }}
-        />
-        {/* The handle at the end of the fill: the bar is dragged by it. */}
-        <span
-          aria-hidden
-          className="absolute top-1.5 size-7 rounded-full bg-canvas shadow-card ring-1 ring-line"
-          style={{ left: `calc(max(2.5rem, ${share}%) - 2rem)` }}
-        />
-        <input
-          type="range"
-          min={1}
-          max={Math.max(1, most)}
-          value={value}
-          onChange={(e) => onChange(Number(e.target.value))}
-          aria-label="Сколько разговоров проверить"
-          className="absolute inset-0 h-full w-full cursor-ew-resize opacity-0"
-        />
-      </div>
-      <div className="mt-1.5 flex justify-between text-small tabular-nums text-fg-3">
-        <span>1</span>
-        <span>{most}</span>
-      </div>
+        <Minus className="size-3.5" />
+      </button>
+      <input
+        aria-label="Сколько разговоров проверить"
+        inputMode="numeric"
+        value={shown}
+        onChange={(e) => onType(e.target.value.replace(/\D/g, "").slice(0, 3))}
+        onBlur={onBlur}
+        className="w-12 bg-transparent text-center text-read tabular-nums text-fg focus:outline-none"
+      />
+      <button
+        type="button"
+        aria-label="Больше"
+        className={button}
+        disabled={value >= most}
+        onClick={() => onSet(Math.min(most, value + 10))}
+      >
+        <Plus className="size-3.5" />
+      </button>
     </div>
   );
 }
@@ -438,38 +378,9 @@ export function LaunchPage({ check }: { check: Check }) {
   };
 
   const collecting = !!state?.job.running && state.job.kind === "tone-criteria";
-  // The next step is the screen's one black button: what is missing first, the launch when nothing is.
-  const step: ReactNode = !library ? null : !dataset ? (
-    <UploadButton label="Загрузить выгрузку" />
-  ) : judges.data && !rulesReady ? (
-    check === "tone" ? (
-      <Button size="lg" variant="primary" disabled={collecting || blocked} onClick={() => setCollect(true)}>
-        {collecting ? "Собираем критерии…" : "Добавить правила"}
-      </Button>
-    ) : (
-      <Link to={`${SECTIONS.agent}?return=code`} className={buttonClass({ variant: "primary", size: "lg" })}>
-        Подключить код агента
-      </Link>
-    )
-  ) : (
-    <Button size="lg" variant="primary" icon={Play} loading={busy} disabled={!ready || blocked} onClick={start}>
-      Запустить проверку
-    </Button>
-  );
-  const why =
-    state?.job.running && !collecting
-      ? "Сейчас идёт другая задача этого агента."
-      : !dataset
-        ? "Проверка идёт по выгрузке чата с настоящими разговорами."
-        : judges.data && !rulesReady
-          ? check === "tone"
-            ? collecting
-              ? "Модель собирает критерии из документа — потом можно запускать."
-              : "Критерии соберутся из правил общения банка: документ или текст."
-            : "Критерии соберутся из кода агента. Или выберите готовый набор правил ниже."
-          : ready
-            ? null
-            : missing;
+  const [more, setMore] = useState(false);
+  // What the launch waits for, said beside its button; the row of what is missing gives the way to it.
+  const why = state?.job.running && !collecting ? "Сейчас идёт другая задача этого агента." : ready ? null : missing;
   const by = rules
     ? `по ${subset ? `${subset.length} из ${criteria.length}` : criteria.length} ${plural(
         subset ? subset.length : criteria.length,
@@ -481,18 +392,26 @@ export function LaunchPage({ check }: { check: Check }) {
       ? extractedBefore && replan
         ? "по критериям, которые заново извлечём из кода агента"
         : "по критериям из кода агента"
-      : check === "tone"
-        ? "по правилам общения — их ещё нет"
-        : "по критериям — их ещё нет";
+      : null;
+  const plan =
+    dataset && conversations
+      ? `Проверим ${count(conversations, "разговор", "разговора", "разговоров")} из «${shownName(dataset)}»${
+          by ? ` ${by}` : ""
+        }.`
+      : "Выберите разговоры, правила и что проверить.";
+  const action =
+    "rounded-sm text-read text-run hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60";
   return (
-    <div>
+    <div className="flex min-h-full flex-col bg-inset">
       <Header title={CHECK_NAME[check]} tabs={<StageTabs stage={check} />} />
       {offline && !state ? (
         <ServiceDown />
       ) : (
-        <div className="max-w-[1040px] px-4 pb-16 pt-6 lg:px-10 lg:pt-8">
+        <div className="w-full max-w-[720px] px-4 pb-16 pt-8 lg:px-10">
+          <h2 className="px-4 text-page font-semibold text-fg">Новая проверка</h2>
+          <p className="mt-1.5 px-4 text-read text-fg-3">{plan}</p>
           {failed && (
-            <div className="mb-6">
+            <div className="mt-6">
               <LoadFailed
                 title="Не удалось загрузить датасеты или правила"
                 error={datasets.error ?? judges.error}
@@ -503,114 +422,25 @@ export function LaunchPage({ check }: { check: Check }) {
               />
             </div>
           )}
-          {/* The launch in one sentence, its number first: how many conversations, from what, by what. */}
-          <section
-            aria-label="Новая проверка"
-            className="relative overflow-hidden rounded-sheet border border-line p-6 sm:p-8"
-            style={{
-              backgroundImage:
-                "radial-gradient(55% 90% at 92% 0%, rgb(var(--customer)) 0%, transparent 70%), radial-gradient(45% 75% at 100% 100%, rgb(var(--mark) / 0.4) 0%, transparent 70%)",
-            }}
-          >
-            {dataset && <ConversationFan />}
-            <Caps>Новая проверка · {CHECK_NAME[check]}</Caps>
-            <h2 className="mt-4 flex flex-wrap items-baseline gap-x-3">
-              <span className="text-display font-semibold tabular-nums text-fg sm:text-hero">
-                {conversations || "—"}
-              </span>
-              <span className="text-lead text-fg-2">
-                {plural(conversations, "разговор", "разговора", "разговоров")}
-                {dataset && (
-                  <>
-                    {" "}
-                    из <span className="font-medium text-fg">«{shownName(dataset)}»</span>
-                  </>
-                )}
-              </span>
-            </h2>
-            <p className="mt-2 max-w-[60ch] text-read text-fg-2">{by}</p>
-            {dataset && most > 1 && (
-              <fieldset disabled={blocked} className="mt-6 max-w-lg">
-                <CountBar value={Math.max(1, conversations || 1)} most={most} onChange={(n) => setSize(String(n))} />
-              </fieldset>
-            )}
-            <div className="mt-6 flex flex-wrap items-center gap-x-5 gap-y-3">
-              {step}
-              {why && <p className="min-w-0 flex-1 basis-64 text-body text-fg-3">{why}</p>}
-            </div>
-            {error && (
-              <p role="alert" className="mt-3 text-body text-bad">
-                {error}
-              </p>
-            )}
-          </section>
-
-          <fieldset disabled={blocked} className="mt-10">
-            <legend>
-              <Caps>Что проверить</Caps>
-            </legend>
-            <div className="mt-3 grid gap-3 sm:grid-cols-3">
-              {OPTIONS.map(({ id, live: needsAgent }) => {
-                const off = needsAgent && !reachable.length;
-                const on = chosen.includes(id);
-                return (
-                  <WayCard
-                    key={id}
-                    id={id}
-                    on={on}
-                    off={off}
-                    onToggle={() => setModes((all) => (all.includes(id) ? all.filter((m) => m !== id) : [...all, id]))}
-                  >
-                    {off ? (
-                      <>
-                        Нужно подключение к агенту.{" "}
-                        <Link to={`${SECTIONS.agent}?return=${check}`} className="text-run hover:underline">
-                          Настроить
-                        </Link>
-                      </>
-                    ) : id === "simulations" && on ? (
-                      "Если сценариев ещё нет, сначала найдём ошибки в выбранных разговорах."
-                    ) : null}
-                  </WayCard>
-                );
-              })}
-            </div>
-            {live && way && (
-              <p className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 text-body text-fg-3">
-                {reachable.length > 1 ? (
-                  <label className="flex flex-wrap items-center gap-2">
-                    Агент
-                    <Select value={way.id} onChange={(e) => setTarget(e.target.value)} className="w-auto">
-                      {reachable.map((t) => (
-                        <option value={t.id} key={t.id}>
-                          {t.name}
-                        </option>
-                      ))}
-                    </Select>
-                  </label>
-                ) : (
-                  <span>
-                    Агент: {way.name}
-                    {way.where ? ` · ${way.where}` : ""}
-                  </span>
-                )}
-                <Link to={`${SECTIONS.agent}?return=${check}`} className="text-run hover:underline">
-                  Проверить связь
-                </Link>
-              </p>
-            )}
-          </fieldset>
-
-          <fieldset disabled={blocked} className="mt-10">
-            <legend>
-              <Caps>Из чего</Caps>
-            </legend>
-            <div className="mt-3 grid gap-x-8 gap-y-6 rounded-block border border-line p-5 sm:grid-cols-3">
-              <div className="min-w-0">
-                <Caps>Датасет</Caps>
-                {library && library.datasets.length > 1 && dataset ? (
+          <fieldset disabled={blocked} className="mt-8">
+            <Group
+              title="Разговоры"
+              note={
+                !library
+                  ? null
+                  : !dataset
+                    ? "Проверка идёт по выгрузке чата с настоящими разговорами."
+                    : total > MAX
+                      ? `За раз — до ${MAX} разговоров.`
+                      : null
+              }
+            >
+              <Row tile={<Tile icon={Database} tint="bg-run" />} title="Датасет">
+                {!library ? null : !dataset ? (
+                  <UploadButton variant="outline" label="Загрузить" />
+                ) : library.datasets.length > 1 ? (
                   <Menu
-                    className="mt-1 max-w-full"
+                    align="right"
                     items={library.datasets.map((d) => ({
                       key: d.id,
                       label: shownName(d),
@@ -619,33 +449,85 @@ export function LaunchPage({ check }: { check: Check }) {
                       run: () => setDatasetId(d.id),
                     }))}
                     trigger={
-                      <span className="flex min-w-0 items-center gap-1 text-left text-lead font-semibold text-fg">
-                        <span className="min-w-0 truncate">{shownName(dataset)}</span>
-                        <ChevronDown aria-hidden className="size-4 shrink-0 text-fg-3" />
-                      </span>
+                      <Picked>
+                        {shownName(dataset)} · {total}
+                      </Picked>
                     }
                   />
                 ) : (
-                  <p className="mt-1 truncate text-lead font-semibold text-fg">
-                    {dataset ? shownName(dataset) : library ? "Пока нет" : "…"}
-                  </p>
+                  <span className="truncate text-read text-fg-3">
+                    {shownName(dataset)} · {total}
+                  </span>
                 )}
-                <p className="mt-0.5 text-small text-fg-3">
-                  {dataset ? datasetFacts(dataset).slice(0, 2).join(" · ") : "Выгрузка чата"}
-                </p>
-              </div>
-              <div className="min-w-0">
-                <Caps>Правила</Caps>
-                {judges.data && (versions.length > 0 || codeSources(state).length > 0) ? (
+              </Row>
+              {dataset && (
+                <Row
+                  tile={<Tile icon={Hash} tint="bg-fg/60" />}
+                  title="Сколько проверить"
+                  sub={`из ${count(total, "разговора", "разговоров", "разговоров")}`}
+                >
+                  <Stepper
+                    value={conversations || 1}
+                    // The count kept from before is shown as what this dataset allows: 12, not 100, of 12.
+                    shown={wanted > most && most > 0 ? String(most) : size}
+                    most={most}
+                    onType={setSize}
+                    onSet={(n) => setSize(String(n))}
+                    onBlur={() => setSize(String(conversations || Math.min(100, most) || draft.size))}
+                  />
+                </Row>
+              )}
+            </Group>
+
+            <Group
+              title="Правила"
+              note={
+                judges.data && !rulesReady ? (
+                  check === "tone" ? (
+                    collecting ? (
+                      "Модель собирает критерии из документа — потом можно запускать."
+                    ) : (
+                      "Критерии соберутся из правил общения банка: документ или текст."
+                    )
+                  ) : (
+                    <>
+                      Критерии соберутся из кода агента, когда он подключён. Или{" "}
+                      <Link to={criterionLink("code", null, { rules: "1" })} className="text-run hover:underline">
+                        выберите готовый набор правил
+                      </Link>
+                      .
+                    </>
+                  )
+                ) : fromCode ? (
+                  "Критерии соберутся из инструкций и инструментов агента."
+                ) : null
+              }
+            >
+              <Row tile={<Tile icon={ScrollText} tint="bg-mark-strong" />} title="Правила">
+                {!judges.data ? null : !rulesReady && !fromCode ? (
+                  check === "tone" ? (
+                    collecting ? (
+                      <span className="text-read text-fg-3">Собираем…</span>
+                    ) : (
+                      <button type="button" onClick={() => setCollect(true)} className={action}>
+                        Добавить
+                      </button>
+                    )
+                  ) : (
+                    <Link to={`${SECTIONS.agent}?return=code`} className={action}>
+                      Подключить код
+                    </Link>
+                  )
+                ) : (
                   <Menu
-                    className="mt-1 max-w-full"
+                    align="right"
                     items={[
                       ...(check === "code" && codeSources(state).length > 0
                         ? [
                             {
                               key: "code",
                               label: "Критерии из кода агента",
-                              sub: "Соберутся из инструкций и инструментов",
+                              sub: "Из инструкций и инструментов",
                               on: rulesId === "",
                               run: () => setJudgeId(""),
                             },
@@ -668,75 +550,145 @@ export function LaunchPage({ check }: { check: Check }) {
                       },
                     ]}
                     trigger={
-                      <span className="flex min-w-0 items-center gap-1 text-left text-lead font-semibold text-fg">
-                        <span className="min-w-0 truncate">
-                          {rules
-                            ? `${rules.name}${versionWord(rules, versions)}`
-                            : fromCode
-                              ? "Из кода агента"
-                              : "Выбрать"}
-                        </span>
-                        <ChevronDown aria-hidden className="size-4 shrink-0 text-fg-3" />
-                      </span>
+                      <Picked>{rules ? `${rules.name}${versionWord(rules, versions)}` : "Из кода агента"}</Picked>
                     }
                   />
-                ) : (
-                  <p className="mt-1 text-lead font-semibold text-fg-3">{judges.data ? "Пока нет" : "…"}</p>
                 )}
-                <p className="mt-0.5 text-small text-fg-3">
-                  {rules ? (
-                    <>
-                      {subset ? `${subset.length} из ${criteria.length}` : `все ${criteria.length}`}{" "}
-                      {plural(criteria.length, "критерий", "критерия", "критериев")}
-                      {check === "tone" && criteria.length > 1 && (
-                        <>
-                          {" · "}
-                          <button type="button" onClick={() => setPicking(true)} className="text-run hover:underline">
-                            {subset ? "изменить выбор" : "выбрать часть"}
-                          </button>
-                        </>
-                      )}
-                    </>
-                  ) : fromCode ? (
-                    "Соберутся при проверке"
-                  ) : check === "code" ? (
-                    <Link to={criterionLink("code", null, { rules: "1" })} className="text-run hover:underline">
-                      Выбрать набор правил
+              </Row>
+              {check === "tone" && rules && criteria.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => setPicking(true)}
+                  className="block w-full text-left first:rounded-t-block last:rounded-b-block hover:bg-hover"
+                >
+                  <Row tile={<Tile icon={ListChecks} tint="bg-mark-strong/80" />} title="Критерии">
+                    <span className="flex items-center gap-1 text-read text-fg-3">
+                      {subset ? `${subset.length} из ${criteria.length}` : `Все ${criteria.length}`}
+                      <ChevronRight aria-hidden className="size-4" />
+                    </span>
+                  </Row>
+                </button>
+              )}
+            </Group>
+
+            <Group
+              title="Что проверить"
+              note={
+                live && way ? (
+                  <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    {reachable.length > 1 ? (
+                      <label className="flex items-center gap-2">
+                        Агент
+                        <Select value={way.id} onChange={(e) => setTarget(e.target.value)} className="h-8 w-auto">
+                          {reachable.map((t) => (
+                            <option value={t.id} key={t.id}>
+                              {t.name}
+                            </option>
+                          ))}
+                        </Select>
+                      </label>
+                    ) : (
+                      <span>
+                        Агент: {way.name}
+                        {way.where ? ` · ${way.where}` : ""}
+                      </span>
+                    )}
+                    <Link to={`${SECTIONS.agent}?return=${check}`} className="text-run hover:underline">
+                      Проверить связь
                     </Link>
-                  ) : (
-                    "Из документа банка"
-                  )}
-                </p>
-                {extractedBefore && (
-                  <label className="mt-2 flex cursor-pointer items-start gap-2 text-small text-fg-2">
-                    <input
-                      type="checkbox"
-                      checked={replan}
-                      onChange={(e) => setReplan(e.target.checked)}
-                      className="mt-0.5 size-4 accent-primary"
+                  </span>
+                ) : (
+                  "У каждого режима будет свой итог."
+                )
+              }
+            >
+              {OPTIONS.map(({ id, icon, description, live: needsAgent }) => {
+                const off = needsAgent && !reachable.length;
+                const on = chosen.includes(id);
+                return (
+                  <Row
+                    key={id}
+                    tile={<Tile icon={icon} tint={off ? "bg-fg/25" : WAY_TINT[id]} />}
+                    title={<span className={off ? "text-fg-3" : undefined}>{MODE_NAME[id]}</span>}
+                    sub={
+                      off ? (
+                        <>
+                          Нужно подключение к агенту.{" "}
+                          <Link to={`${SECTIONS.agent}?return=${check}`} className="text-run hover:underline">
+                            Настроить
+                          </Link>
+                        </>
+                      ) : id === "simulations" && on ? (
+                        "Если сценариев ещё нет, сначала найдём ошибки в выбранных разговорах."
+                      ) : (
+                        description
+                      )
+                    }
+                  >
+                    <Switch
+                      checked={on}
+                      disabled={off}
+                      label={MODE_NAME[id]}
+                      hideLabel
+                      onChange={() =>
+                        setModes((all) => (all.includes(id) ? all.filter((m) => m !== id) : [...all, id]))
+                      }
                     />
-                    Извлечь критерии из кода заново
-                  </label>
-                )}
-              </div>
-              <div className="min-w-0">
-                <Caps>Версия агента</Caps>
-                <input
-                  value={version}
-                  onChange={(e) => setVersion(e.target.value)}
-                  maxLength={80}
-                  aria-label="Версия агента"
-                  placeholder="не указана"
-                  className="mt-1 w-full border-b border-dashed border-line-strong bg-transparent pb-0.5 text-lead font-semibold text-fg placeholder:font-normal placeholder:text-fg-4 focus:border-solid focus:border-fg focus:outline-none"
-                />
-                <p className="mt-0.5 text-small text-fg-3">По желанию: чтобы отличать прогоны</p>
-              </div>
-            </div>
+                  </Row>
+                );
+              })}
+            </Group>
+
+            <section className="mt-7">
+              <button
+                type="button"
+                aria-expanded={more}
+                onClick={() => setMore((on) => !on)}
+                className="flex items-center gap-1 px-4 text-small text-fg-3 hover:text-fg"
+              >
+                <ChevronRight aria-hidden className={cn("size-3.5 transition-transform", more && "rotate-90")} />
+                Дополнительно
+              </button>
+              {more && (
+                <div className={cn("mt-2", LIST)}>
+                  <Row tile={<Tile icon={Tag} tint="bg-fg/60" />} title="Версия агента" sub="Чтобы отличать прогоны">
+                    <input
+                      value={version}
+                      onChange={(e) => setVersion(e.target.value)}
+                      maxLength={80}
+                      aria-label="Версия агента"
+                      placeholder="не указана"
+                      className="w-40 bg-transparent text-right text-read text-fg placeholder:text-fg-4 focus:outline-none"
+                    />
+                  </Row>
+                  {extractedBefore && (
+                    <Row
+                      tile={<Tile icon={RefreshCw} tint="bg-fg/60" />}
+                      title="Извлечь критерии заново"
+                      sub="Если у агента изменились инструкции или инструменты"
+                    >
+                      <Switch checked={replan} label="Извлечь критерии заново" hideLabel onChange={setReplan} />
+                    </Row>
+                  )}
+                </div>
+              )}
+            </section>
           </fieldset>
 
+          <div className="mt-8 flex flex-wrap-reverse items-center justify-end gap-x-5 gap-y-3 px-4">
+            {why && <p className="min-w-0 flex-1 basis-56 text-body text-fg-3">{why}</p>}
+            <Button size="lg" variant="primary" icon={Play} loading={busy} disabled={!ready || blocked} onClick={start}>
+              Запустить проверку
+            </Button>
+          </div>
+          {error && (
+            <p role="alert" className="mt-3 px-4 text-right text-body text-bad">
+              {error}
+            </p>
+          )}
           <Link
             to={historyLink(check)}
-            className="mt-8 inline-flex flex-wrap items-center gap-x-1.5 text-body text-fg-2 hover:text-fg hover:underline"
+            className="mt-10 inline-flex flex-wrap items-center gap-x-1.5 px-4 text-body text-fg-2 hover:text-fg hover:underline"
           >
             {last ? (
               <>
