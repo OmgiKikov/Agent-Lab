@@ -7,8 +7,6 @@ import { Shell } from "./app/Shell";
 import { ScreenError } from "./app/ScreenError";
 import { LaunchPage } from "./sections/launches/LaunchPage";
 import { LaunchReport } from "./sections/launches/LaunchReport";
-import { AllLaunches } from "./sections/launches/LaunchHistory";
-import { JudgesPage } from "./sections/judges/JudgesPage";
 import { DataPage } from "./sections/data/DataPage";
 import { OverviewPage } from "./sections/overview/OverviewPage";
 import { SummaryPage } from "./sections/summary/SummaryPage";
@@ -161,7 +159,7 @@ const productRoutes = [
     errorElement: <ScreenError />,
     children: [
       { index: true, element: <Navigate to="/overview" replace /> },
-      { path: "launches", element: <AllLaunches /> },
+      { path: "launches", element: <Navigate to="/tone/history" replace /> },
       { path: "launches/:id", element: <LaunchReport /> },
       { path: "tone/launches/:id", element: <LaunchReport /> },
       { path: "accuracy/launches/:id", element: <LaunchReport /> },
@@ -176,7 +174,8 @@ const productRoutes = [
       { path: "tone/check", element: <CheckPage /> },
       { path: "tone/conversations", element: <DialogsPage key="tone" stage="tone" /> },
       { path: "tone/review", element: <ReviewPage key="tone" stage="tone" /> },
-      { path: "tone/judges", element: <JudgesPage key="tone" check="tone" /> },
+      // The rules of the next checks open over the criteria (?rules=1); this address was their own page.
+      { path: "tone/judges", element: <To to="/tone/criteria?rules=1" /> },
       { path: "tone/criteria", element: <CriteriaPage key="tone" check="tone" /> },
       { path: "tone/history", element: <HistoryPage key="tone" check="tone" /> },
       { path: "tone/problems/:id", element: <ProblemPage key="tone" stage="tone" /> },
@@ -184,7 +183,7 @@ const productRoutes = [
       { path: "accuracy", element: <ResultPage key="code" check="code" /> },
       { path: "accuracy/conversations", element: <DialogsPage key="code" stage="code" /> },
       { path: "accuracy/review", element: <ReviewPage key="code" stage="code" /> },
-      { path: "accuracy/judges", element: <JudgesPage key="code" check="code" /> },
+      { path: "accuracy/judges", element: <To to="/accuracy/criteria?rules=1" /> },
       { path: "accuracy/criteria", element: <CriteriaPage key="code" check="code" /> },
       { path: "accuracy/history", element: <HistoryPage key="code" check="code" /> },
       { path: "accuracy/problems/:id", element: <ProblemPage key="code" stage="code" /> },

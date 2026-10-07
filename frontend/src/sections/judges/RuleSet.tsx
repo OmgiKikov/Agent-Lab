@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, Download, Pencil } from "lucide-react";
+import { Download, Pencil } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { count, when } from "../../lab/format";
 import type { JudgeVersion } from "../../lab/judges";
@@ -7,7 +7,7 @@ import { Button } from "../../ui/Button";
 import { Select } from "../../ui/Field";
 import { Tag } from "../../ui/Tag";
 
-/** One rule set stays one row as its immutable versions accumulate. Inspecting a version never selects it for work. */
+/** One rule set stays one row as its versions accumulate. Looking at an older version never makes it the current one. */
 export function RuleSet({
   versions,
   selectedId,
@@ -19,7 +19,7 @@ export function RuleSet({
   versions: JudgeVersion[];
   selectedId: string | null;
   blocked: boolean;
-  onSelect: (id: string) => void;
+  onSelect: (version: JudgeVersion) => void;
   onEdit: (version: JudgeVersion) => void;
   onDownload: (version: JudgeVersion) => void;
 }) {
@@ -33,11 +33,10 @@ export function RuleSet({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="break-words text-read font-semibold text-fg">{current.name}</h3>
-            {on && <Tag>Выбран для запуска</Tag>}
+            {on && <Tag>Текущие</Tag>}
           </div>
           <p className="mt-1 text-small text-fg-3">
-            {count(current.criteria.length, "критерий", "критерия", "критериев")} ·{" "}
-            {current.builtin ? "Встроенный набор" : when(current.createdAt)}
+            {count(current.criteria.length, "критерий", "критерия", "критериев")} · {when(current.createdAt)}
           </p>
         </div>
         {versions.length > 1 ? (
@@ -52,14 +51,14 @@ export function RuleSet({
               .reverse()
               .map((v, i) => (
                 <option key={v.id} value={v.id}>
-                  v{v.version}
+                  версия {v.version}
                   {i === 0 ? " · последняя" : ""}
-                  {v.id === selectedId ? " · выбрана" : ""}
+                  {v.id === selectedId ? " · текущая" : ""}
                 </option>
               ))}
           </Select>
         ) : (
-          <span className="text-small text-fg-3">v{current.version}</span>
+          <span className="text-small text-fg-3">версия {current.version}</span>
         )}
       </div>
       <details className="mt-4">
@@ -76,16 +75,18 @@ export function RuleSet({
         </ol>
       </details>
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        <Button icon={on ? Check : undefined} disabled={blocked || on} onClick={() => onSelect(current.id)}>
-          {on ? `Выбрана v${current.version}` : `Выбрать v${current.version}`}
-        </Button>
+        {!on && (
+          <Button disabled={blocked} onClick={() => onSelect(current)}>
+            Взять {versions.length > 1 ? `версию ${current.version}` : "эти правила"}
+          </Button>
+        )}
         <Button variant="ghost" icon={Pencil} disabled={blocked} onClick={() => onEdit(current)}>
-          {current.builtin ? "Создать копию" : "Новая версия"}
+          Новая версия
         </Button>
         <Button
           variant="ghost"
           icon={Download}
-          aria-label={`Скачать ${current.name} v${current.version}`}
+          aria-label={`Скачать ${current.name}, версия ${current.version}`}
           onClick={() => onDownload(current)}
         />
       </div>

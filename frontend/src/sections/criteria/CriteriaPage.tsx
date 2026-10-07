@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { ChevronDown, RotateCcw } from "lucide-react";
+import { BookOpen, ChevronDown, RotateCcw } from "lucide-react";
 import { launchLink, type Check } from "../../app/links";
 import { useWide } from "../../app/useWide";
 import { useCriteria, type Criterion } from "../../lab/criteria";
@@ -17,8 +17,9 @@ import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
 import { Menu } from "../../ui/Menu";
 import { Segmented } from "../../ui/Segmented";
-import { CriteriaNav } from "./CriteriaNav";
 import { CheckHeader } from "../checks/CheckHeader";
+import { RulesSheet } from "../judges/RulesSheet";
+import { useJudges } from "../../lab/judges";
 import { Reextract } from "./Reextract";
 import { CodeView } from "./CodeView";
 import { CriteriaTable } from "./CriteriaTable";
@@ -45,7 +46,9 @@ export function CriteriaPage({ check }: { check: Check }) {
   const [params, setParams] = useSearchParams();
   const wide = useWide();
   const { data, list, error, retry } = useCriteria(check);
+  const judges = useJudges(check);
   const tone = check === "tone";
+  const rulesOpen = params.get("rules") === "1";
   const [reextract, setReextract] = useState(false);
   const set = (edit: (n: URLSearchParams) => void, replace = true) =>
     setParams(
@@ -133,8 +136,13 @@ export function CriteriaPage({ check }: { check: Check }) {
           ) : undefined
         }
       />
-      <CriteriaNav check={check} />
+      <RulesSheet check={check} open={rulesOpen} onClose={() => set((n) => n.delete("rules"), false)} />
     </>
+  );
+  const rulesButton = (
+    <Button size="sm" icon={BookOpen} onClick={() => set((n) => n.set("rules", "1"), false)}>
+      Правила
+    </Button>
   );
   if (offline && !state)
     return (
@@ -169,14 +177,17 @@ export function CriteriaPage({ check }: { check: Check }) {
           title="Критериев пока нет"
           className="flex-1 justify-center"
           action={
-            <Link to={launchLink(check)} className={buttonClass({ variant: "primary" })}>
-              Настроить проверку
-            </Link>
+            <div className="flex flex-wrap justify-center gap-2">
+              {rulesButton}
+              <Link to={launchLink(check)} className={buttonClass({ variant: "primary", size: "sm" })}>
+                Новая проверка
+              </Link>
+            </div>
           }
         >
           {tone
-            ? "Здесь появятся оценки по каждому критерию после проверки. Правила можно подготовить во вкладке «Правила для запуска»."
-            : "После проверки здесь появятся критерии из кода агента или выбранного набора правил и найденные нарушения."}
+            ? "После проверки здесь появятся критерии из правил общения и то, как агент их соблюдает."
+            : "После проверки здесь появятся критерии из кода агента или своего набора правил и найденные нарушения."}
         </EmptyState>
       </div>
     );
@@ -203,7 +214,13 @@ export function CriteriaPage({ check }: { check: Check }) {
               {list.length}
               {"\u00a0"}
               {plural(list.length, "критерий", "критерия", "критериев")}{" "}
-              {tone ? "из правил общения" : customAccuracy(state) ? "из правил судьи" : "из кода агента"}
+              {judges.selected
+                ? `из «${judges.selected.name}»`
+                : tone
+                  ? "из правил общения"
+                  : customAccuracy(state)
+                    ? "из своего набора правил"
+                    : "из кода агента"}
             </span>
             {data.log?.rulesSince && (
               <>
@@ -230,6 +247,7 @@ export function CriteriaPage({ check }: { check: Check }) {
           <SeverityHint check={check} data={data} className="mt-0.5" />
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {rulesButton}
           {sideOptions.length > 1 && (
             <Segmented<SideKey>
               size="sm"

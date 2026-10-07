@@ -21,11 +21,14 @@ export function RuleEditor({
   check,
   version,
   baseId,
+  replacesResult,
   onClose,
 }: {
   check: Check;
   version: JudgeVersion | null;
   baseId?: string;
+  /** The check has a result now: saving makes these rules current and sends that result to the history. */
+  replacesResult?: boolean;
   onClose: () => void;
 }) {
   const library = useJudges(check);
@@ -40,11 +43,12 @@ export function RuleEditor({
       return null;
     }
   });
-  const [expectedBase] = useState(savedDraft?.baseId ?? baseId ?? version?.id);
+  // The version these edits are made on. When someone saved another version of the set meanwhile, the person may put
+  // the edits over the newest one (conflict), instead of losing them or being refused again and again.
+  const [expectedBase, setExpectedBase] = useState(savedDraft?.baseId ?? baseId ?? version?.id);
+  const [conflict, setConflict] = useState<JudgeVersion | null>(null);
   const { state } = useLabState();
-  const [name, setName] = useState(
-    savedDraft?.name ?? (version ? `${version.name}${version.builtin ? " · моя версия" : ""}` : ""),
-  );
+  const [name, setName] = useState(savedDraft?.name ?? version?.name ?? "");
   const [policy, setPolicy] = useState(savedDraft?.policy ?? version?.policy ?? "");
   const [rules, setRules] = useState<ToneCriterion[]>(savedDraft?.rules ?? version?.criteria ?? [fresh()]);
   useEffect(() => {
@@ -73,17 +77,18 @@ export function RuleEditor({
       setBusy(false);
     }
   };
-  const save = async () => {
+  const save = async (base = expectedBase) => {
     if (busy) return;
     setBusy(true);
     setError("");
+    setConflict(null);
     try {
       await api(`/api/judges/${check}`, {
         name,
         policy,
         criteria: rules,
-        setId: version && !version.builtin ? version.setId : null,
-        baseId: version && !version.builtin ? expectedBase : null,
+        setId: version?.setId ?? null,
+        baseId: version ? base : null,
       });
       await library.reload();
       try {
@@ -93,7 +98,11 @@ export function RuleEditor({
       }
       onClose();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      const newer = version
+        ? (await library.refetch()).data?.versions.filter((v) => v.setId === version.setId).slice(-1)[0]
+        : undefined;
+      if (newer && newer.id !== base) setConflict(newer);
+      else setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setBusy(false);
     }
@@ -105,10 +114,14 @@ export function RuleEditor({
       open
       onClose={() => !busy && onClose()}
       title={version ? "Новая версия правил" : "Новый набор правил"}
-      sub="Черновик сохраняется в этом браузере. Предыдущие версии и результаты проверок сохранятся."
+      sub={
+        replacesResult
+          ? "После сохранения эти правила станут текущими, а итог по прежним уйдёт в историю. Черновик хранится в этом браузере."
+          : "После сохранения эти правила станут текущими. Прошлые версии и проверки сохранятся. Черновик хранится в этом браузере."
+      }
       actions={
-        <Button variant="primary" loading={busy} disabled={!valid || state?.job.running} onClick={save}>
-          Сохранить и выбрать
+        <Button variant="primary" loading={busy} disabled={!valid || state?.job.running} onClick={() => save()}>
+          Сохранить
         </Button>
       }
       width="lg"
@@ -211,15 +224,26 @@ export function RuleEditor({
             Добавить критерий
           </Button>
         </section>
+        {conflict && (
+          <div role="alert" className="rounded-block bg-inset p-4 text-body text-fg-2">
+            <p>Пока вы редактировали, у набора появилась версия {conflict.version}. Ваши правки целы.</p>
+            <Button
+              className="mt-3"
+              disabled={busy || !valid || state?.job.running}
+              onClick={() => {
+                setExpectedBase(conflict.id);
+                void save(conflict.id);
+              }}
+            >
+              Сохранить поверх версии {conflict.version}
+            </Button>
+          </div>
+        )}
         {error && (
           <p role="alert" className="text-read text-bad">
             {error}
           </p>
         )}
-        <p className="text-small text-fg-3">
-          Сохранение выберет новую версию для следующих запусков. Сценарии по прежним критериям потребуется собрать
-          заново.
-        </p>
       </fieldset>
     </Sheet>
   );

@@ -75,4 +75,5 @@ export const historyLink = (check: Check, id?: string | null) => `${ROOT[check]}
 
 /** New work and its frozen report live inside the check they belong to. */
 export const launchLink = (check: Check, id?: string) => `${ROOT[check]}/${id ? `launches/${enc(id)}` : "launch"}`;
-export const judgesLink = (check: Check) => `${ROOT[check]}/judges`;
+/** The rules of a check open over its criteria. */
+export const judgesLink = (check: Check) => criterionLink(check, null, { rules: "1" });
