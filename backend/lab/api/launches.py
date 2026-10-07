@@ -38,33 +38,40 @@ async def launch(jobs: Jobs, payload: LaunchCommand) -> dict:
 
 @router.get('/api/launches')
 def history(check: Literal['tone', 'code'] | None = None) -> dict:
-    return {'launches': [r for r in storage.launches.listed('launch') if check is None or r['check'] == check]}
+    found = storage.launches.listed('launch')
+    return {'launches': [launches.view(r) for r in found if check is None or r['check'] == check]}
 
 
 @router.get('/api/launches/{launch_id}')
 def result(launch_id: str) -> dict:
     found = storage.launches.get('launch', launch_id)
     if found is None:
-        task = storage.tasks.get(launch_id)
-        if task and task['kind'] == 'launch':
-            return {
-                'id': launch_id,
-                'check': task['input']['check'],
-                'status': task['status'],
-                'modes': {},
-                'startedAt': task['startedAt'],
-                'error': task['error'],
-            }
-        raise HTTPException(404, 'Запуск не найден.')
-    return found
+        task = _task(launch_id)
+        return {
+            'id': launch_id,
+            'check': task['input']['check'],
+            'status': task['status'],
+            'modes': {},
+            'startedAt': task['startedAt'],
+            'error': task['error'],
+        }
+    return launches.view(found)
 
 
 @router.post('/api/launches/{launch_id}/retry')
 async def retry(launch_id: str, jobs: Jobs) -> dict:
+    """The same launch started again: from its record, or from its task when it was stopped before its first save."""
     record = storage.launches.get('launch', launch_id)
-    if record is None:
+    given = record['inputs'] if record is not None else _task(launch_id)['input']
+    return await launch(jobs, LaunchCommand(**given))
+
+
+def _task(launch_id: str) -> dict:
+    """The task of a launch kept with no record of it (stopped before the record's first save), else 404."""
+    task = storage.tasks.get(launch_id)
+    if task is None or task['kind'] != 'launch':
         raise HTTPException(404, 'Запуск не найден.')
-    return await launch(jobs, LaunchCommand(**record['inputs']))
+    return task
 
 
 @router.get('/api/questions/{run_id}')

@@ -24,6 +24,7 @@ from . import (
 )
 
 MODES = ('dataset', 'questions', 'simulations')
+STOPPED = 'Остановлено пользователем.'
 
 
 def prepare(given: dict) -> dict:
@@ -92,7 +93,7 @@ async def run(given: dict, progress: Progress) -> dict:
             record['status'] = 'stopped'
             for outcome in record['modes'].values():
                 if outcome['status'] == 'running':
-                    outcome.update(status='stopped', error='Остановлено пользователем.')
+                    outcome.update(status='stopped', error=STOPPED)
         raise
     finally:
         if record['status'] != 'running':
@@ -101,6 +102,27 @@ async def run(given: dict, progress: Progress) -> dict:
     if record['status'] == 'failed':
         raise RuntimeError('Часть режимов не завершена. Результаты успешных режимов сохранены в отчёте запуска.')
     return record
+
+
+def view(record: dict) -> dict:
+    """A launch as the screens read it, whole or as its line in the list. One kept running while its task runs no more
+    (the Lab closed under it and the next start gave the task up, or the task's end could not be written: jobs) never
+    says it runs: it ended as its task did, failed or stopped, with the task's reason, and so did each mode it had not
+    finished."""
+    if record['status'] != 'running':
+        return record
+    task = storage.tasks.get(record['id'])
+    if task is not None and task['status'] == storage.tasks.RUNNING:
+        return record
+    stopped = task is not None and task['status'] == storage.tasks.STOPPED
+    status, reason = ('stopped', STOPPED) if stopped else ('failed', task and task['error'])
+    ended = {'status': status, 'error': reason}
+    modes = {
+        mode: (outcome | ended) if outcome['status'] in ('running', 'pending') else outcome
+        for mode, outcome in record['modes'].items()
+    }
+    finished = task and task['finishedAt']
+    return record | {'status': status, 'error': task and task['error'], 'finishedAt': finished, 'modes': modes}
 
 
 async def _check(given: dict, progress: Progress) -> dict:

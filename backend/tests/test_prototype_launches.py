@@ -340,6 +340,76 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls.count('questions'), 2)
         self.assertEqual(storage.launches.get('launch', first['task'])['status'], 'done')
 
+    async def test_a_launch_whose_task_was_given_up_is_never_shown_running(self):
+        """The Lab closed under a launch and the next start gave its task up: on its page and in the list the launch
+        failed, saying why, and so did each mode it had not finished; the mode it finished stays done."""
+        from lab import jobs
+        from lab.api import work
+
+        given = {
+            'check': 'tone',
+            'datasetId': self.dataset['id'],
+            'judgeId': self.rules['id'],
+            'count': 1,
+            'target': 'local-http',
+            'agentVersion': '',
+            'modes': ['dataset', 'questions', 'simulations'],
+        }
+        entered = asyncio.Event()
+
+        async def mode(name, *args):
+            if name == 'dataset':
+                return {'status': 'done', 'checkId': 'kept'}
+            entered.set()
+            await asyncio.Event().wait()
+
+        with patch('lab.flows.launches._mode', new=AsyncMock(side_effect=mode)):
+            started = work.start(self.jobs, 'launch', launches.prepare(given))
+            await asyncio.wait_for(entered.wait(), 1)
+            await self.jobs.close()
+        self.assertEqual(storage.launches.get('launch', started['task'])['status'], 'running')
+        for _ in range(storage.tasks.STALLED):  # restarts that found nothing new: the next one gives the task up
+            storage.tasks.resume(started['task'])
+        jobs.Jobs().recover(work.RESUME)
+        self.assertEqual(storage.tasks.get(started['task'])['status'], storage.tasks.FAILED)
+        response = await self.client.get(f'/api/launches/{started["task"]}')
+        listed = (await self.client.get('/api/launches?check=tone')).json()['launches']
+        for shown in (response.json(), listed[0]):
+            with self.subTest(shown=shown['id']):
+                self.assertEqual(shown['status'], 'failed')
+                self.assertEqual(shown['error'], jobs.STALLED)
+                self.assertEqual(shown['modes']['dataset']['status'], 'done')
+                for left in ('questions', 'simulations'):
+                    self.assertEqual(shown['modes'][left]['status'], 'failed')
+                    self.assertEqual(shown['modes'][left]['error'], jobs.STALLED)
+
+    async def test_a_launch_stopped_before_it_was_saved_is_retried_with_its_task_input(self):
+        from lab.api import work
+
+        given = {
+            'check': 'tone',
+            'datasetId': self.dataset['id'],
+            'judgeId': self.rules['id'],
+            'count': 1,
+            'target': 'local-http',
+            'agentVersion': 'v-first',
+            'modes': ['dataset'],
+        }
+        started = work.start(self.jobs, 'launch', launches.prepare(given))
+        await self.jobs.stop()  # before the work's first instruction: only the task is kept
+        self.assertIsNone(storage.launches.get('launch', started['task']))
+        self.assertEqual((await self.client.get(f'/api/launches/{started["task"]}')).json()['status'], 'stopped')
+        with patch('lab.flows.launches._mode', new=AsyncMock(return_value={'status': 'done'})):
+            response = await self.client.post(f'/api/launches/{started["task"]}/retry')
+            self.assertEqual(response.status_code, 200, response.text)
+            for _ in range(100):
+                if not self.jobs.state['running']:
+                    break
+                await asyncio.sleep(0.01)
+        record = storage.launches.get('launch', response.json()['id'])
+        self.assertEqual(record['status'], 'done')
+        self.assertEqual(record['agentVersion'], 'v-first')
+
 
 class IdpTests(unittest.TestCase):
     def test_changed_knowledge_cannot_be_reported_as_an_agent_improvement(self):
