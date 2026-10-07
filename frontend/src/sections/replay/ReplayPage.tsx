@@ -14,6 +14,7 @@ import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { useToast } from "../../ui/toast";
 import { Dot, dotOf } from "../simulations/parts";
 import { KnowledgeBase } from "./KnowledgeBase";
+import { LINK } from "./link";
 import { StepView } from "./StepView";
 
 const MAX_COUNT = 200;
@@ -23,8 +24,6 @@ const SCORED: Family[] = ["tone", "code"];
 
 const FIELD =
   "mt-1 block rounded-control border border-line bg-canvas px-3 py-2 text-body text-fg outline-none focus-visible:ring-2 focus-visible:ring-run";
-
-const LINK = "rounded-sm text-fg underline decoration-line-strong underline-offset-4 hover:decoration-fg-3";
 
 /** The replay service on the stand first: it replays the agent as production runs it. */
 const defaultTarget = (targets: Target[]) =>

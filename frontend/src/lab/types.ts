@@ -311,6 +311,5 @@ export type ReplayResult = {
   model: string;
   metric: Record<Family, FamilyScore>;
   dialogues: ReplayDialogue[];
-  /** The knowledge-base summary; an older service does not send it. */
-  knowledgeBase?: KnowledgeBaseSummary;
+  knowledgeBase: KnowledgeBaseSummary;
 };

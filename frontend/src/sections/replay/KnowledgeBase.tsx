@@ -1,12 +1,19 @@
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useId, useState } from "react";
 import { count, pct } from "../../lab/format";
 import { MATCH_ID } from "../../lab/replay";
-import type { FamilyScore, KnowledgeBaseCriterion, KnowledgeBaseSummary, ReplayResult, StepRef } from "../../lab/types";
+import type {
+  FamilyScore,
+  KnowledgeBaseCriterion,
+  KnowledgeBaseSummary,
+  ReplayResult,
+  ReplayStep,
+  StepRef,
+} from "../../lab/types";
+import { LINK } from "./link";
 import { StepView } from "./StepView";
 
-type Opened = { key: string; ruleId: string; refs: StepRef[] };
-
-const TOGGLE = "rounded-sm text-fg underline decoration-line-strong underline-offset-4 hover:decoration-fg-3";
+const BLOCK = "space-y-3 rounded-control border border-line p-4";
+const HEADING = "text-lead font-semibold text-fg";
 
 /**
  * «База знаний» of a replay (spec 2026-10-07-replay-knowledge-base-breakdown-design.md): the share of steps without
@@ -14,44 +21,54 @@ const TOGGLE = "rounded-sm text-fg underline decoration-line-strong underline-of
  * that failed it, one list open at a time.
  */
 export function KnowledgeBase({ result }: { result: ReplayResult }) {
-  const [opened, setOpened] = useState<Opened | null>(null);
+  const [openedRule, setOpenedRule] = useState<string | null>(null);
+  const listId = useId();
   const summary = result.knowledgeBase;
-  if (!summary) return null;
-  const toggle = (key: string, ruleId: string, refs: StepRef[]) =>
-    setOpened(opened?.key === key ? null : { key, ruleId, refs });
-  return (
-    <section className="space-y-3 rounded-control border border-line p-4">
-      <Headline score={result.metric.rag} />
-      {summary.called ? (
-        <>
-          <MatchLine
-            summary={summary}
-            open={opened?.key === "match"}
-            onToggle={() => toggle("match", MATCH_ID, summary.match.differentSteps)}
-          />
-          <ul className="divide-y divide-line">
-            {summary.criteria.map((criterion) => (
-              <CriterionRow
-                key={criterion.id}
-                criterion={criterion}
-                open={opened?.key === criterion.id}
-                onToggle={() => toggle(criterion.id, criterion.id, criterion.failed)}
-              />
-            ))}
-          </ul>
-        </>
-      ) : (
+  const toggle = (ruleId: string) => setOpenedRule(openedRule === ruleId ? null : ruleId);
+  if (!summary.called)
+    return (
+      <section className={BLOCK}>
+        <h2 className={HEADING}>База знаний</h2>
         <p className="text-body text-fg-3">На шагах этого повтора агент не обращался к базе знаний.</p>
+      </section>
+    );
+  return (
+    <section className={BLOCK}>
+      <Headline score={result.metric.rag} />
+      <MatchLine summary={summary} open={openedRule === MATCH_ID} listId={listId} onToggle={() => toggle(MATCH_ID)} />
+      <ul className="divide-y divide-line">
+        {summary.criteria.map((criterion) => (
+          <CriterionRow
+            key={criterion.id}
+            criterion={criterion}
+            open={openedRule === criterion.id}
+            listId={listId}
+            onToggle={() => toggle(criterion.id)}
+          />
+        ))}
+      </ul>
+      {openedRule && (
+        <StepList
+          key={openedRule}
+          id={listId}
+          result={result}
+          ruleId={openedRule}
+          refs={failedSteps(summary, openedRule)}
+        />
       )}
-      {opened && <StepList key={opened.key} result={result} ruleId={opened.ruleId} refs={opened.refs} />}
     </section>
   );
+}
+
+function failedSteps(summary: KnowledgeBaseSummary, ruleId: string): StepRef[] {
+  if (ruleId === MATCH_ID) return summary.match.differentSteps;
+  return summary.criteria.find((criterion) => criterion.id === ruleId)?.failed ?? [];
 }
 
 function Headline({ score }: { score: FamilyScore }) {
   const total = score.pass + score.fail;
   return (
-    <h2 className="text-body font-semibold text-fg">
+    <h2 className={HEADING}>
       {total
         ? `База знаний — ${pct(score.pass, total)}%, без найденных ошибок ${score.pass} из ${count(total, "шага", "шагов", "шагов")}`
         : "База знаний — не удалось проверить"}
@@ -62,27 +79,34 @@ function Headline({ score }: { score: FamilyScore }) {
 function MatchLine({
   summary,
   open,
+  listId,
   onToggle,
 }: {
   summary: KnowledgeBaseSummary;
   open: boolean;
+  listId: string;
   onToggle: () => void;
 }) {
-  const { same, different } = summary.match;
+  const { same, different, unknown } = summary.match;
   const used = `С обращением к базе знаний — ${count(summary.called, "шаг", "шага", "шагов")} из ${summary.steps}`;
   if (same + different === 0)
-    return <p className="text-small text-fg-2">{used}. Совпадение с продом не проверялось.</p>;
+    return (
+      <p className="text-small text-fg-2">
+        {used}. {unknown ? `Сравнить с продом не удалось: ${unknown}.` : "Совпадение с продом не проверялось."}
+      </p>
+    );
   return (
     <p className="text-small text-fg-2">
       {used}, из них с продом совпали {same}
       {different > 0 && (
         <>
           {" · "}
-          <Toggle open={open} onClick={onToggle}>
+          <Toggle open={open} listId={listId} label="Шаги, где повтор отличается от прода" onClick={onToggle}>
             {count(different, "отличается", "отличаются", "отличаются")}
           </Toggle>
         </>
       )}
+      {unknown > 0 && ` · не удалось сравнить: ${unknown}`}
     </p>
   );
 }
@@ -90,24 +114,36 @@ function MatchLine({
 function CriterionRow({
   criterion,
   open,
+  listId,
   onToggle,
 }: {
   criterion: KnowledgeBaseCriterion;
   open: boolean;
+  listId: string;
   onToggle: () => void;
 }) {
   const total = criterion.pass + criterion.fail;
+  const failed = count(criterion.fail, "с ошибкой", "с ошибкой", "с ошибкой");
   return (
-    <li className="flex flex-wrap items-baseline gap-x-3 gap-y-1 py-2 text-small">
-      <span className="min-w-[14rem] flex-1 text-fg">{criterion.name}</span>
-      <span className="tabular-nums text-fg-2">{tally(criterion, total)}</span>
-      {criterion.fail > 0 && (
-        <Toggle open={open} onClick={onToggle}>
-          {count(criterion.fail, "с ошибкой", "с ошибкой", "с ошибкой")}
-        </Toggle>
-      )}
-      {total > 0 && criterion.unknown > 0 && (
-        <span className="text-fg-3">· не удалось проверить: {criterion.unknown}</span>
+    <li className="grid grid-cols-1 items-baseline gap-x-3 gap-y-1 py-2 text-small sm:grid-cols-[minmax(0,1fr)_10rem_13rem]">
+      <span className="text-fg">{criterion.name}</span>
+      <span className="tabular-nums text-fg-2 sm:text-right">{tally(criterion, total)}</span>
+      {(criterion.fail > 0 || (total > 0 && criterion.unknown > 0)) && (
+        <span className="flex flex-wrap items-baseline gap-x-3">
+          {criterion.fail > 0 && (
+            <Toggle
+              open={open}
+              listId={listId}
+              label={`${criterion.name}: ${failed} — показать шаги`}
+              onClick={onToggle}
+            >
+              {failed}
+            </Toggle>
+          )}
+          {total > 0 && criterion.unknown > 0 && (
+            <span className="text-fg-3">не удалось проверить: {criterion.unknown}</span>
+          )}
+        </span>
       )}
     </li>
   );
@@ -120,23 +156,46 @@ function tally(criterion: KnowledgeBaseCriterion, total: number): string {
   return "таких шагов не было";
 }
 
-function Toggle({ open, onClick, children }: { open: boolean; onClick: () => void; children: ReactNode }) {
+function Toggle({
+  open,
+  listId,
+  label,
+  onClick,
+  children,
+}: {
+  open: boolean;
+  listId: string;
+  label: string;
+  onClick: () => void;
+  children: ReactNode;
+}) {
   return (
-    <button type="button" aria-expanded={open} onClick={onClick} className={TOGGLE}>
-      {open ? "▾" : "▸"} {children}
+    <button
+      type="button"
+      aria-expanded={open}
+      aria-controls={open ? listId : undefined}
+      aria-label={label}
+      onClick={onClick}
+      className={LINK}
+    >
+      <span aria-hidden="true">{open ? "▾" : "▸"}</span> {children}
     </button>
   );
 }
 
+function stepAt(result: ReplayResult, ref: StepRef): ReplayStep | undefined {
+  return result.dialogues
+    .find((dialogue) => dialogue.dialogueId === ref.dialogueId)
+    ?.steps.find((candidate) => candidate.index === ref.step);
+}
+
 /** The steps behind a number: the customer's message, the model's reason and quote; a click opens the whole step. */
-function StepList({ result, ruleId, refs }: { result: ReplayResult; ruleId: string; refs: StepRef[] }) {
+function StepList({ id, result, ruleId, refs }: { id: string; result: ReplayResult; ruleId: string; refs: StepRef[] }) {
   const [expanded, setExpanded] = useState<string | null>(null);
   return (
-    <ul className="border-t border-line">
+    <ul id={id} className="border-t border-line">
       {refs.map((ref) => {
-        const step = result.dialogues
-          .find((dialogue) => dialogue.dialogueId === ref.dialogueId)
-          ?.steps.find((candidate) => candidate.index === ref.step);
+        const step = stepAt(result, ref);
         if (!step) return null;
         const key = `${ref.dialogueId}:${ref.step}`;
         const row = step.rules?.find((rule) => rule.ruleId === ruleId);
