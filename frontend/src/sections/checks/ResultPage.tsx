@@ -34,7 +34,7 @@ function MainProblem({ check, c, next }: { check: Check; c: Criterion; next: boo
     <Step
       state="todo"
       title="Разберите главную проблему"
-      text={`${c.r.title}: ${s.failed}\u00a0из\u00a0${checked(s)} ${plural(checked(s), "разговора", "разговоров", "разговоров")}. На странице проблемы — примеры с цитатами и задача для разработчика.`}
+      text={`${c.r.title.replace(/\.\s*$/, "")}: ${s.failed}\u00a0из\u00a0${checked(s)} ${plural(checked(s), "разговора", "разговоров", "разговоров")}. На странице проблемы — примеры с цитатами и задача для разработчика.`}
       action={
         <Link to={problemLink(c.r.id, check)} className={next ? STEP_NEXT : STEP_ACTION}>
           Открыть

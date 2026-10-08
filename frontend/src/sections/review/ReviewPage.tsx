@@ -145,11 +145,7 @@ export function ReviewPage({ stage }: { stage: Stage }) {
   const twice = [...byKey.values()].some((v) => !!v.example.second);
 
   const header =
-    stage === "sim" ? (
-      <Header title="Симуляции" tabs={<SimTabs state={state} runId={runId ?? data?.sim?.runId ?? null} />} />
-    ) : (
-      <CheckHeader check={stage} />
-    );
+    stage === "sim" ? <Header title="Симуляции" tabs={<SimTabs state={state} />} /> : <CheckHeader check={stage} />;
   if (offline && !data)
     return (
       <div className="flex h-full flex-col">

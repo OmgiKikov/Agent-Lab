@@ -10,11 +10,9 @@ import { api } from "../../lab/api";
 import { CHECK_NAME, CHECKS, resultOf } from "../../lab/checks";
 import { count, longDay } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
-import { useProblems } from "../../lab/problems";
 import { isRunning } from "../../lab/runs";
 import { toneResult } from "../../lab/tone";
 import type { LabState, RunSummary } from "../../lab/types";
-import { queueOf } from "../../lab/verdicts";
 import { Button, buttonClass } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { Modal } from "../../ui/Modal";
@@ -61,23 +59,12 @@ export function NoSuchRun({ newest }: { newest: RunSummary | null }) {
   );
 }
 
-/** The tabs of the simulation with their counts; the run being looked at travels with them. */
-export function SimTabs({ state, runId }: { state: LabState | null; runId: string | null }) {
-  const [params] = useSearchParams();
-  // A page without a run of its own is of the run its address names: none, when that one is missing.
-  const { run } = useSimRuns(state, runId ?? params.get("run"));
-  const { data } = useProblems(run?.check ?? null, run?.id ?? null);
-  return (
-    <StageTabs
-      stage="sim"
-      counts={{
-        runs: state?.runs.length,
-        scenarios: state?.cards?.cards.length,
-        conversations: run?.metric?.total ?? run?.items?.length,
-        review: data?.sim ? queueOf(data, "disputed", null, "sim").length : undefined,
-      }}
-    />
-  );
+/**
+ * The tabs of the simulation with their counts; the run being looked at travels with them (StageTabs, from the
+ * address). A run's conversations and the person's answers open from its result.
+ */
+export function SimTabs({ state }: { state: LabState | null }) {
+  return <StageTabs stage="sim" counts={{ runs: state?.runs.length, scenarios: state?.cards?.cards.length }} />;
 }
 
 /**
@@ -85,7 +72,7 @@ export function SimTabs({ state, runId }: { state: LabState | null; runId: strin
  * the same dialog from anywhere (?play=1, or ?play=<scenario>[,<scenario>…] with those chosen, and ?types=<type>[,…] with those customer types); once the run is named,
  * its result opens and fills in.
  */
-export function SimHeader({ runId, actions = true }: { runId: string | null; actions?: boolean }) {
+export function SimHeader({ actions = true }: { actions?: boolean }) {
   const { state, refresh } = useLabState();
   const toast = useToast();
   const navigate = useNavigate();
@@ -151,7 +138,7 @@ export function SimHeader({ runId, actions = true }: { runId: string | null; act
     <>
       <Header
         title="Симуляции"
-        tabs={<SimTabs state={state} runId={runId} />}
+        tabs={<SimTabs state={state} />}
         actions={
           actions ? (
             <>
