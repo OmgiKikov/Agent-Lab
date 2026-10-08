@@ -224,6 +224,9 @@ const connected = (state: LabState) => state.targets.some((t) => t.ready && t.id
 /** The first visit: the three ways in, each with what it needs and what is already here. */
 function StartCards({ state }: { state: LabState }) {
   const ready = connected(state);
+  // Scenarios built before any check or run keep this first visit, so the card says they are here and leads to them.
+  const built = state.cards?.cards.length ?? 0;
+  const building = state.job.running && state.job.kind === "cards";
   const cards: { title: string; what: string; begin: Begin; primary?: boolean }[] = [
     { title: CHECK_NAME.tone, what: WHAT.tone, begin: beginOf("tone", state), primary: true },
     { title: CHECK_NAME.code, what: WHAT.code, begin: beginOf("code", state) },
@@ -231,14 +234,23 @@ function StartCards({ state }: { state: LabState }) {
       title: "Симуляции",
       what: "Из выгрузки чата собираются каталог бизнес-сценариев и профили клиентов. Синтетические клиенты играют эти сценарии с агентом, разговоры оценивают по критериям проверки.",
       begin: {
-        status: "Из выгрузки чата",
+        status: building
+          ? "Собираем сценарии"
+          : built
+            ? [`Собрано ${count(built, "сценарий", "сценария", "сценариев")}`, longDay(state.cards?.createdAt)]
+                .filter(Boolean)
+                .join(" · ")
+            : "Из выгрузки чата",
         needs: [
           needsOf("code", state)[0],
           { label: "Итог проверки", value: null, later: "нужен, чтобы оценить сыгранные сценарии" },
           { label: "Подключение агента", value: ready ? "задано" : null, later: "задайте в «Агенте»" },
         ],
         // The scenarios are built from the export alone; the check and the agent are needed to play them.
-        action: { label: state.logs.total ? "Собрать сценарии" : "Открыть симуляции", to: scenariosLink() },
+        action: {
+          label: built || building ? "Открыть сценарии" : state.logs.total ? "Собрать сценарии" : "Открыть симуляции",
+          to: scenariosLink(),
+        },
       },
     },
   ];

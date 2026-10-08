@@ -2,10 +2,10 @@ import { Link, Navigate, useSearchParams } from "react-router-dom";
 import { ArrowRight, ChevronDown, Hammer, Play, RotateCcw } from "lucide-react";
 import { scenariosLink } from "../../app/links";
 import { api } from "../../lab/api";
-import { BY_CRITERIA } from "../../lab/checks";
+import { BY_CRITERIA, deckCriteria } from "../../lab/checks";
 import { useCriteria } from "../../lab/criteria";
 import { dialogOf } from "../../lab/dialogs";
-import { longDay, plural } from "../../lab/format";
+import { count, longDay, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { summarySentence } from "../../lab/problemReport";
 import { isRunning, runTitle, useRun } from "../../lab/runs";
@@ -66,32 +66,59 @@ function SimResult() {
       </div>
     );
   if (!run) {
-    const cards = state.cards?.cards.length ?? 0;
+    const deck = state.cards?.cards.length ? state.cards : null;
+    // Built before any check, the scenarios can be read, not played: no «Сыграть» for them.
+    const playable = !!deck?.cards.some((card) => card.criteria.length);
     const ask = (play: string) => setParams({ play }, { replace: true });
+    const open = (
+      <Link to={scenariosLink()}>
+        <Button variant={playable ? "outline" : "primary"} icon={Hammer}>
+          Открыть сценарии
+        </Button>
+      </Link>
+    );
+    // The scenarios built stay here until the next run: coming back to the simulation shows them, never a blank page.
     return (
       <div className="flex h-full flex-col">
         {header}
-        <EmptyState
-          drop
-          title="Здесь будет итог прогона"
-          className="h-full justify-center"
-          action={
-            cards ? (
-              <Button variant="primary" icon={Play} onClick={() => ask("1")}>
-                Сыграть сценарии
-              </Button>
-            ) : (
+        {deck ? (
+          <EmptyState
+            drop
+            title={`Собрано ${count(deck.cards.length, "сценарий", "сценария", "сценариев")} ${deckCriteria(deck.check)}`}
+            className="h-full justify-center"
+            action={
+              <>
+                {open}
+                {playable && (
+                  <Button variant="primary" icon={Play} onClick={() => ask("1")}>
+                    Сыграть сценарии
+                  </Button>
+                )}
+              </>
+            }
+          >
+            {deck.createdAt ? `Собраны ${longDay(deck.createdAt)}. ` : ""}
+            {playable
+              ? "Прогонов ещё не было: синтетические клиенты сыграют сценарии с агентом, разговоры оценят по критериям проверки."
+              : "Видны клиенты настоящих разговоров и их бизнес-сценарии. Чтобы сыграть их, проверьте разговоры и соберите сценарии заново."}
+          </EmptyState>
+        ) : (
+          <EmptyState
+            drop
+            title="Здесь будет итог прогона"
+            className="h-full justify-center"
+            action={
               <Link to={scenariosLink()}>
                 <Button variant="primary" icon={Hammer}>
                   Открыть сценарии
                 </Button>
               </Link>
-            )
-          }
-        >
-          Синтетические клиенты сыграют с агентом сценарии из настоящих разговоров. Разговоры оценят по критериям
-          проверки.
-        </EmptyState>
+            }
+          >
+            Синтетические клиенты сыграют с агентом сценарии из настоящих разговоров. Разговоры оценят по критериям
+            проверки.
+          </EmptyState>
+        )}
       </div>
     );
   }
