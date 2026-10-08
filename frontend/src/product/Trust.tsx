@@ -62,7 +62,16 @@ export function Trust({
               </>
             }
             text={sentence.rest.replace(/^\.\s*/, "")}
-            action={open > 0 && action("Проверить ещё")}
+            action={
+              open > 0 ? (
+                action("Проверить ещё")
+              ) : (
+                // Every error answered: the answers stay one step away, to look through or change.
+                <Link to={reviewLink(check, { queue: "all" })} className={STEP_ACTION}>
+                  Ваши ответы
+                </Link>
+              )
+            }
           />
         ) : (
           answers.errors > 0 && (

@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { pct, plural } from "../lab/format";
 import { useArrived, useCountUp } from "./motion";
@@ -14,6 +15,7 @@ export function StageResult({
   unchecked = 0,
   size = "hero",
   link,
+  all,
   className,
 }: {
   failed: number;
@@ -22,6 +24,8 @@ export function StageResult({
   size?: "hero" | "display";
   /** Where each part's conversations open: every number leads to what it is made of. */
   link?: (part: "bad" | "ok" | "none") => string;
+  /** Where all of them open, at the end of the parts. */
+  all?: string;
   className?: string;
 }) {
   const clean = Math.max(0, checked - failed);
@@ -110,6 +114,17 @@ export function StageResult({
             )}
           </li>
         ))}
+        {all && (
+          <li className="ml-auto">
+            <Link
+              to={all}
+              className="flex items-center gap-1 rounded-sm font-medium text-run hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
+            >
+              Все разговоры
+              <ArrowRight aria-hidden className="size-3.5" />
+            </Link>
+          </li>
+        )}
       </ul>
     </div>
   );

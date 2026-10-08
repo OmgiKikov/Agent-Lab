@@ -26,8 +26,9 @@ const PART = { bad: "fail", ok: "pass", none: "none" } as const;
  * «Итог» of a check: the real conversations of the export as this check judged them — one number, the conversations
  * with a serious error and whose decision that is, and how it stands to the check's previous check; then the
  * problems it is made of, serious first, then most frequent, each beside its previous count, and the criteria whose
- * errors are no longer found. A new check is the header's «Новая проверка», where accuracy can also read its criteria
- * from the agent's code anew.
+ * errors are no longer found. Its conversations open from the parts of the number («Все разговоры»), the person's
+ * answers from «Проверьте оценки модели» (product/Trust): both are of this result, not tabs of their own. A new check
+ * is the header's «Новая проверка», where accuracy can also read its criteria from the agent's code anew.
  */
 export function ResultPage({ check }: { check: Check }) {
   const { state, offline } = useLabState();
@@ -113,6 +114,7 @@ export function ResultPage({ check }: { check: Check }) {
         checked={log.assessed}
         unchecked={log.unassessed}
         link={(part) => conversationsLink(check, { v: PART[part] })}
+        all={conversationsLink(check)}
       />
       {result && (
         <Trust

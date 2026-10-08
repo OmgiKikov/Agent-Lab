@@ -5,12 +5,13 @@ import { ArrowRight, ChevronDown, ChevronLeft, ChevronRight, X } from "lucide-re
 import { cn } from "@/lib/utils";
 import { Header } from "../../app/Header";
 import { useKeys } from "../../app/keys";
-import { side, stageLink, type Stage } from "../../app/links";
+import { conversationsLink, side, stageLink, type Stage } from "../../app/links";
 import { yesNoText } from "../../lab/answers";
+import { nameFromText } from "../../lab/criteria";
 import { count } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { answersWait, useProblems, useReview, type Decision } from "../../lab/problems";
-import { exampleKey, queueOf, QUEUE_TITLE, saysError, type Queue } from "../../lab/verdicts";
+import { conversationKey, exampleKey, queueOf, QUEUE_TITLE, saysError, type Queue } from "../../lab/verdicts";
 import { Duty } from "../../product/Duty";
 import { ExampleCard } from "../../product/ExampleCard";
 import { Button } from "../../ui/Button";
@@ -29,7 +30,8 @@ const cases = (n: number) => count(n, "случай", "случая", "случ�
  * «Проверка» of a stage: a person answers, one case at a time, whether what the checks found is an error — disputed cases
  * first. Among the cases without an answer every fifth is one the model found no error in («Здесь действительно нет ошибки?»),
  * so its misses are checked too. The answer is saved and the next case comes; «Отменить» brings the last one back. The
- * queue is fixed when it opens, so answering does not reshuffle it.
+ * queue is fixed when it opens, so answering does not reshuffle it. It is the one place to answer: a conversation's
+ * «Ответить» opens its cases here (?d=, the conversation as «Разговоры» address it) on the one pressed (?case=).
  */
 export function ReviewPage({ stage }: { stage: Stage }) {
   const { state, offline } = useLabState();
@@ -46,6 +48,7 @@ export function ReviewPage({ stage }: { stage: Stage }) {
   const source = side(stage);
   const review = useReview();
   const ruleId = params.get("rule");
+  const dialog = params.get("d");
   const rawQueue = params.get("queue");
   const wanted = QUEUES.find((q) => q === rawQueue) ?? null;
   const set = (edit: (n: URLSearchParams) => void) =>
@@ -58,16 +61,19 @@ export function ReviewPage({ stage }: { stage: Stage }) {
       { replace: true },
     );
 
+  const cut = useMemo(
+    () => (q: Queue) => {
+      const all = data ? queueOf(data, q, ruleId, source) : [];
+      return dialog ? all.filter((v) => conversationKey(v.example) === dialog) : all;
+    },
+    [data, ruleId, source, dialog],
+  );
   const counts = useMemo(
-    () =>
-      Object.fromEntries(QUEUES.map((q) => [q, data ? queueOf(data, q, ruleId, source).length : 0])) as Record<
-        Queue,
-        number
-      >,
-    [data, ruleId, source],
+    () => Object.fromEntries(QUEUES.map((q) => [q, cut(q).length])) as Record<Queue, number>,
+    [cut],
   );
   const context = stage === "sim" ? (runId ?? data?.sim?.runId ?? "") : (data?.log?.finishedAt ?? "");
-  const id = `${stage}|${context}|${wanted ?? "default"}|${ruleId ?? ""}`;
+  const id = `${stage}|${context}|${wanted ?? "default"}|${ruleId ?? ""}|${dialog ?? ""}`;
   const [frozen, setFrozen] = useState<{ id: string; queue: Queue; keys: string[] } | null>(null);
   const queue: Queue =
     wanted ??
@@ -78,10 +84,12 @@ export function ReviewPage({ stage }: { stage: Stage }) {
   const [lit, setLit] = useState(false);
   useEffect(() => {
     if (!data || isPlaceholderData || frozen?.id === id) return;
-    setFrozen({ id, queue, keys: queueOf(data, queue, ruleId, source).map((v) => exampleKey(v.example)) });
-    setAt(0);
+    const keys = cut(queue).map((v) => exampleKey(v.example));
+    setFrozen({ id, queue, keys });
+    // Opened on one case of a conversation: that case first, the rest of the conversation's after it.
+    setAt(Math.max(0, keys.indexOf(params.get("case") ?? "")));
     setAnswered({});
-  }, [data, isPlaceholderData, id, queue, ruleId, source, frozen?.id]);
+  }, [data, isPlaceholderData, id, queue, cut, frozen?.id, params]);
   const byKey = useMemo(
     () => new Map((data ? queueOf(data, "all", ruleId, source) : []).map((v) => [exampleKey(v.example), v])),
     [data, ruleId, source],
@@ -137,6 +145,9 @@ export function ReviewPage({ stage }: { stage: Stage }) {
   const saving = useIsMutating({ mutationKey: ["review"] }) > 0;
   const counted = saving ? "Сохраняем ответы…" : "Ответы уже учтены в счёте.";
   const rule = ruleId && data ? data.rules.find((r) => r.id === ruleId) : undefined;
+  // The conversation the cases are of, by its customer's first words.
+  const opening = dialog ? [...byKey.values()].find((v) => conversationKey(v.example) === dialog)?.example.opening : "";
+  const leave = dialog ? conversationsLink(stage, { run: runId, d: dialog }) : stageLink(stage, runId);
   // A criterion the address names that this result (or run) does not have: said so, with all of its cases instead.
   const noRule = !!ruleId && !!data && !rule;
   const stateOf = (k: string) => answered[k] ?? byKey.get(k)?.example.review ?? null;
@@ -228,6 +239,24 @@ export function ReviewPage({ stage }: { stage: Stage }) {
               </button>
             </p>
           )}
+          {dialog && data && (
+            <p className="mt-3 flex min-w-0 items-center gap-2 text-read text-fg-3">
+              <span className="min-w-0 truncate">Только разговор{opening ? ` «${opening}»` : ""}</span>
+              <button
+                type="button"
+                onClick={() =>
+                  set((n) => {
+                    n.delete("d");
+                    n.delete("case");
+                  })
+                }
+                className="inline-flex flex-shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-small font-medium text-fg-2 transition-colors hover:bg-hover hover:text-fg"
+              >
+                <X aria-hidden className="size-3.5" />
+                снять отбор
+              </button>
+            </p>
+          )}
 
           {stage === "sim" && state && !run ? (
             <EmptyState drop title="Здесь будут случаи из прогонов" className="py-24">
@@ -262,6 +291,15 @@ export function ReviewPage({ stage }: { stage: Stage }) {
               }
             >
               {stage === "sim" ? "Критерия из ссылки нет в этом прогоне." : "Критерия из ссылки нет в этом итоге."}
+            </EmptyState>
+          ) : dialog && !counts.all ? (
+            <EmptyState
+              drop
+              title="В этом разговоре нет случаев"
+              className="py-24"
+              action={<Button onClick={() => navigate(leave)}>К разговору</Button>}
+            >
+              Разговор могли проверить заново.
             </EmptyState>
           ) : !keys.length ? (
             <EmptyState
@@ -305,8 +343,8 @@ export function ReviewPage({ stage }: { stage: Stage }) {
                   >
                     Пройти ещё раз
                   </Button>
-                  <Button variant="primary" onClick={() => navigate(stageLink(stage, runId))}>
-                    К итогу
+                  <Button variant="primary" onClick={() => navigate(leave)}>
+                    {dialog ? "К разговору" : "К итогу"}
                     <ArrowRight aria-hidden className="size-4" />
                   </Button>
                 </>
@@ -322,7 +360,12 @@ export function ReviewPage({ stage }: { stage: Stage }) {
                 dir > 0 ? "slide-in-from-right-4" : "slide-in-from-left-4",
               )}
             >
-              <h2 className="mt-8 text-balance text-page font-semibold text-fg">{current.rule.title}</h2>
+              {/* A problem is named by its error; a case «без ошибки» by its criterion, as the conversation names it. */}
+              <h2 className="mt-8 text-balance text-page font-semibold text-fg">
+                {current.example.status === "PASS"
+                  ? current.rule.rule.name?.trim() || nameFromText(current.rule.rule.text)
+                  : current.rule.title}
+              </h2>
               <Duty
                 key={current.rule.id}
                 text={current.rule.rule.text}

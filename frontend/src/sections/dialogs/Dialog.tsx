@@ -1,19 +1,20 @@
 import { KnowledgeEvidence } from "../../product/KnowledgeEvidence";
 import { useState } from "react";
-import { useSearchParams } from "react-router-dom";
-import { ArrowLeft, Download } from "lucide-react";
+import { Link, useSearchParams } from "react-router-dom";
+import { ArrowLeft, ArrowRight, Download } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { reviewLink } from "../../app/links";
 import type { Criterion } from "../../lab/criteria";
 import { exampleFor, transcript, twoChecks, type DialogRow } from "../../lab/dialogs";
 import { longDay, plural } from "../../lab/format";
 import { personaName } from "../../lab/look";
 import { download, secondLine } from "../../lab/problemReport";
-import { useReview, useTurns, type Decision, type Example } from "../../lab/problems";
+import { useTurns, type Example } from "../../lab/problems";
 import type { Rule } from "../../lab/types";
+import { conversationKey, exampleKey, saysError } from "../../lab/verdicts";
 import { Conversation, type Mark } from "../../product/Conversation";
 import { Facts } from "../../product/Facts";
 import { MarkNo } from "../../product/MarkNo";
-import { ReviewButtons } from "../../product/ReviewButtons";
 import { useLabState } from "../../lab/LabProvider";
 import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
@@ -30,23 +31,27 @@ const WORD: Record<string, [string, string]> = {
   NOT_APPLICABLE: ["не относится к разговору", "text-fg-3"],
 };
 
-/** Every criterion the checks looked at in this conversation: errors first with their quote's number, then kept, then undecided. */
+/**
+ * Every criterion the checks looked at in this conversation: errors first with their quote's number, then kept, then
+ * undecided. Under a verdict, the person's answer on it and the way to give or change it: the answers are given in one
+ * place, the queue (sections/review), which opens on this case.
+ */
 function Verdicts({
   rules,
   find,
   named,
   shownOf,
+  answerAt,
   lit,
   onLit,
-  onDecide,
 }: {
   rules: Rule[];
   find: (ruleId: string) => Criterion | undefined;
   named?: Named;
   shownOf: (r: Rule) => Example;
+  answerAt: (e: Example) => string;
   lit: number | null;
   onLit: (n: number | null) => void;
-  onDecide: (e: Example, d: Decision) => void;
 }) {
   return (
     <section className="mt-10" aria-label="Проверка по критериям">
@@ -87,9 +92,24 @@ function Verdicts({
                 <p className="mt-1 text-read text-fg-2">{r.reason}</p>
                 {second && <p className="mt-1 text-small text-fg-3">{second}</p>}
                 {(r.status === "FAIL" || r.status === "PASS") && (
-                  <div className="mt-3">
-                    <ReviewButtons size="sm" example={shown} onDecide={(d) => onDecide(shown, d)} />
-                  </div>
+                  <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-small">
+                    {shown.review && (
+                      <span className="text-fg-2">
+                        Ваш ответ: {saysError(shown.status, shown.review) ? "ошибка есть" : "ошибки нет"}
+                      </span>
+                    )}
+                    {/* An error asks for a word first; a verdict «без ошибки» keeps its way quiet, as the queue asks about few. */}
+                    <Link
+                      to={answerAt(shown)}
+                      className={cn(
+                        "inline-flex items-center gap-1 rounded-sm font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60",
+                        r.status === "FAIL" || shown.review ? "text-run" : "text-fg-3 hover:text-run",
+                      )}
+                    >
+                      {shown.review ? "Изменить" : "Ответить"}
+                      <ArrowRight aria-hidden className="size-3.5" />
+                    </Link>
+                  </p>
                 )}
               </div>
             </li>
@@ -115,10 +135,7 @@ export function Dialog({
 }) {
   const [params, setParams] = useSearchParams();
   const { state } = useLabState();
-  const review = useReview();
   const [lit, setLit] = useState<number | null>(null);
-  // Answers shown at once, by result and verdict: a new check or a changed verdict does not inherit them.
-  const [decided, setDecided] = useState<Record<string, Decision | null>>({});
   const raw = params.get("dt");
   const tab: Tab = raw === "details" ? raw : "talk";
   const setTab = (t: Tab) =>
@@ -165,29 +182,15 @@ export function Dialog({
         ]
           .filter(Boolean)
           .join(" · ");
-  // The check's result this conversation comes from; the service takes an answer only on it.
-  const finishedAt = row.source === "log" && row.check ? state?.checks[row.check]?.finishedAt : null;
-  const keyOf = (e: Example) => `${finishedAt ?? ""}|${e.ruleId}|${e.status}`;
-  const shownOf = (r: Rule): Example => {
-    const e = exampleFor(row, r);
-    const k = keyOf(e);
-    // The person's own answer here is on this criterion (as lab/problems withDecision puts it).
-    return k in decided ? { ...e, review: decided[k], reviewScope: decided[k] ? "rule" : null } : e;
-  };
-  const decide = (e: Example, d: Decision) => {
-    const next = e.review === d ? null : d;
-    const k = keyOf(e);
-    setDecided((x) => ({ ...x, [k]: next }));
-    // Refused (the result changed, a check is running) or lost: the buttons show what the service has again.
-    review.mutateAsync({ example: e, decision: next, finishedAt }).catch(() =>
-      setDecided((x) => {
-        if (x[k] !== next) return x;
-        const n = { ...x };
-        delete n[k];
-        return n;
-      }),
-    );
-  };
+  const shownOf = (r: Rule): Example => exampleFor(row, r);
+  // The queue of this conversation's cases, on the one pressed: of the check's result, or of the run.
+  const answerAt = (e: Example) =>
+    reviewLink(e.source === "sim" ? "sim" : (row.check ?? "tone"), {
+      run: e.source === "sim" ? e.runId : null,
+      queue: "all",
+      d: conversationKey(e),
+      case: exampleKey(e),
+    });
   const reviewed = rules.filter((r) => r.status === "FAIL" && shownOf(r).review).length;
   return (
     <article className="min-h-0 overflow-auto" aria-label={row.title}>
@@ -295,9 +298,9 @@ export function Dialog({
                 find={find}
                 named={named}
                 shownOf={shownOf}
+                answerAt={answerAt}
                 lit={lit}
                 onLit={setLit}
-                onDecide={decide}
               />
             )}
           </>
