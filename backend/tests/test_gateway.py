@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -27,13 +28,15 @@ BUNDLES = Path()  # a temporary folder, from setUpModule
 
 def setUpModule() -> None:
     """client.p12 as the bank issues it, the same in an older Windows export (RC2), one without the key; and the
-    certificate and key in PEM, the key also encrypted with PASSWORD."""
+    certificate and key in PEM, the key also encrypted with PASSWORD; another authority's certificate and key."""
     global BUNDLES
     BUNDLES = Path(tempfile.mkdtemp(prefix='agent-lab-bundles-'))
     key, cert = BUNDLES / 'client.key', BUNDLES / 'client.pem'
-    openssl(
-        'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-subj', '/CN=t', '-days', '1'
-    )
+    for name in ('client', 'other'):  # the other one also serves as a gateway on this computer (TlsTests)
+        openssl(
+            'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', BUNDLES / f'{name}.key',
+            '-out', BUNDLES / f'{name}.pem', '-subj', '/CN=t', '-addext', 'subjectAltName=IP:127.0.0.1', '-days', '1',
+        )  # fmt: skip
     openssl('pkey', '-in', key, '-aes256', '-out', BUNDLES / 'encrypted.key', '-passout', 'stdin')
     for name, options in (('modern', ('-inkey', key)), ('legacy', ('-inkey', key, '-legacy')), ('nokey', ('-nokeys',))):
         # No -legacy before OpenSSL 3: the RC2 tests are skipped there.
@@ -190,6 +193,24 @@ class SetupTests(GatewayCase):
         (self.certs / 'client.p12').unlink()
         self.assertIn('нет сертификата и ключа шлюза', self.broken())
 
+    def test_certificates_are_known_by_what_they_hold_whatever_their_names(self) -> None:
+        """A test stand's files as they travel: new_cert.c-r-t, key.k-e-y and ca-chain.cert.pem."""
+        (self.certs / 'client.p12').unlink()
+        shutil.copy(BUNDLES / 'client.pem', self.certs / 'new_cert.c-r-t')
+        shutil.copy(BUNDLES / 'client.key', self.certs / 'key.k-e-y')
+        shutil.copy(BUNDLES / 'other.pem', self.certs / 'ca-chain.cert.pem')
+        found = gateway.settings()
+        self.assertEqual(
+            {name: Path(found[name]).name for name in ('cert', 'key', 'ca')},
+            {'cert': 'new_cert.c-r-t', 'key': 'key.k-e-y', 'ca': 'ca-chain.cert.pem'},
+        )
+        self.assertIsNone(gateway.problem())
+
+    def test_insecure_in_the_environment_holds_for_certs_too(self) -> None:
+        self.assertFalse(gateway.settings()['insecure'])
+        with config.using(support.changed(self.settings, gateway_insecure=True)):
+            self.assertTrue(gateway.settings()['insecure'])
+
     def test_without_url_txt_there_is_no_gateway(self) -> None:
         (self.certs / 'url.txt').unlink()
         self.assertFalse(gateway.configured())
@@ -282,6 +303,59 @@ class SetupTests(GatewayCase):
             create(started)
             models.endpoints()
         self.assertFalse(legacy.exists())
+
+
+class _Models(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:  # the name http.server calls
+        body = json.dumps({'data': [{'id': 'glm-5', 'type': 'chat'}]}).encode()
+        self.send_response(200)
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *_: object) -> None:
+        pass
+
+
+class TlsTests(GatewayCase):
+    """A gateway on this computer: what TLS refuses is said in words, at once, and never asked again."""
+
+    def serve(self, *, client_from: Path | None = None) -> None:
+        """The gateway with its own certificate; client_from: the authority whose client certificates it takes (TLS
+        1.2, where a refusal comes in the handshake)."""
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(BUNDLES / 'other.pem', BUNDLES / 'other.key')
+        if client_from:
+            context.maximum_version = ssl.TLSVersion.TLSv1_2
+            context.verify_mode = ssl.CERT_REQUIRED
+            context.load_verify_locations(client_from)
+        server = ThreadingHTTPServer(('127.0.0.1', 0), _Models)
+        server.socket = context.wrap_socket(server.socket, server_side=True)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        (self.certs / 'url.txt').write_text(f'https://127.0.0.1:{server.server_address[1]}\n')
+
+    def test_a_gateway_certificate_nobody_vouches_for_names_the_root_certificate_and_insecure(self) -> None:
+        self.serve()
+        with self.assertRaises(gateway.ModelError) as caught:
+            asyncio.run(gateway.catalog())
+        self.assertEqual(str(caught.exception), gateway.UNVERIFIED)
+        with config.using(support.changed(self.settings, gateway_insecure=True)):
+            self.assertEqual(asyncio.run(gateway.catalog()), ['glm-5'])
+
+    def test_the_gateway_vouched_for_by_the_root_certificate_in_certs_answers(self) -> None:
+        self.serve()
+        shutil.copy(BUNDLES / 'other.pem', self.certs / 'ca.pem')
+        self.assertEqual(asyncio.run(gateway.catalog()), ['glm-5'])
+
+    def test_a_client_certificate_the_gateway_does_not_take_is_named_and_not_asked_again(self) -> None:
+        self.serve(client_from=BUNDLES / 'other.pem')
+        with config.using(support.changed(self.settings, gateway_insecure=True)):
+            reason = asyncio.run(models.check((models.GATEWAY, 'glm-5')))
+        self.assertFalse(reason['ok'])
+        self.assertIn('шлюз не принял клиентский сертификат', reason['error'])
+        self.assertIn('UNKNOWN_CA', reason['error'])
 
 
 class LegacyBundleTests(GatewayCase):

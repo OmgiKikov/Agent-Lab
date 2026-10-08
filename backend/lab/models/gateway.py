@@ -1,8 +1,10 @@
 """The bank's model gateway over mutual TLS (the work computer).
 
 Where the certificates are: the files dropped into certs/ (url.txt, the certificate and key or one .p12,
-password.txt, the bank's root certificate named ca* or root*). ~/.agent-lab/gateway.json (the archived Agent Lab's
-format) and AGENT_LAB_GATEWAY_URL / _CERT_PATH / _KEY_PATH / _CA_PATH / _INSECURE take precedence when complete.
+password.txt, the bank's root certificate named ca* or root*), found by what they hold whatever their extension.
+~/.agent-lab/gateway.json (the archived Agent Lab's format) and AGENT_LAB_GATEWAY_URL / _CERT_PATH / _KEY_PATH /
+_CA_PATH take precedence when complete; AGENT_LAB_GATEWAY_INSECURE=1 turns the check of the gateway's certificate off
+wherever the rest comes from.
 Protocol v2: POST /v2/chat/completions and GET /v1/models; the client certificate authenticates, no token.
 Set up but broken, it stays the backend: every call fails with what to fix (problem), no conversation goes elsewhere.
 """
@@ -27,6 +29,21 @@ from .errors import MalformedAnswer, ModelError, refused
 
 FORMAT = 'agent-lab-gateway-1'
 MODELS = 'models.json'  # models chosen from the gateway's catalog, in data/
+# The longest answer asked for: without it the gateway's own limit may cut a catalog or a card short. The judges of the
+# Pi provider asked the test environment's gateway for 16384.
+MAX_TOKENS = 16384
+# Files of certs/ that are no certificate, and the size above which a file is no PEM text.
+PLAIN = ('url.txt', 'password.txt')
+PEM_SIZE = 1_000_000
+# TLS refused: the gateway's certificate is not vouched for, or the gateway did not take the client's.
+UNVERIFIED = (
+    'Сертификат шлюза не прошёл проверку. Положите корневой сертификат банка в certs/ (файл ca*.pem или root*.pem) '
+    'или, только на тестовом контуре, запустите Lab с AGENT_LAB_GATEWAY_INSECURE=1.'
+)
+REJECTED = (
+    'TLS-соединение со шлюзом не установлено ({}). Чаще всего шлюз не принял клиентский сертификат: проверьте, '
+    'что в certs/ лежат сертификат и ключ, выданные для этого шлюза.'
+)
 # What the certificates cost once rather than on every call, shared by the server's threads: (what it was made from,
 # the reason it failed or None, the result) for the converted bundle and the TLS context; one client per event loop.
 _lock = threading.Lock()
@@ -45,10 +62,10 @@ def settings() -> dict | None:
         found = _from_file(lab.gateway_file)
         given = {'url': lab.gateway_url, 'cert': lab.gateway_cert, 'key': lab.gateway_key, 'ca': lab.gateway_ca}
         found.update({field: value for field, value in given.items() if value})
-        if lab.gateway_insecure is not None:
-            found['insecure'] = lab.gateway_insecure
         if not _complete(found) and lab.certs:
             found = _from_certs_folder(lab.certs) or found
+        if lab.gateway_insecure is not None:
+            found['insecure'] = lab.gateway_insecure
     except OSError as error:
         raise ModelError(_unreadable(error)) from error
     if not _complete(found):
@@ -104,13 +121,19 @@ def _from_file(file: Path | None) -> dict:
 
 def _from_certs_folder(certs: Path) -> dict | None:
     """certs/: url.txt, a client certificate and key (PEM, or one .p12/.pfx with password.txt), and the bank's root
-    certificate named ca* or root* when the gateway needs it. Without url.txt the gateway is not set up; with it,
-    whatever is missing is a ModelError."""
+    certificate named ca* or root* when the gateway needs it. A PEM file is known by what it holds, whatever its
+    extension: the certificates of a test stand travel as new_cert.c-r-t and key.k-e-y too. Without url.txt the gateway
+    is not set up; with it, whatever is missing is a ModelError."""
     if not (certs / 'url.txt').exists():
         return None
     url = _url(certs)
-    files = [f for f in certs.iterdir() if f.is_file()]
-    pem = {f: f.read_text(errors='ignore') for f in files if f.suffix.lower() in ('.pem', '.crt', '.cer', '.key')}
+    files = sorted(f for f in certs.iterdir() if f.is_file() and not f.name.startswith('.'))
+    bundles = ('.p12', '.pfx')
+    pem = {
+        f: f.read_text(errors='ignore')
+        for f in files
+        if f.name.lower() not in PLAIN and f.suffix.lower() not in bundles and f.stat().st_size <= PEM_SIZE
+    }
 
     def is_root(path: Path) -> bool:
         return path.stem.lower().startswith(('ca', 'root'))
@@ -118,7 +141,7 @@ def _from_certs_folder(certs: Path) -> dict | None:
     cert = next((f for f, text in pem.items() if 'BEGIN CERTIFICATE' in text and not is_root(f)), None)
     key = next((f for f, text in pem.items() if 'PRIVATE KEY' in text), None)
     ca = next((f for f, text in pem.items() if 'BEGIN CERTIFICATE' in text and is_root(f)), None)
-    bundle = next((f for f in files if f.suffix.lower() in ('.p12', '.pfx')), None)
+    bundle = next((f for f in files if f.suffix.lower() in bundles), None)
     if (not cert or not key) and bundle:
         cert, key = _unpack(bundle)
     if not cert or not key:
@@ -322,10 +345,34 @@ def _stamp(path: str | None) -> tuple:
     return (path, status.st_mtime_ns, status.st_size) if status else (path,)
 
 
+async def _send(method: str, path: str, **options: object) -> httpx.Response:
+    """One request to the gateway; what TLS refused is said in words and is not asked again (another try would meet
+    the same certificates)."""
+    client, base = await _client()
+    try:
+        return await client.request(method, base + path, **options)
+    except httpx.TransportError as error:
+        reason = _tls_failure(error)
+        if reason is None:
+            raise
+        raise ModelError(reason) from error
+
+
+def _tls_failure(error: BaseException) -> str | None:
+    """Why TLS refused, from the errors under the transport's; None when TLS is not why (no network, no answer)."""
+    seen: BaseException | None = error
+    while seen is not None:
+        if isinstance(seen, ssl.SSLCertVerificationError):
+            return UNVERIFIED
+        if isinstance(seen, ssl.SSLError):
+            return REJECTED.format(seen.reason or type(seen).__name__)
+        seen = seen.__cause__ or seen.__context__
+    return None
+
+
 async def catalog(timeout: httpx.Timeout | float = 30) -> list[str]:
     """Chat models the gateway offers."""
-    client, base = await _client()
-    response = await client.get(base + '/v1/models', timeout=timeout)
+    response = await _send('GET', '/v1/models', timeout=timeout)
     if response.status_code != 200:
         raise refused('Шлюз не отдал каталог моделей', response)
     try:
@@ -379,10 +426,9 @@ async def chat(model: str, system: str, messages: list[dict], timeout: httpx.Tim
             *({'role': m['role'], 'content': [{'text': m['content']}]} for m in messages),
         ],
         # Reasoning models behind the gateway otherwise spend the whole output limit before they answer.
-        'model_options': {'reasoning': {'effort': 'off'}},
+        'model_options': {'reasoning': {'effort': 'off'}, 'max_tokens': MAX_TOKENS},
     }
-    client, base = await _client()
-    response = await client.post(base + '/v2/chat/completions', json=body, timeout=timeout)
+    response = await _send('POST', '/v2/chat/completions', json=body, timeout=timeout)
     if response.status_code != 200:
         raise refused('Шлюз моделей ответил ошибкой', response)
     try:
@@ -391,6 +437,12 @@ async def chat(model: str, system: str, messages: list[dict], timeout: httpx.Tim
         raise MalformedAnswer('Шлюз ответил не в JSON.') from error
     if not isinstance(data, dict) or not isinstance(data.get('messages'), list):
         raise MalformedAnswer('В ответе шлюза нет списка messages.')
+    # A cut answer, or one the gateway stopped (a content filter), is no answer even when its text reads as one.
+    finish = data.get('finish_reason')
+    if finish == 'length':
+        raise MalformedAnswer(f'Ответ модели обрезан: он длиннее {MAX_TOKENS} токенов.')
+    if finish not in (None, 'stop'):
+        raise MalformedAnswer(f'Шлюз остановил ответ модели (finish_reason: {str(finish)[:40]}).')
     if not all(isinstance(message, dict) for message in data['messages']):
         raise MalformedAnswer('Сообщение шлюза в неизвестном формате.')
     answer = next((message for message in data['messages'] if message.get('role') == 'assistant'), None)

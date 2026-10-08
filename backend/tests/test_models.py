@@ -103,6 +103,36 @@ class ProviderTests(unittest.IsolatedAsyncioTestCase):
             result = await models.chat('system', 'question', endpoint=(models.GATEWAY, 'requested'))
         self.assertEqual(result.model, 'returned-model')
 
+    async def test_gateway_is_asked_for_a_long_answer_without_reasoning(self):
+        sent = []
+
+        def handler(request):
+            sent.append(json.loads(request.content))
+            return json_response({'messages': [{'role': 'assistant', 'content': [{'text': 'ok'}]}]})
+
+        client = Client(transport=httpx.MockTransport(handler))
+        with patch.object(models.gateway, '_client', return_value=(client, 'http://gateway')):
+            await models.chat('system', 'question', endpoint=(models.GATEWAY, 'requested'))
+        self.assertEqual(
+            sent[0]['model_options'], {'reasoning': {'effort': 'off'}, 'max_tokens': models.gateway.MAX_TOKENS}
+        )
+
+    async def test_gateway_answer_cut_or_stopped_is_malformed_and_a_finished_one_is_taken(self):
+        for finish, said in (('length', 'обрезан'), ('blacklist', 'blacklist'), ('stop', None), (None, None)):
+            body = {'messages': [{'role': 'assistant', 'content': [{'text': '{"a": 1'}]}], 'finish_reason': finish}
+            client = Client(transport=httpx.MockTransport(lambda _, body=body: json_response(body)))
+            with (
+                self.subTest(finish=finish),
+                patch.object(models.gateway, '_client', return_value=(client, 'http://gateway')),
+            ):
+                if said is None:
+                    reply = await models.chat('system', 'question', endpoint=(models.GATEWAY, 'requested'))
+                    self.assertEqual(reply.text, '{"a": 1')
+                    continue
+                with self.assertRaises(models.MalformedAnswer) as caught:
+                    await models.chat('system', 'question', endpoint=(models.GATEWAY, 'requested'), attempts=1)
+                self.assertIn(said, str(caught.exception))
+
     async def test_gateway_bad_catalog_is_a_model_error(self):
         for body in ([], {}, {'data': [None]}, {'data': [{'id': 42}]}):
             client = Client(transport=httpx.MockTransport(lambda _, body=body: json_response(body)))
