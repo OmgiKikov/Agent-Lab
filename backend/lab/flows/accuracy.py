@@ -14,7 +14,7 @@ from .. import models, storage
 from ..domain import accuracy, answers, checks, results
 from ..domain.comparison import dataset_fingerprint
 from ..roles import planner
-from . import Progress, conversations, inputs, same_work, severity
+from . import Progress, conversations, inputs, provenance, same_work, severity
 from .checks import current
 
 RESULT = checks.result(checks.CODE)  # discover.json: the accuracy result; tone of voice keeps its own
@@ -49,6 +49,7 @@ def fingerprint(given: dict) -> str:
         replan=bool(given.get('replan')),
         criteria=before.get('checkId') or before.get('startedAt'),
         code=code,
+        judge=(storage.judges.active(checks.CODE) or {}).get('id'),
         **conversations.same_material(given['count']),
     )
 
@@ -169,6 +170,17 @@ async def plan(
     """The topics of the check with their criteria and the conversations of each: the frozen ones, or extracted anew.
     Kept as a step of the task (TOPICS): a task continued judges by the topics it planned, never planned again."""
     started = storage.now()
+    selected = storage.judges.active(checks.CODE)
+    if selected:
+        topics = [
+            {
+                'id': 'custom',
+                'title': selected['name'],
+                'rules': selected['criteria'],
+                'dialogueIds': [str(d['id']) for d in dialogues],
+            }
+        ]
+        return {'topics': topics, 'dropped': 0, 'rulesSince': selected['createdAt'], 'startedAt': started}
     if previous.get('topics') and not replan:
         progress(stage='plan', done=0, total=len(dialogues), message='Распределяем разговоры по темам')
         topics = await keep_topics(previous, dialogues)
@@ -193,6 +205,7 @@ def commit(result: dict, *, new_criteria: bool) -> None:
         previous = storage.history.latest(checks.CODE)
         export = storage.dialogues.meta()
         record = accuracy.saved(result, dialogues, export.get('file'), storage.dialogues.count(), previous)
+        provenance.attach(result, record, checks.CODE)
         publish(result, record, new_criteria=new_criteria)
 
 

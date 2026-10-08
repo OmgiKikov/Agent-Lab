@@ -108,7 +108,7 @@ export function DialogsPage({ stage }: { stage: Stage }) {
 
   const header =
     stage === "sim" ? (
-      <SimHeader runId={runId} actions={false} />
+      <SimHeader actions={false} />
     ) : (
       <CheckHeader check={stage} actions={<UploadButton variant="outline" check={stage} />} />
     );

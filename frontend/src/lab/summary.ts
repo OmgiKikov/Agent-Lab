@@ -132,15 +132,24 @@ export const HOW = [
   "«Без найденных ошибок» не значит, что ошибок нет. Проверка находит не всё.",
   "«С учётом ответов людей» считает те же разговоры. Ошибка, которую человек снял, не считается, а ошибка, которую он нашёл сам, считается. Число автоматической проверки от этого не меняется, и с прошлыми проверками сравнивают только его.",
   "С прошлой проверкой сравнивают, только если критерии и способ проверки те же. Если хотя бы с одной стороны меньше 30 разговоров, этого мало, чтобы судить.",
-  "Tone of voice и Точность проверяют разное, их числа не складываются.",
 ];
+
+/** Said when the summary has both checks: their numbers are not added up. */
+export const HOW_BOTH = "Tone of voice и Точность проверяют разное, их числа не складываются.";
 
 /** Said once a criterion is serious: that its count is part of the number, and who decides it. */
 export const HOW_SERIOUS =
   "«С серьёзными ошибками» — проверенные разговоры, где есть ошибка хотя бы по одному серьёзному критерию. Они уже входят в число разговоров с ошибкой агента. Какие критерии серьёзные, предлагает автоматическая проверка, а люди подтверждают или меняют.";
 
-/** The footnote of a summary: with the line about serious errors once a check of it has a serious criterion. */
-export const howOf = (s: Summary) => (s.checks.some((c) => c.serious) ? [...HOW, HOW_SERIOUS] : HOW);
+/**
+ * The footnote of a summary: with the line about two checks when it has both, and the line about serious errors once
+ * a check of it has a serious criterion.
+ */
+export const howOf = (s: Summary) => [
+  ...HOW,
+  ...(s.checks.length > 1 ? [HOW_BOTH] : []),
+  ...(s.checks.some((c) => c.serious) ? [HOW_SERIOUS] : []),
+];
 
 /** A whole date with its year, for a page that leaves the product: «3 октября 2026 г.» */
 export const fullDay = (iso: string) =>

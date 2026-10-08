@@ -1,4 +1,6 @@
+import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { pct, plural } from "../lab/format";
 import { useArrived, useCountUp } from "./motion";
@@ -14,6 +16,8 @@ export function StageResult({
   unchecked = 0,
   size = "hero",
   link,
+  all,
+  delta,
   className,
 }: {
   failed: number;
@@ -22,6 +26,10 @@ export function StageResult({
   size?: "hero" | "display";
   /** Where each part's conversations open: every number leads to what it is made of. */
   link?: (part: "bad" | "ok" | "none") => string;
+  /** Where all of them open, at the end of the parts. */
+  all?: string;
+  /** How the number stands to the previous check, on a line under it (checks/Compare, CompareDelta). */
+  delta?: ReactNode;
   className?: string;
 }) {
   const clean = Math.max(0, checked - failed);
@@ -65,6 +73,9 @@ export function StageResult({
               {pct(failed, checked)}%
             </span>
           </p>
+          {delta && (
+            <div className="mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-small text-fg-3">{delta}</div>
+          )}
         </>
       ) : (
         // Nothing measured is not «0 из 0»: no number to show, and no «без ошибок» to imply.
@@ -110,6 +121,17 @@ export function StageResult({
             )}
           </li>
         ))}
+        {all && (
+          <li className="ml-auto">
+            <Link
+              to={all}
+              className="flex items-center gap-1 rounded-sm font-medium text-run hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
+            >
+              Все разговоры
+              <ArrowRight aria-hidden className="size-3.5" />
+            </Link>
+          </li>
+        )}
       </ul>
     </div>
   );

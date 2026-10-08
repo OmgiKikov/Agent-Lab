@@ -43,6 +43,14 @@ class Settings(BaseModel):
     agent_timeout: float = Field(180, gt=0, alias='LAB_AGENT_TIMEOUT')
     prod_system_id: str = Field('6ba7b810-9dad-11d1-80b4-00c04fd430c8', alias='LAB_PROD_SYSTEM_ID')
 
+    idp_key: SecretStr | None = Field(None, alias='LAB_IDP_KEY')
+    idp_source_id: str | None = Field(None, alias='LAB_IDP_SOURCE_ID')
+    idp_sender: str | None = Field(None, alias='LAB_IDP_SENDER')
+    idp_receiver: str | None = Field(None, alias='LAB_IDP_RECEIVER')
+    idp_ca: Path | None = Field(None, alias='LAB_IDP_CA')
+    idp_cert: Path | None = Field(None, alias='LAB_IDP_CERT')
+    idp_client_key: Path | None = Field(None, alias='LAB_IDP_CLIENT_KEY')
+
     # The models (models/__init__.py): an OpenAI-compatible endpoint, else the bank's gateway when it is set up, else
     # OpenRouter; a second judge only when named.
     model_url: str | None = Field(None, alias='LAB_MODEL_URL')
@@ -62,7 +70,7 @@ class Settings(BaseModel):
     gateway_ca: str | None = Field(None, alias='AGENT_LAB_GATEWAY_CA_PATH')
     gateway_insecure: bool | None = Field(None, alias='AGENT_LAB_GATEWAY_INSECURE')
 
-    @field_validator('data', 'certs', 'frontend', 'gateway_file', mode='before')
+    @field_validator('data', 'certs', 'frontend', 'gateway_file', 'idp_ca', 'idp_cert', 'idp_client_key', mode='before')
     @classmethod
     def _place(cls, value: object) -> object:
         """A folder or file as a person writes it: ~ is their home, a relative path is under the Lab's folder."""

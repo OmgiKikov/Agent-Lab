@@ -1,29 +1,34 @@
 import { Link, Navigate, useSearchParams } from "react-router-dom";
 import { ArrowRight, ChevronDown, Hammer, Play, RotateCcw } from "lucide-react";
-import { scenariosLink } from "../../app/links";
+import { conversationsLink, problemLink, reviewLink, scenariosLink } from "../../app/links";
+import { yesNoText } from "../../lab/answers";
 import { api } from "../../lab/api";
 import { BY_CRITERIA, deckCriteria } from "../../lab/checks";
-import { useCriteria } from "../../lab/criteria";
+import { useCriteria, type Criterion } from "../../lab/criteria";
 import { dialogOf } from "../../lab/dialogs";
 import { count, longDay, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { summarySentence } from "../../lab/problemReport";
 import { isRunning, runTitle, useRun } from "../../lab/runs";
+import type { Problems } from "../../lab/problems";
 import type { LabRun, LabState, RunSummary } from "../../lab/types";
+import { runAnswersPending, saysError, verdictsOf } from "../../lab/verdicts";
+import { Step, Steps, STEP_ACTION, STEP_NEXT } from "../../product/Checklist";
 import { StageResult } from "../../product/StageResult";
 import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
 import { Menu } from "../../ui/Menu";
 import { useToast } from "../../ui/toast";
+import { checked, queueOf } from "../problems/model";
 import { ProblemList } from "../problems/ProblemList";
 import { RunMatrix } from "./RunMatrix";
 import { NoSuchRun, SimHeader, useSimRuns } from "./stage";
 
 /**
  * «Симуляции»: synthetic customers play business scenarios with the agent, built from the conversations of the export,
- * and one check's criteria judge them. The result of one run as one number, the scenarios against the types of customers, and
- * the problems it found. Counted on its own: other conversations, other customers than the export.
+ * and one check's criteria judge them. The result of one run as one number, the scenarios against the types of
+ * customers, and the problems it found. Counted on its own: other conversations, other customers than the export.
  */
 export function SimResultPage() {
   const [params] = useSearchParams();
@@ -40,7 +45,7 @@ function SimResult() {
   const { finished, run, newest, missing } = useSimRuns(state, params.get("run"));
   const criteria = useCriteria(run?.check ?? null, run && !isRunning(run) ? run.id : null);
   const { data, list } = criteria;
-  const header = <SimHeader runId={run?.id ?? null} />;
+  const header = <SimHeader />;
   if (offline && !state)
     return (
       <div className="flex h-full flex-col">
@@ -140,12 +145,17 @@ function SimResult() {
           {live ? (
             <Live run={run} state={state} />
           ) : m?.measured ? (
-            <StageResult
-              className="mt-4"
-              failed={m.failed}
-              checked={m.measured}
-              unchecked={Math.max(0, total - m.measured)}
-            />
+            <>
+              <StageResult
+                className="mt-4"
+                failed={m.failed}
+                checked={m.measured}
+                unchecked={Math.max(0, total - m.measured)}
+                link={(part) => conversationsLink("sim", { run: run.id, v: PART[part] })}
+                all={conversationsLink("sim", { run: run.id })}
+              />
+              {data?.sim && <RunSteps run={run} data={data} list={list} />}
+            </>
           ) : run.status === "failed" ? (
             // Why, in place: «Агент не ответил ни в одном разговоре. …» (backend simulate.unanswered).
             <div className="mt-6">
@@ -154,15 +164,6 @@ function SimResult() {
             </div>
           ) : (
             <p className="mt-6 text-title font-semibold text-fg">Разговоры этого прогона ещё не оценены</p>
-          )}
-          {!live && m?.sets && Object.keys(m.sets).length > 0 && (
-            <p className="mt-3 max-w-[68ch] text-read text-fg-2">
-              {Object.keys(m.sets).length > 1 ? "Наборы считаются отдельно: " : ""}
-              {Object.entries(m.sets)
-                .map(([key, s]) => `${SET_NAMES[key] ?? key}: ошибка в ${s.measured - s.passed} из ${s.measured}`)
-                .join(" · ")}
-              {m.sets.representative?.partial && ". Сыграна только часть сценариев, не вся выгрузка"}
-            </p>
           )}
           <Matrix run={run} state={state} />
           {!live && (data?.sim || criteria.loading || criteria.error) && (
@@ -182,10 +183,58 @@ function SimResult() {
   );
 }
 
-const SET_NAMES: Record<string, string> = {
-  representative: "все сценарии",
-  stress: "стрессовый",
-};
+const PART = { bad: "fail", ok: "pass", none: "none" } as const;
+
+/**
+ * The steps after a run, as after a check (product/Trust), the next one with the black button: check the model's
+ * answers on the run's conversations — on 10 of its errors at least, all when fewer — then open its main problem. The
+ * conversations and the answers are parts of the run's result, not tabs. No «было → стало»: runs are not versions of
+ * each other (RunList).
+ */
+function RunSteps({ run, data, list }: { run: RunSummary; data: Problems; list: Criterion[] }) {
+  const verdicts = verdictsOf(data, null, "sim");
+  const errors = verdicts.filter((v) => v.example.status === "FAIL");
+  const answered = verdicts.filter((v) => v.example.review);
+  const pending = runAnswersPending(data);
+  const said = answered.filter((v) => saysError(v.example.status, v.example.review!)).length;
+  const top = queueOf(list, "sim")[0];
+  if (!errors.length && !top) return null;
+  return (
+    <Steps className="mt-5">
+      {errors.length > 0 && (
+        <Step
+          state={pending ? "todo" : "done"}
+          title="Проверьте оценки модели"
+          text={
+            answered.length
+              ? `Вы ответили на ${count(answered.length, "оценку", "оценки", "оценок")}: ${yesNoText(said, answered.length - said)}.`
+              : `Ошибки в прогоне нашла модель. Ответьте «да» или «нет» ${errors.length <= 10 ? "на каждую" : "хотя бы на 10 из них"}, и станет понятно, можно ли верить итогу.`
+          }
+          action={
+            <Link
+              to={reviewLink("sim", { run: run.id, queue: pending ? "unchecked" : "all" })}
+              className={pending ? STEP_NEXT : STEP_ACTION}
+            >
+              {pending ? (answered.length ? "Проверить ещё" : "Начать") : "Ваши ответы"}
+            </Link>
+          }
+        />
+      )}
+      {top && (
+        <Step
+          state="todo"
+          title="Разберите главную проблему"
+          text={`${top.r.title.replace(/\.\s*$/, "")}: ${top.r.sim.failed}\u00a0из\u00a0${checked(top.r.sim)} ${plural(checked(top.r.sim), "разговора", "разговоров", "разговоров")}. На странице проблемы — примеры с цитатами и задача для разработчика.`}
+          action={
+            <Link to={problemLink(top.r.id, "sim", run.id)} className={pending ? STEP_ACTION : STEP_NEXT}>
+              Открыть
+            </Link>
+          }
+        />
+      )}
+    </Steps>
+  );
+}
 
 /** A run that is still playing: how many conversations are done, filling in as the agent answers. */
 function Live({ run, state }: { run: LabRun; state: LabState }) {

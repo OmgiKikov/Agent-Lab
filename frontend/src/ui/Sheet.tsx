@@ -1,3 +1,4 @@
+import { useDialogFocus } from "./dialogFocus";
 import * as Dialog from "@radix-ui/react-dialog";
 import type { ReactNode } from "react";
 import { X } from "lucide-react";
@@ -17,6 +18,7 @@ export function Sheet({
   children,
   width = "md",
   className,
+  onCloseAutoFocus,
 }: {
   open: boolean;
   onClose: () => void;
@@ -26,7 +28,9 @@ export function Sheet({
   children: ReactNode;
   width?: "md" | "lg";
   className?: string;
+  onCloseAutoFocus?: (event: Event) => void;
 }) {
+  const focus = useDialogFocus(open, onCloseAutoFocus);
   return (
     <Dialog.Root
       open={open}
@@ -38,6 +42,7 @@ export function Sheet({
         <Dialog.Overlay className="fixed inset-0 z-50 bg-fg/30 data-[state=open]:animate-in data-[state=open]:fade-in-0" />
         <Dialog.Content
           aria-describedby={undefined}
+          {...focus}
           className={cn(
             "fixed inset-y-0 right-0 z-50 flex w-screen flex-col border-l border-line bg-side shadow-pop outline-none",
             "data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:slide-in-from-right-6 data-[state=open]:duration-200",

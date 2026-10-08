@@ -195,7 +195,7 @@ export function ScenariosPage() {
   };
   useKeys({ KeyJ: () => step(1), KeyK: () => step(-1) });
 
-  const header = <SimHeader runId={null} />;
+  const header = <SimHeader />;
   if (offline && !state)
     return (
       <div className="flex h-full flex-col">

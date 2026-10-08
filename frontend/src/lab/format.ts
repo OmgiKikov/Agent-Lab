@@ -49,3 +49,11 @@ export const longDay = (iso?: string | null) => {
   const date = new Date(iso);
   return date.toLocaleDateString("ru-RU", { day: "numeric", month: "long", ...yearOf(date) });
 };
+
+/** A file size with a useful unit, including small CSV samples. */
+export const fileSize = (bytes: number) =>
+  bytes < 1000
+    ? `${bytes} Б`
+    : bytes < 1_000_000
+      ? `${Math.ceil(bytes / 1000)} КБ`
+      : `${(bytes / 1_000_000).toLocaleString("ru-RU", { maximumFractionDigits: 1 })} МБ`;

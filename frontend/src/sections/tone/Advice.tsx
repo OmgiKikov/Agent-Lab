@@ -91,7 +91,7 @@ export function Advice({
               Оно применится в следующей проверке. Этот итог посчитан по предыдущей версии критериев.
             </p>
             <Button size="lg" onClick={onClose}>
-              К итогу
+              Готово
             </Button>
           </div>
         ) : (

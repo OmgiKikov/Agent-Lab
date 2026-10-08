@@ -1,16 +1,16 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { ChevronDown, PencilLine, RotateCcw } from "lucide-react";
-import { SECTIONS, toneCheckLink, type Check } from "../../app/links";
+import { BookOpen, ChevronDown, RotateCcw } from "lucide-react";
+import { launchLink, type Check } from "../../app/links";
 import { useWide } from "../../app/useWide";
-import { useCriteria, type Criterion } from "../../lab/criteria";
+import { nameFromText, useCriteria, type Criterion } from "../../lab/criteria";
 import { count, day, plural } from "../../lab/format";
 import { useSource } from "../../lab/problems";
 import { secondOf } from "../../lab/problemStats";
 import { decisions } from "../../lab/verdicts";
 import { useKeys } from "../../app/keys";
 import { useLabState } from "../../lab/LabProvider";
-import { codeSources, TONE_ID } from "../../lab/tone";
+import { accuracySources, customAccuracy, TONE_ID } from "../../lab/tone";
 import { SeverityHint } from "../../product/Severity";
 import { Button, buttonClass } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
@@ -18,12 +18,16 @@ import { LoadFailed } from "../../ui/LoadFailed";
 import { Menu } from "../../ui/Menu";
 import { Segmented } from "../../ui/Segmented";
 import { CheckHeader } from "../checks/CheckHeader";
-import { Reextract } from "./Reextract";
+import { BeforeCheck } from "./BeforeCheck";
+import { ToneCriteria } from "./ToneCriteria";
+import { RulesSheet } from "../judges/RulesSheet";
+import { useJudges } from "../../lab/judges";
 import { CodeView } from "./CodeView";
 import { CriteriaTable } from "./CriteriaTable";
 import { CriterionPanel, type Shown } from "./CriterionPanel";
 import { Files } from "./Files";
 import { nameOf, type SideKey } from "./model";
+import { SIMULATIONS } from "../../app/product";
 
 type View = "code" | "list";
 
@@ -44,8 +48,9 @@ export function CriteriaPage({ check }: { check: Check }) {
   const [params, setParams] = useSearchParams();
   const wide = useWide();
   const { data, list, error, retry } = useCriteria(check);
+  const judges = useJudges(check);
   const tone = check === "tone";
-  const [reextract, setReextract] = useState(false);
+  const rulesOpen = params.get("rules") === "1";
   const set = (edit: (n: URLSearchParams) => void, replace = true) =>
     setParams(
       (prev) => {
@@ -56,14 +61,17 @@ export function CriteriaPage({ check }: { check: Check }) {
       { replace },
     );
 
+  // The simulations are hidden in the first release (app/product): their side of a criterion is not offered.
   const side: SideKey =
-    params.get("s") === "sim" || (params.get("s") !== "log" && !data?.log && !!data?.sim) ? "sim" : "log";
+    SIMULATIONS && (params.get("s") === "sim" || (params.get("s") !== "log" && !data?.log && !!data?.sim))
+      ? "sim"
+      : "log";
   const view: View =
     params.get("view") === "list" || params.get("view") === "code" ? (params.get("view") as View) : "list";
   const ordered = useMemo(() => byFrequency(list, side), [list, side]);
   // Tone of voice is written in one document, the person's rules; accuracy in the prompts and tools of the agent.
   const sources = useMemo(
-    () => (tone ? (state?.sources.filter((s) => s.id === TONE_ID) ?? []) : codeSources(state)),
+    () => (tone ? (state?.sources.filter((s) => s.id === TONE_ID) ?? []) : accuracySources(state)),
     [tone, state],
   );
   const asked = params.get("c");
@@ -108,38 +116,38 @@ export function CriteriaPage({ check }: { check: Check }) {
     },
   });
 
-  const busy = !!state?.job.running;
   const sideOptions = (
     [
       ["log", "Диалоги"],
       ["sim", "Симуляции"],
     ] as const
-  ).filter(([k]) => (k === "log" ? !!data?.log : !!data?.sim));
+  ).filter(([k]) => (k === "log" ? !!data?.log : SIMULATIONS && !!data?.sim));
   const header = (
-    <CheckHeader
-      check={check}
-      actions={
-        tone ? (
-          <Link
-            to={toneCheckLink("criteria")}
-            title="Выбрать критерии для следующей проверки"
-            className={buttonClass()}
-          >
-            <PencilLine aria-hidden className="size-3.5" />
-            Изменить критерии
-          </Link>
-        ) : (
-          <Button
-            icon={RotateCcw}
-            onClick={() => setReextract(true)}
-            disabled={busy || !codeSources(state).length}
-            title="Модель прочитает код агента заново и извлечёт критерии дословно"
-          >
-            Извлечь заново
-          </Button>
-        )
-      }
-    />
+    <>
+      <CheckHeader
+        check={check}
+        actions={
+          // Read anew only once criteria were read: before the first check they come from the code anyway.
+          !tone && !customAccuracy(state) && list.length > 0 ? (
+            <Link
+              to={`${launchLink("code")}?replan=1`}
+              title="Новая проверка, в которой модель прочитает код агента заново и извлечёт критерии дословно"
+              className={buttonClass()}
+            >
+              <RotateCcw aria-hidden className="size-3.5" />
+              Извлечь заново
+            </Link>
+          ) : undefined
+        }
+      />
+      {/* Tone of voice keeps its rules on the page itself (ToneCriteria); Точность, in this sheet. */}
+      {!tone && <RulesSheet check={check} open={rulesOpen} onClose={() => set((n) => n.delete("rules"), false)} />}
+    </>
+  );
+  const rulesButton = (
+    <Button size="sm" icon={BookOpen} onClick={() => set((n) => n.set("rules", "1"), false)}>
+      Правила
+    </Button>
   );
   if (offline && !state)
     return (
@@ -165,30 +173,25 @@ export function CriteriaPage({ check }: { check: Check }) {
         </div>
       </div>
     );
+  // Tone of voice: one page before and after a check — its rules, and every criterion as a card that opens.
+  if (tone)
+    return (
+      <div className="flex h-full flex-col">
+        {header}
+        <div className="min-h-0 flex-1 overflow-auto">
+          <ToneCriteria data={data} list={list} />
+        </div>
+      </div>
+    );
+  // Before the first check the criteria are the step after the rules: the ones collected from them, or where they come
+  // from. After it, every criterion with its verdicts.
   if (!list.length)
     return (
       <div className="flex h-full flex-col">
         {header}
-        <EmptyState
-          drop
-          title="Критериев пока нет"
-          className="flex-1 justify-center"
-          action={
-            tone ? (
-              <Link to={toneCheckLink()} className={buttonClass({ variant: "primary" })}>
-                Начать проверку
-              </Link>
-            ) : (
-              <Link to={SECTIONS.accuracy} className={buttonClass({ variant: "primary" })}>
-                {codeSources(state).length ? "Оценить разговоры" : "Прочитать код"}
-              </Link>
-            )
-          }
-        >
-          {tone
-            ? "Здесь будут критерии из ваших правил общения."
-            : "Здесь будут критерии из кода агента. Модель извлечёт их дословно при первой оценке разговоров."}
-        </EmptyState>
+        <div className="min-h-0 flex-1 overflow-auto">
+          <BeforeCheck rules={judges.selected} onRules={() => set((n) => n.set("rules", "1"), false)} />
+        </div>
       </div>
     );
 
@@ -200,6 +203,11 @@ export function CriteriaPage({ check }: { check: Check }) {
     { checked: 0, agree: 0 },
   );
   const people = decisions(data);
+  // The criteria of the rules in use that the last check did not judge — chosen out of it, or collected after it: the
+  // list below is the check's, and the next check goes by all of them, so the page says which are not in it yet.
+  const judged = new Set(list.flatMap((c) => [c.r.id, ...c.r.log.ruleIds]));
+  const inUse = judges.selected?.criteria ?? [];
+  const unjudged = inUse.filter((c) => !judged.has(c.id));
   // A second model's opinion on some verdict of this side (LAB_SECOND_MODEL). Without one, «Модели совпали» and «Две
   // проверки» would only say «—» and «не с чем сравнить» on every criterion: nothing to tell.
   const twice = (s: SideKey) => list.some((c) => c.r[s].examples.some((e) => !!e.second));
@@ -213,7 +221,14 @@ export function CriteriaPage({ check }: { check: Check }) {
             <span className="text-fg-2">
               {list.length}
               {"\u00a0"}
-              {plural(list.length, "критерий", "критерия", "критериев")} {tone ? "из правил общения" : "из кода агента"}
+              {plural(list.length, "критерий", "критерия", "критериев")}{" "}
+              {judges.selected
+                ? `из «${judges.selected.name}»`
+                : tone
+                  ? "из правил общения"
+                  : customAccuracy(state)
+                    ? "из своего набора правил"
+                    : "из кода агента"}
             </span>
             {data.log?.rulesSince && (
               <>
@@ -236,10 +251,22 @@ export function CriteriaPage({ check }: { check: Check }) {
               </>
             )}
           </p>
+          {unjudged.length > 0 && (
+            <p className="mt-0.5 text-small text-fg-3">
+              Последняя проверка шла по {inUse.length - unjudged.length}
+              {"\u00a0"}из{"\u00a0"}
+              {inUse.length}: {unjudged.map((c) => `«${c.name?.trim() || nameFromText(c.text)}»`).join(", ")}{" "}
+              {unjudged.length === 1 ? "в неё не входил" : "в неё не входили"}. Новая проверка пойдёт по всем.{" "}
+              <Link to={launchLink(check)} className="font-medium text-run hover:underline">
+                Новая проверка
+              </Link>
+            </p>
+          )}
           {/* Quietly, until a person decided every criterion: the automatic check's proposals, or why there are none. */}
           <SeverityHint check={check} data={data} className="mt-0.5" />
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {rulesButton}
           {sideOptions.length > 1 && (
             <Segmented<SideKey>
               size="sm"
@@ -261,7 +288,7 @@ export function CriteriaPage({ check }: { check: Check }) {
             onChange={(v) => set((n) => n.set("view", v))}
             options={[
               { value: "list", label: "Списком" },
-              { value: "code", label: tone ? "В правилах" : "В коде агента" },
+              { value: "code", label: tone || customAccuracy(state) ? "В правилах" : "В коде агента" },
             ]}
           />
         </div>
@@ -385,7 +412,7 @@ export function CriteriaPage({ check }: { check: Check }) {
             sources={sources}
             selected={chosen?.r.id ?? null}
             onSelect={select}
-            hasSim={!!data.sim}
+            hasSim={SIMULATIONS && !!data.sim}
             hasSecond={twice("log")}
           />
         )}
@@ -415,7 +442,6 @@ export function CriteriaPage({ check }: { check: Check }) {
           </aside>
         )}
       </div>
-      {!tone && <Reextract open={reextract} onClose={() => setReextract(false)} />}
     </div>
   );
 }

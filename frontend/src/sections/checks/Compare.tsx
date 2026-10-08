@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { ChevronRight } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronRight, Equal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { conversationsLink, historyLink, type Check } from "../../app/links";
 import { resultOf } from "../../lab/checks";
@@ -11,20 +11,22 @@ import {
   noLongerFound,
   seriousCompareText,
   useCompare,
+  VERDICT,
   VERDICT_WORD,
   wasText,
   type CheckLine,
   type Compare,
   type CompareRow,
+  type Direction,
+  type Verdict,
 } from "../../lab/compare";
 import { nameFromText } from "../../lab/criteria";
-import { longDay } from "../../lab/format";
-import { shareText } from "../../lab/history";
+import { longDay, pct } from "../../lab/format";
+import { shareText, type Counts } from "../../lab/history";
 import { useLabState } from "../../lab/LabProvider";
 import type { RuleEntry } from "../../lab/problems";
 import { seriousFirst } from "../../lab/severity";
 import { SeriousTag } from "../../product/Severity";
-import { Step, STEP_ACTION } from "../../product/Checklist";
 
 /**
  * «Было → стало» of the check on the screen: its current result against its previous saved check, or, without a
@@ -39,65 +41,107 @@ export function useComparison(check: Check): Compare | null {
 const link = "font-medium text-run hover:underline";
 
 /**
- * How the result stands to its previous check, under its number (product/Checklist): a fact to know, not a step to
- * do. Compared: «Прошлая проверка: 22 из 53 (42%) → сейчас 4 из 12 (33%)», when it was and what may be read into the
- * difference, and «Открыть» that check (its export in the tooltip). With `serious` — once some criteria are serious —
- * the same comparison of the conversations with a serious error follows. Nothing when there is nothing to compare
- * with, nor when the checks are not comparable: a row saying so would leave nothing to do, and the history of the
- * checks says why. When the service did not answer, the row says so, with «Повторить».
+ * «Стало лучше?» beside the number itself, as Braintrust sets a run beside its baseline: an arrow and the previous share,
+ * «↑ было 42% · 3 октября», opening that check, then what may be read into the difference. Red when the errors grew
+ * beyond chance, green when they fell; grey when the difference may be chance, the conversations are few, or the same
+ * ones were judged again. The serious comparison is in its tooltip. Nothing when there is nothing to compare with; when
+ * the service did not answer, a quiet «Повторить».
  */
-export function CompareLine({
+export function CompareDelta({
   check,
   compare,
   serious,
+  brief,
 }: {
   check: Check;
   compare: Compare | null;
-  /** The serious criteria of the current result, once there are any: the serious comparison follows. */
   serious?: number;
+  /** In a card: the chip alone, what may be read into the difference in its tooltip. */
+  brief?: boolean;
 }) {
   const asked = useCompare(check);
   if (!compare && asked.isError)
     return (
-      <Step
-        state="info"
-        title="Не удалось загрузить сравнение с прошлой проверкой"
-        action={
-          <button
-            type="button"
-            onClick={() => void asked.refetch()}
-            disabled={asked.isFetching}
-            className={STEP_ACTION}
-          >
-            Повторить
-          </button>
-        }
-      />
+      <button
+        type="button"
+        onClick={() => void asked.refetch()}
+        disabled={asked.isFetching}
+        className="rounded-sm text-small text-fg-3 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
+      >
+        Сравнение с прошлой проверкой не загрузилось · Повторить
+      </button>
     );
   const parts = compare && compareParts(compare);
-  if (!compare || !parts) return null;
+  const overall = compare?.overall;
+  if (!compare?.previous || !parts || !overall?.before.measured) return null;
   const grave = serious ? seriousCompareText(compare, serious) : null;
   return (
-    <Step
-      state="info"
-      title={
-        <>
-          Прошлая проверка: <span className="tabular-nums">{parts.value}</span>
-        </>
-      }
-      text={[parts.note, grave].filter(Boolean).join("\n")}
-      action={
-        compare.previous && (
-          <Link
-            to={historyLink(check, compare.previous.id)}
-            title={compare.previous.file ? `Выгрузка «${compare.previous.file}»` : undefined}
-            className={STEP_ACTION}
-          >
-            Открыть
-          </Link>
-        )
-      }
+    <Delta
+      to={historyLink(check, compare.previous.id)}
+      at={compare.previous.finishedAt}
+      before={overall.before}
+      direction={overall.direction}
+      verdict={overall.verdict}
+      again={compare.kind === "same-data"}
+      label={parts.value}
+      title={[parts.value, brief && parts.note, grave].filter(Boolean).join("\n")}
+      brief={brief}
     />
+  );
+}
+
+/**
+ * The previous check beside a number: «↑ было 42% · 3 октября», opening it, and what may be read into the difference
+ * (lab/compare, VERDICT). Coloured only beyond chance on other conversations; the same ones judged again say so.
+ */
+export function Delta({
+  to,
+  at,
+  before,
+  direction,
+  verdict,
+  again,
+  label,
+  title,
+  brief,
+}: {
+  to: string;
+  /** When the previous check finished. */
+  at: string;
+  before: Counts;
+  direction: Direction | null | undefined;
+  verdict: Verdict | null | undefined;
+  /** The same conversations judged again: the difference is the evaluation's. */
+  again: boolean;
+  /** Both sides in words, for a screen reader: «22 из 53 (42%) → сейчас 4 из 12 (33%)». */
+  label: string;
+  title?: string;
+  /** The chip alone: what may be read into the difference stays in the tooltip. */
+  brief?: boolean;
+}) {
+  const telling = !again && verdict === "beyond-chance";
+  const Icon = direction === "more" ? ArrowUp : direction === "fewer" ? ArrowDown : Equal;
+  const note = again ? "Повторная оценка тех же разговоров." : verdict && verdict !== "same" ? VERDICT[verdict] : "";
+  return (
+    <>
+      <Link
+        to={to}
+        aria-label={`Прошлая проверка, ${longDay(at)}: ${label}`}
+        title={title}
+        className={cn(
+          "inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-small font-medium tabular-nums transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60",
+          telling && direction === "more"
+            ? "bg-bad/10 text-bad hover:bg-bad/15"
+            : telling && direction === "fewer"
+              ? "bg-ok/10 text-ok hover:bg-ok/15"
+              : "bg-inset text-fg-2 hover:bg-hover",
+        )}
+      >
+        <Icon aria-hidden className="size-3.5" />
+        было {pct(before.failed, before.measured)}% · {longDay(at)}
+      </Link>
+      {note && !brief && <span>{note}</span>}
+    </>
   );
 }
 

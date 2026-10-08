@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Fragment, useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -159,15 +159,13 @@ export function Menu({
             align === "right" ? "right-0" : "left-0",
           )}
         >
-          {runs.map((run, n) =>
-            run.choice && runs.length > 1 ? (
-              <div key={n} role="group">
-                {run.items.map(line)}
-              </div>
-            ) : (
-              run.items.map(line)
-            ),
-          )}
+          {runs.map((run, n) => (
+            <Fragment key={n}>
+              {/* Choices and actions apart: a line between them. */}
+              {n > 0 && <div role="separator" className="mx-2.5 my-1 border-t border-line" />}
+              {run.choice && runs.length > 1 ? <div role="group">{run.items.map(line)}</div> : run.items.map(line)}
+            </Fragment>
+          ))}
         </div>
       )}
     </div>

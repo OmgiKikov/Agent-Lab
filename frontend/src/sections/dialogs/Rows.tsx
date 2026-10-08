@@ -45,7 +45,15 @@ function Row({
 }) {
   const ref = useRef<HTMLButtonElement>(null);
   useEffect(() => {
-    if (on) ref.current?.scrollIntoView({ block: "nearest" });
+    // Into view inside the list only: scrollIntoView also moves the page when the list stands lower on it
+    // (checks/RunPage), and a page whose overflow is hidden moves under its own head.
+    const row = ref.current;
+    const list = row?.closest<HTMLElement>("[data-list]");
+    if (!on || !row || !list) return;
+    const r = row.getBoundingClientRect();
+    const b = list.getBoundingClientRect();
+    if (r.top < b.top) list.scrollTop -= b.top - r.top;
+    else if (r.bottom > b.bottom) list.scrollTop += r.bottom - b.bottom;
   }, [on]);
   const who =
     r.source === "sim"
@@ -199,7 +207,7 @@ export function Rows({
           </span>
         )}
       </div>
-      <div className="min-h-0 flex-1 overflow-auto px-2 pb-2">
+      <div data-list className="min-h-0 flex-1 overflow-auto px-2 pb-2">
         {pending ? (
           <div className="px-2">{pending}</div>
         ) : (

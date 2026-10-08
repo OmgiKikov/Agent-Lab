@@ -5,6 +5,7 @@ import uuid
 from pathlib import Path
 
 from .. import agents, storage
+from . import agent_context
 
 SETTINGS = 'settings.json'
 CHECK_QUESTION = 'Какой процент эквайринга?'  # what «Проверить связь» asks the agent
@@ -22,13 +23,17 @@ def save_settings(values: dict) -> dict:
 
 
 def repo() -> Path:
-    """The folder of the agent's code."""
+    """The folder of the agent's code: the clone of its repository once there is one (agent_context.checkout), else the
+    folder of the settings. A repository saved but never cloned, or whose clone failed, has no code to read."""
+    clone = agent_context.checkout_path()
+    if clone is not None and (clone / '.git').exists():
+        return clone
     return Path(settings()['repo']).expanduser()
 
 
 def ways() -> dict[str, dict]:
     """The ways to reach the agent, by its settings."""
-    return agents.configs(settings())
+    return agents.configs(settings() | {'repo': str(repo())})
 
 
 def connect(key: str) -> agents.HttpAgent:

@@ -1,5 +1,4 @@
 import type { Check } from "../lab/types";
-import type { CheckStep } from "../lab/tone";
 
 export type { Check };
 
@@ -12,6 +11,7 @@ export type Stage = Check | "sim";
 
 export const SECTIONS = {
   overview: "/overview",
+  data: "/data",
   /** «Сводка для руководителя»: a page of the agent, from «Обзор» and ⌘K, not a section of the navigation. */
   summary: "/summary",
   tone: "/tone",
@@ -38,6 +38,9 @@ export const side = (stage: Stage): "log" | "sim" => (stage === "sim" ? "sim" : 
 
 /** The section of a check or of the simulations: «/tone», «/accuracy», «/simulations». */
 export const stageRoot = (stage: Stage) => ROOT[stage];
+
+/** One dataset: its conversations as its file has them, one of them open (`d`). */
+export const datasetLink = (id: string) => `${SECTIONS.data}/${enc(id)}`;
 
 /** The result of a stage: of a check, or of a run of the simulation (the last one when none is named). */
 export const stageLink = (stage: Stage, runId?: string | null) =>
@@ -66,8 +69,10 @@ export const criterionLink = (
   extra: Record<string, string | null | undefined> = {},
 ) => `${ROOT[check]}/criteria${query({ c: ruleId, ...extra })}`;
 
-/** The tone-of-voice check step by step; without a step it opens where the work stands. */
-export const toneCheckLink = (step?: CheckStep) => `${SECTIONS.tone}/check${query({ step })}`;
+/** The saved checks of a check, or one of them on its own page (checks/RunPage; the latest one is «Итог»). */
+export const historyLink = (check: Check, id?: string | null) => `${ROOT[check]}/history${id ? `/${enc(id)}` : ""}`;
 
-/** The saved checks of a check, one of them open when given. */
-export const historyLink = (check: Check, id?: string | null) => `${ROOT[check]}/history${query({ id })}`;
+/** New work and its frozen report live inside the check they belong to. */
+export const launchLink = (check: Check, id?: string) => `${ROOT[check]}/${id ? `launches/${enc(id)}` : "launch"}`;
+/** The rules of a check open over its criteria. */
+export const judgesLink = (check: Check) => criterionLink(check, null, { rules: "1" });

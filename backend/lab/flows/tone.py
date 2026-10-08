@@ -15,7 +15,7 @@ from ..domain import answers, checks, quotes, results, tone
 from ..domain.comparison import dataset_fingerprint
 from ..roles import tone as role
 from ..storage import registry
-from . import Progress, conversations, inputs, same_work, severity
+from . import Progress, conversations, inputs, provenance, same_work, severity
 from .checks import current
 
 DRAFT = inputs.TONE_DRAFT  # the criteria of the current rules, with their revision
@@ -69,6 +69,9 @@ def save_draft(draft: dict) -> None:
         storage.documents.save(DRAFT, draft)
         if previous.get('revision') != draft['revision']:
             inputs.drop_deck([checks.TONE])
+        policy = next((s for s in inputs.sources() if s['id'] == checks.TONE_OF_VOICE), None)
+        if policy and draft.get('criteria'):
+            storage.judges.capture_tone(draft, policy)
 
 
 async def collect_criteria(progress: Progress) -> dict:
@@ -329,7 +332,9 @@ def commit(result: dict) -> None:
     with storage.transaction():
         previous = storage.history.latest(checks.TONE)
         export = {'file': storage.dialogues.meta().get('file'), 'total': storage.dialogues.count()}
-        publish(result, tone.snapshot(result, dialogues, criteria, source, export, previous))
+        record = tone.snapshot(result, dialogues, criteria, source, export, previous)
+        provenance.attach(result, record, checks.TONE)
+        publish(result, record)
 
 
 def publish(result: dict, record: dict) -> None:

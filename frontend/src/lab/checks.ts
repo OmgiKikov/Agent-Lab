@@ -1,8 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
 import type { Check, Discover, LabState } from "./types";
+import { ACCURACY } from "../app/product";
 
-export const CHECKS: Check[] = ["tone", "code"];
+// The checks the product shows: tone of voice alone in the first release (app/product).
+export const CHECKS: Check[] = ACCURACY ? ["tone", "code"] : ["tone"];
 
 /** The names a person reads: in the navigation, the headings, the labels of runs and scenarios. */
 export const CHECK_NAME: Record<Check, string> = { tone: "Tone of voice", code: "Точность" };

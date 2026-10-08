@@ -8,7 +8,7 @@ import support
 
 from lab import api, models, storage
 from lab.domain import checks
-from lab.flows import inputs
+from lab.flows import datasets, inputs
 from lab.flows import scenarios as cards
 from lab.flows.simulation import run as cards_run
 from lab.jobs import Jobs
@@ -158,6 +158,17 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(storage.documents.load(checks.DECK))
         inputs.replace_export([{'id': 'd2'}])
         self.assertIsNone(storage.documents.load(checks.DECK))
+
+    def test_a_deck_built_without_a_check_comes_back_with_its_dataset(self):
+        """A new dataset starts without scenarios; going back to the one they were built from brings them back: with no
+        criteria in them, no change of a check can make them stale."""
+        talk = {'messages': [{'role': 'user', 'content': 'Какой тариф?'}, {'role': 'assistant', 'content': 'Ответ'}]}
+        first = datasets.add([{'id': 'd1', **talk}], 'one.json')
+        storage.documents.save(checks.DECK, {'check': None, 'cards': [{'id': 'c'}]})
+        datasets.add([{'id': 'd2', **talk}], 'two.json')
+        self.assertIsNone(storage.documents.load(checks.DECK))
+        datasets.select(first['id'])
+        self.assertEqual(storage.documents.load(checks.DECK)['cards'], [{'id': 'c'}])
 
     def test_only_a_deck_from_before_decks_named_their_check_is_given_one(self):
         self.assertEqual(checks.separated({checks.DECK: {'cards': []}})[checks.DECK]['check'], checks.CODE)

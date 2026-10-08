@@ -12,10 +12,9 @@ META = schema.EXPORT_META
 _CHUNK = 500
 
 
-def replace(dialogues: list[dict], name: str | None = None, report: dict | None = None) -> None:
-    """The new export in place of the previous one, with the name of its file, the time and how its rows were read
-    (report): written together, so the meta never names the previous file. In the caller's transaction, if it holds
-    one."""
+def replace(dialogues: list[dict], name: str | None = None) -> None:
+    """The new export in place of the previous one, with the name of its file and the time: written together, so the
+    meta never names the previous file. In the caller's transaction, if it holds one."""
     with db.connect() as connection:
         db.begin(connection)
         connection.execute('DELETE FROM dialogues')
@@ -23,7 +22,7 @@ def replace(dialogues: list[dict], name: str | None = None, report: dict | None 
             'INSERT OR REPLACE INTO dialogues (position, id, value) VALUES (?, ?, ?)',
             ((position, str(dialogue['id']), db.dump(dialogue)) for position, dialogue in enumerate(dialogues, 1)),
         )
-        documents.put(connection, META, {'file': name, 'updatedAt': db.now(), **({'import': report} if report else {})})
+        documents.put(connection, META, {'file': name, 'updatedAt': db.now()})
 
 
 def ids() -> list[str]:
@@ -60,6 +59,13 @@ def count() -> int:
     """How many conversations the export has, without reading them."""
     with db.connect() as connection:
         return connection.execute('SELECT count(*) FROM dialogues').fetchone()[0]
+
+
+def page(offset: int, limit: int) -> list[dict]:
+    """A bounded page in export order; browsing never loads the entire export."""
+    with db.connect() as connection:
+        rows = connection.execute('SELECT value FROM dialogues ORDER BY position LIMIT ? OFFSET ?', (limit, offset))
+        return [json.loads(value) for (value,) in rows]
 
 
 def meta() -> dict:

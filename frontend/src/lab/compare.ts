@@ -129,9 +129,9 @@ export function compareSentence(compare: Compare): { head: string; rest: string 
 }
 
 /**
- * The row «Прошлая проверка» under a check's number (checks/Compare, CompareLine): the counts side by side, and under
- * them when the previous check was and what may be read into the difference. Null when there is nothing to compare
- * with, checks that are not comparable included.
+ * The previous check beside a check's number (checks/Compare, CompareDelta): the counts side by side, and when the
+ * previous check was and what may be read into the difference. Null when there is nothing to compare with, checks that
+ * are not comparable included.
  */
 export function compareParts(compare: Compare): { value: string; note: string } | null {
   const { overall, previous } = compare;

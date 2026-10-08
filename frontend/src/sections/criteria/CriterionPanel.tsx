@@ -16,6 +16,7 @@ import { shortOrigin } from "../../product/text";
 import { Label } from "../../ui/Label";
 import { Segmented } from "../../ui/Segmented";
 import { type SideKey } from "./model";
+import { RuleText } from "./RuleText";
 
 export type Shown = "FAIL" | "PASS" | "UNKNOWN";
 
@@ -64,6 +65,7 @@ export function CriterionPanel({
   shown,
   onShown,
   onBack,
+  bare,
   className,
 }: {
   c: Criterion;
@@ -75,6 +77,8 @@ export function CriterionPanel({
   shown: Shown;
   onShown: (s: Shown) => void;
   onBack?: () => void;
+  /** In a sheet that names the criterion itself (ToneCriteria): no number and name of its own. */
+  bare?: boolean;
   className?: string;
 }) {
   const r = c.r;
@@ -98,9 +102,13 @@ export function CriterionPanel({
         </button>
       )}
       <div className="px-5 pb-10 pt-5">
-        <p className="text-small text-fg-3">Критерий {c.n}</p>
-        <h2 className="mt-1 text-balance text-title font-semibold text-fg">{c.name}</h2>
-        <p className="mt-2 text-body text-fg-2">{duty(r.rule.text)}</p>
+        {!bare && (
+          <>
+            <p className="text-small text-fg-3">Критерий {c.n}</p>
+            <h2 className="mt-1 text-balance text-title font-semibold text-fg">{c.name}</h2>
+          </>
+        )}
+        <RuleText text={duty(r.rule.text)} className={cn("text-body text-fg-2", !bare && "mt-2")} />
         {r.rule.origin &&
           (r.rule.kind === "tone-of-voice" ? (
             <p className="mt-2 flex items-center gap-1.5 text-small text-fg-3" title="Где записан критерий">

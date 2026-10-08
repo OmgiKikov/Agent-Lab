@@ -122,12 +122,15 @@ type OnLit = (on: boolean, n?: number) => void;
 
 function AgentTurn({
   turn,
+  named,
   marks,
   stepMarks,
   lit,
   onLit,
 }: {
   turn: Turn;
+  /** The first reply of the agent says who it is; the next ones are known by their side. */
+  named: boolean;
   marks: Mark[];
   stepMarks: Mark[];
   lit?: Lit;
@@ -135,14 +138,13 @@ function AgentTurn({
 }) {
   const { text, buttons } = visible(turn.text);
   // An export writes the buttons into the text by their codes; a simulated agent sends them by their words.
-  const chips = [...buttons.map((code) => `кнопка${code ? `: ${code}` : ""}`), ...(turn.options ?? [])];
+  const chips = [...buttons.map((code) => code || "кнопка"), ...(turn.options ?? [])];
   const pieces = marks.length ? segments(text, marks) : [{ text }];
   const calls = turn.events ?? [];
+  const said = [named && "Агент", turn.seconds !== undefined && `ответил за ${secs(turn.seconds)}`].filter(Boolean);
   return (
     <div className="flex max-w-[88%] flex-col items-start gap-1.5 self-start">
-      <span className="px-1 text-small text-fg-3">
-        Агент{turn.seconds !== undefined && ` · ответил за ${secs(turn.seconds)}`}
-      </span>
+      {said.length > 0 && <span className="px-1 text-small text-fg-3">{said.join(" · ")}</span>}
       {calls.length > 0 && (
         <ol aria-label="Что агент сделал перед ответом" className="flex w-full flex-col border-l border-line pl-1.5">
           {calls.map((c, i) => (
@@ -150,8 +152,9 @@ function AgentTurn({
           ))}
         </ol>
       )}
-      <div className="min-w-0 space-y-2 rounded-2xl rounded-tl-md bg-list px-3.5 py-2.5 shadow-card ring-1 ring-line">
+      <div className="min-w-0 rounded-2xl rounded-tl-md bg-list px-3.5 py-2.5 ring-1 ring-line">
         <p className="whitespace-pre-wrap text-read text-fg">
+          {!named && <span className="sr-only">Агент: </span>}
           {pieces.map((piece, i) =>
             piece.n ? (
               <span key={i}>
@@ -177,20 +180,21 @@ function AgentTurn({
             ),
           )}
         </p>
-        {chips.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
-            {chips.map((chip, i) => (
-              <span
-                key={i}
-                title="Кнопка, которую агент отправил в чат"
-                className="rounded-full border border-line-strong px-2.5 py-0.5 text-small text-fg-3"
-              >
-                {chip}
-              </span>
-            ))}
-          </div>
-        )}
       </div>
+      {/* The buttons under the reply, as the chat showed them to the client. */}
+      {chips.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 pl-1">
+          {chips.map((chip, i) => (
+            <span
+              key={i}
+              title="Кнопка, которую агент отправил в чат"
+              className="rounded-full bg-list px-3 py-1 text-small text-fg-2 ring-1 ring-line-strong"
+            >
+              {chip}
+            </span>
+          ))}
+        </div>
+      )}
       {turn.ok === false && <p className="px-1 text-small text-warn">Передал оператору · статус {turn.status}</p>}
     </div>
   );
@@ -219,6 +223,9 @@ export function Conversation({
   const at = marks.length ? turns.findIndex(shown) : -1;
   const [open, setOpen] = useState(false);
   const from = at > 2 && !open ? at - 1 : 0;
+  // Who speaks is said once for each side, at its first turn shown; then the side and the colour say it.
+  const firstCustomer = turns.findIndex((t, i) => i >= from && t.role === "customer");
+  const firstAgent = turns.findIndex((t, i) => i >= from && t.role !== "customer");
   return (
     <div className="flex flex-col gap-4">
       {from > 0 && (
@@ -235,13 +242,22 @@ export function Conversation({
       {turns.slice(from).map((t, i) =>
         t.role === "customer" ? (
           <div key={i + from} className="flex max-w-[80%] flex-col items-end gap-1.5 self-end">
-            <span className="px-1 text-small text-fg-3">Клиент</span>
+            {i + from === firstCustomer && <span className="px-1 text-small text-fg-3">Клиент</span>}
             <div className="whitespace-pre-wrap rounded-2xl rounded-tr-md bg-customer px-3.5 py-2.5 text-read text-customer-fg">
+              {i + from !== firstCustomer && <span className="sr-only">Клиент: </span>}
               {t.text}
             </div>
           </div>
         ) : (
-          <AgentTurn key={i + from} turn={t} marks={placed.words} stepMarks={placed.steps} lit={lit} onLit={onLit} />
+          <AgentTurn
+            key={i + from}
+            turn={t}
+            named={i + from === firstAgent}
+            marks={placed.words}
+            stepMarks={placed.steps}
+            lit={lit}
+            onLit={onLit}
+          />
         ),
       )}
     </div>

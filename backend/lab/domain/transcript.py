@@ -19,10 +19,15 @@ def tool_calls(message: dict) -> list[str]:
     ]
 
 
+def calls_line(message: dict) -> str:
+    """The line under a reply that names the systems it called in this turn; none when no call was recorded."""
+    calls = tool_calls(message)
+    return '\n[вызовы систем: ' + '; '.join(calls) + ']' if calls else ''
+
+
 def with_tools(message: dict) -> str:
     """The reply with its buttons and the systems it called in this turn (known where the mocks record them)."""
-    calls = tool_calls(message)
-    return with_buttons(message) + ('\n[вызовы систем: ' + '; '.join(calls) + ']' if calls else '')
+    return with_buttons(message) + calls_line(message)
 
 
 def for_judge(message: dict) -> str:

@@ -1,6 +1,15 @@
 import { useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ArrowRight, ArrowUpRight, ChevronLeft, ChevronRight, Code2, Send } from "lucide-react";
+import {
+  ArrowRight,
+  ArrowUpRight,
+  ChevronLeft,
+  ChevronRight,
+  Code2,
+  PencilLine,
+  Send,
+  WandSparkles,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Header } from "../../app/Header";
 import { useKeys } from "../../app/keys";
@@ -32,10 +41,12 @@ import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
 import { useToast } from "../../ui/toast";
 import { NoSuchRun, useSimRuns } from "../simulations/stage";
+import { Advice } from "../tone/Advice";
 import { Handoff } from "./Handoff";
 import { Reproduce } from "./Reproduce";
 import { checked, violationsOf } from "./model";
 import { shareBase } from "../../app/agent";
+import { SIMULATIONS } from "../../app/product";
 
 /**
  * One problem, read top to bottom: what the agent does wrong, what it must do instead, whether its errors are serious
@@ -65,11 +76,15 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
   const [handoff, setHandoff] = useState(false);
   const [source, setSource] = useState(false);
   const [more, setMore] = useState(false);
+  const [advice, setAdvice] = useState<"clarify" | "rewrite" | null>(null);
   const dir = useRef<1 | -1>(1);
   const c = list.find((x) => x.r.id === id);
   const runId = stage === "sim" ? (data?.sim?.runId ?? null) : null;
 
   const examples = c ? violationsOf(c, here) : [];
+  const toneDraft = state?.toneOfVoice ?? null;
+  const toneResult = state?.checks.tone ?? null;
+  const toneNow = stage === "tone" && !!toneDraft && !!toneResult && toneResult.criteriaRevision === toneDraft.revision;
   const { at, missing: lostExample } = exampleAt(examples, params.get("e"));
   const example = examples[at];
   /** The example in the address by its conversation: «Нет» sends it to the end of the order, it stays on screen. */
@@ -287,7 +302,8 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
                   <ArrowRight aria-hidden className="size-4" />
                 </Link>
               )
-            : r.sim.failed > 0 &&
+            : SIMULATIONS &&
+              r.sim.failed > 0 &&
               data.sim && (
                 <Link
                   to={problemLink(r.id, "sim", data.sim.runId)}
@@ -338,7 +354,33 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
                     dir.current > 0 ? "slide-in-from-right-4" : "slide-in-from-left-4",
                   )}
                 >
-                  <ExampleCard example={example} lit={lit} onLit={setLit} onDecide={(d) => decide(example, d)} />
+                  <ExampleCard
+                    example={example}
+                    lit={lit}
+                    onLit={setLit}
+                    onDecide={(d) => decide(example, d)}
+                    actions={
+                      // Tone of voice learns from people: a case that is no error clarifies its criterion for the next
+                      // check; an error can come with a better reply. Only on the result of the criteria in force.
+                      toneNow && example.status === "FAIL" ? (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {example.review === "disagree" && (
+                            <Button icon={PencilLine} onClick={() => setAdvice("clarify")}>
+                              Уточнить критерий
+                            </Button>
+                          )}
+                          <Button
+                            variant="ghost"
+                            icon={WandSparkles}
+                            disabled={!example.agentQuote}
+                            onClick={() => setAdvice("rewrite")}
+                          >
+                            Как ответить правильно
+                          </Button>
+                        </div>
+                      ) : undefined
+                    }
+                  />
                 </div>
               ) : (
                 <p className="text-read text-fg-3">Примеров нет.</p>
@@ -346,7 +388,7 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
             </div>
           </section>
 
-          {stage !== "sim" && (
+          {stage !== "sim" && SIMULATIONS && (
             <div className="mt-12 border-t border-line pt-8">
               <Reproduce r={r} check={stage} />
             </div>
@@ -405,6 +447,16 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
         </div>
       </div>
       <Handoff open={handoff} onClose={() => setHandoff(false)} r={r} side={here} link={link} />
+      {advice && example && toneDraft && toneResult && (
+        <Advice
+          key={`${conversationKey(example)}-${advice}`}
+          mode={advice}
+          example={example}
+          finishedAt={toneResult.finishedAt}
+          draft={toneDraft}
+          onClose={() => setAdvice(null)}
+        />
+      )}
       <SourceSheet
         open={source}
         onClose={() => setSource(false)}
