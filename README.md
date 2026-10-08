@@ -72,7 +72,7 @@ LAB_MODEL=<id модели> OPENROUTER_API_KEY=sk-or-... sh bin/start.sh
 | `LAB_SECOND_URL`, `LAB_SECOND_KEY` | endpoint и ключ второй модели | как у основной |
 | `LAB_MODEL_CONCURRENCY` | сколько запросов к модели идёт одновременно | 6 |
 | `LAB_AGENT_TIMEOUT` | сколько секунд ждать ответа агента | 180 |
-| `LAB_REPLAY_URL` | адрес сервиса повтора на стенде (aigw-local, `replay/`) для «Повтора разговоров», `http://хост:порт`; без него этот способ не предлагается | нет |
+| `LAB_REPLAY_URL` | адрес сервиса повтора на стенде (aigw-local, `replay/`) для «Повтора разговоров», `http://хост:порт`; без него этот способ не предлагается. Запуск и размещение — [docs/replay-runbook.md](docs/replay-runbook.md) | нет |
 | `LAB_PORT` | порт | 5899 |
 | `LAB_DATA` | папка с данными | `data/` |
 | `LAB_CERTS` | папка с настройками шлюза | `certs/` |
