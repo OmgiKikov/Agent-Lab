@@ -40,8 +40,8 @@ export const runTitle = (run: LabRun) =>
 
 export const isRunning = (run: LabRun) => run.status === "running";
 
-/** The scenarios a new run may play: all, one set, or chosen by hand. */
-export type Pick = "all" | "representative" | "stress" | "chosen";
+/** The scenarios a new run may play: all (a card for every conversation), the stress set, or chosen by hand. */
+export type Pick = "all" | "stress" | "chosen";
 export const pickOf = (cards: Card[], pick: Pick, chosen: Set<string>) =>
   pick === "all"
     ? cards

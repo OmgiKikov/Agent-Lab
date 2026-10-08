@@ -161,12 +161,7 @@ function SimResult() {
               {Object.entries(m.sets)
                 .map(([key, s]) => `${SET_NAMES[key] ?? key}: ошибка в ${s.measured - s.passed} из ${s.measured}`)
                 .join(" · ")}
-              {m.sets.representative?.weighted != null &&
-                `. С поправкой на частоту сценариев без ошибок ${m.sets.representative.weighted}%`}
-              {m.sets.representative?.incomplete &&
-                ". Поправку на частоту сценариев не считаем: у части сценариев выборки нет карточки"}
-              {m.sets.representative?.partial &&
-                ". Поправку на частоту сценариев не считаем: сыграна только часть представительного набора"}
+              {m.sets.representative?.partial && ". Сыграна только часть сценариев, не вся выгрузка"}
             </p>
           )}
           <Matrix run={run} state={state} />
@@ -188,7 +183,7 @@ function SimResult() {
 }
 
 const SET_NAMES: Record<string, string> = {
-  representative: "представительный",
+  representative: "все сценарии",
   stress: "стрессовый",
 };
 

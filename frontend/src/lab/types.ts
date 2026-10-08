@@ -24,18 +24,14 @@ export type Metric = {
   repeats?: { scenarios: number; stable: number; attempts: number };
   human?: { reviewed: number; agree: number };
   personas?: Record<string, { accuracy: number | null; passed: number; measured: number }>;
-  /** Scenario sets (representative, regression, stress), each measured on its own; the representative one also
-   * weighted by how many conversations of the export each of its cards stands for, unless a scenario of its sample has
-   * no card (incomplete). */
+  /** Scenario sets (representative: a card for every conversation; stress: the rare ones), each measured on its own. */
   sets?: Record<
     string,
     {
       accuracy: number | null;
       passed: number;
       measured: number;
-      weighted?: number | null;
-      incomplete?: boolean;
-      /** The run played part of the deck's representative set: no estimate for the export. */
+      /** The run played part of the deck's representative set, not every conversation of the export. */
       partial?: boolean;
     }
   >;
@@ -171,8 +167,6 @@ export type Card = {
   openings?: Record<string, string>;
   /** The sets the card is in: representative, stress. */
   sets?: string[];
-  /** How many conversations of the export a card of the representative set stands for. */
-  weight?: number | null;
   /** The business scenario of the catalog the card's conversation is in. */
   scenario?: { id: string; title: string; categoryId: string; category: string } | null;
   /** How the customer writes, counted from their own messages in the episode (backend/lab/domain/cards.py, style). */

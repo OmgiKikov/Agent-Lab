@@ -260,7 +260,7 @@ export function ScenarioView({
           )}
           {topic && <span>· {topic}</span>}
           <span className="ml-1 inline-flex gap-1.5">
-            <Tag tone={card.sets?.includes("stress") ? "warn" : "neutral"}>{card.origin.toLowerCase()}</Tag>
+            {card.sets?.includes("stress") && <Tag tone="warn">стрессовый набор</Tag>}
             {check ? <Tag>{BY_CRITERIA[check]}</Tag> : <Tag title={UNJUDGED}>без критериев</Tag>}
           </span>
         </p>

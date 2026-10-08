@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 import support
 
 from lab import models, storage
-from lab.domain import catalog, checks, metric
+from lab.domain import catalog, checks
 from lab.flows import catalog as catalog_flow
 from lab.flows import scenarios as deck_flow
 from lab.roles import Answer
@@ -98,16 +98,6 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
                 {'task': 'узнать ставку', 'object': 'тариф', 'count': 1},
             ],
         )
-
-    def test_every_scenario_gets_a_card_and_each_card_stands_for_its_share(self):
-        groups = {'big': [f'b{i}' for i in range(90)], 'small': [f's{i}' for i in range(9)], 'rare': ['r0']}
-        chosen, manifest = catalog.allocate(groups, 10)
-        by_group = {key: [c for c in chosen if c[1] == key] for key in groups}
-        self.assertEqual({key: len(found) for key, found in by_group.items()}, {'big': 9, 'small': 1, 'rare': 1})
-        self.assertEqual({c[2] for c in by_group['big']}, {10.0})
-        self.assertEqual(by_group['small'][0][2], 9.0)
-        self.assertEqual(sum(c[2] for c in chosen), manifest['population'])
-        self.assertEqual(chosen, catalog.allocate(groups, 10)[0])
 
     def test_the_catalog_counts_its_scenarios_and_shows_real_first_messages(self):
         categories = catalog.taxonomy(PROPOSED)
@@ -269,7 +259,7 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(chat.await_count, 2)
         self.assertEqual(len(answer.value), 10)
 
-    async def test_the_deck_samples_every_scenario_and_names_it_on_its_cards(self):
+    async def test_the_deck_has_a_card_for_every_conversation_and_names_its_scenario(self):
         topic = {
             'id': 't1',
             'title': 'Tone of voice',
@@ -302,11 +292,10 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         ):
             deck = await deck_flow.built(checks.CODE)
         self.assertEqual(deck['catalogRevision'], 'r1')
-        scenarios = {card['scenario']['id'] for card in deck['cards']}
-        self.assertEqual(scenarios, {'c1s1', 'c2s1'})
+        scenarios = sorted(card['scenario']['id'] for card in deck['cards'])
+        self.assertEqual(scenarios, ['c1s1', 'c1s1', 'c2s1'])
         self.assertTrue(all('representative' in card['sets'] for card in deck['cards']))
-        self.assertEqual(sum(card['weight'] for card in deck['cards']), 3)
-        self.assertEqual(deck['sets']['representative']['strata'], 2)
+        self.assertEqual(deck['sets']['representative']['scenarios'], 2)
         self.assertEqual(catalog.scenarios_of(categories)[catalog.NONE]['title'], 'Не попал в каталог')
 
     async def test_a_stopped_build_keeps_its_readings_proposal_and_placements_and_the_next_one_goes_on(self):
@@ -370,27 +359,6 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(found['totals']['placed'], 3)
         self.assertNotIn('proposed', found)
 
-    def test_a_card_stands_for_its_scenario_by_the_cards_it_actually_has(self):
-        groups = {'big': [f'b{i}' for i in range(90)], 'small': [f's{i}' for i in range(10)]}
-        # 9 + 1 sampled and 8 of the big scenario's cards lost: the one left stands for all 90, not for 10.
-        weights, told = catalog.weighted(groups, {'b0': 'big', 's0': 'small'})
-        self.assertEqual(weights, {'b0': 90.0, 's0': 10.0})
-        self.assertTrue(told['complete'])
-        # A scenario without a card: the others would stand for the whole export, so nobody gets a weight.
-        weights, told = catalog.weighted(groups, {'b0': 'big'})
-        self.assertEqual(weights, {})
-        self.assertEqual(
-            (told['complete'], told['missing'], told['coverage']),
-            (False, [{'scenarioId': 'small', 'population': 10}], 0.9),
-        )
-
-    def test_a_lost_sampled_episode_is_replaced_from_its_own_scenario(self):
-        groups = {'a': ['a1', 'a2', 'a3'], 'b': ['b1']}
-        sampled = {'a1': 'a', 'b1': 'b'}
-        found = catalog.replacements(groups, sampled, ['a1', 'b1'], {'a1', 'a2', 'b1'})
-        self.assertEqual(found, [('a3', 'a')])  # b has no episode left
-        self.assertEqual(found, catalog.replacements(groups, sampled, ['a1', 'b1'], {'a1', 'a2', 'b1'}))
-
     def deck_of(self, *episodes: tuple[str, str]) -> dict:
         """The check, the conversations and the catalog of a deck: (conversation, scenario) pairs."""
         rule = {'id': 'r', 'text': 'x', 'quote': 'y', 'observation': 'reply'}
@@ -415,37 +383,33 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
         patches = (
             patch.object(deck_flow.catalog, 'build', AsyncMock(return_value=found)),
             patch.object(deck_flow, 'build_card', build_card),
-            patch.object(deck_flow.scenarios, 'REPRESENTATIVE', 2),
         )
         for patcher in patches:
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    async def test_a_sampled_card_the_model_fails_is_tried_again_then_replaced_and_kept_in_the_manifest(self):
-        found = self.deck_of(('a', 'c1s1'), ('b', 'c1s1'), ('c', 'c2s1'))
-        lost = next(i for i, key, _ in catalog.allocate(catalog.strata(found['episodes']), 2)[0] if key == 'c1s1')
-        other = ({'a', 'b'} - {lost}).pop()
+    async def test_every_placed_conversation_gets_its_own_card_and_one_the_model_fails_is_tried_again(self):
+        found = self.deck_of(('a', 'c1s1'), ('b', 'c1s1'), ('c', 'c1s1'), ('d', 'c2s1'))
         tries = []
-        self.building(found, {lost}, tries)
+        self.building(found, {'a'}, tries)
         deck = await deck_flow.built(checks.CODE)
-        self.assertEqual(tries.count(lost), deck_flow.ROUNDS)
+        # Every conversation of a scenario is a customer of its own, however many the scenario has.
+        self.assertEqual(sorted(card['sourceDialogueId'] for card in deck['cards']), ['b', 'c', 'd'])
+        self.assertEqual(tries.count('a'), deck_flow.ROUNDS)
         representative = deck['sets']['representative']
-        self.assertEqual(representative['failed'], [{'dialogueId': lost, 'error': '429'}])
-        self.assertEqual(representative['replacements'], [other])
-        self.assertTrue(representative['complete'])
-        self.assertEqual({card['sourceDialogueId']: card['weight'] for card in deck['cards']}, {other: 2.0, 'c': 1.0})
+        self.assertEqual(representative['failed'], [{'dialogueId': 'a', 'error': '429'}])
+        self.assertEqual((representative['population'], representative['scenarios']), (4, 2))
+        self.assertTrue(all('weight' not in card for card in deck['cards']))
 
-    async def test_a_scenario_left_without_a_card_makes_the_sample_incomplete_and_unweighted(self):
-        self.building(self.deck_of(('a', 'c1s1'), ('c', 'c2s1')), {'a'})
-        deck = await deck_flow.built(checks.CODE)
-        representative = deck['sets']['representative']
-        self.assertEqual((representative['complete'], representative['coverage']), (False, 0.5))
-        self.assertEqual(representative['missing'], [{'scenarioId': 'c1s1', 'population': 1}])
-        self.assertEqual([(card['sourceDialogueId'], card['weight']) for card in deck['cards']], [('c', None)])
-        items = [{'cardId': 'c', 'status': 'PASS', 'sets': ['representative'], 'weight': None}]
-        sets = metric.metric(items)['sets']
-        self.assertTrue(sets['representative']['incomplete'])
-        self.assertNotIn('weighted', sets['representative'])
+    async def test_a_card_the_task_kept_before_a_restart_is_not_built_again(self):
+        found = self.deck_of(('a', 'c1s1'), ('b', 'c2s1'))
+        kept = {'id': 'a', 'eligible': True, 'sets': ['representative'], 'sourceDialogueId': 'a', 'kept': True}
+        tries = []
+        self.building(found, set(), tries)
+        with patch.object(deck_flow.storage.tasks, 'steps', return_value={'card:a': kept}):
+            deck = await deck_flow.built(checks.CODE)
+        self.assertEqual(tries, ['b'])
+        self.assertIn(kept, deck['cards'])
 
     async def test_a_deck_with_no_eligible_card_keeps_the_saved_one(self):
         self.building(self.deck_of(('a', 'c1s1'), ('c', 'c2s1')), set(), eligible=False)

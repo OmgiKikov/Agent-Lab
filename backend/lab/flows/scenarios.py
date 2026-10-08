@@ -1,13 +1,15 @@
 """Scenarios: the deck, the customers of real conversations in two sets (domain.scenarios), and each scenario as a
 test, with its result in every run of the deck's check.
 
-The catalog of business scenarios is brought up to date first (flows/catalog.py): the representative set is sampled by
-its scenarios, and every card names the scenario of its episode. A card's criteria are those of its conversation's
-topic in the check; a conversation the check did not sample is sorted into its topics by the router.
+The catalog of business scenarios is brought up to date first (flows/catalog.py): every conversation it placed in a
+scenario gets its card, so a scenario has as many customers as the export has conversations in it, and every card
+names the scenario of its episode. A card's criteria are those of its conversation's topic in the check; a
+conversation the check did not sample is sorted into its topics by the router.
 A card the model fails to build is reported in the progress and never cancels the others; only a deck with no card is
-an error. The deck names the check it was built from: a run is measured by that check's criteria. Built without a
-check (None), its cards are the customers alone, with their business scenarios and no criteria: nothing can judge a
-run of them until the conversations are checked and the deck is built again.
+an error. Each card is kept as a step of the task the moment it is made: a build continued after a stop or a restart
+asks the model only for the rest. The deck names the check it was built from: a run is measured by that check's
+criteria. Built without a check (None), its cards are the customers alone, with their business scenarios and no
+criteria: nothing can judge a run of them until the conversations are checked and the deck is built again.
 """
 
 import asyncio
@@ -123,11 +125,9 @@ async def build_card(
 
 
 async def built(check: str | None, progress: Progress = lambda **_: None) -> dict:
-    """The cards of the two sets ({cards, sets, catalogRevision}): a sample of the catalog's episodes stratified by
-    scenario, and rare ones. A card the model fails is built again
-    (ROUNDS in all) and then kept in its sets' manifests as failed. A sampled episode left without a card is replaced by
-    another of its scenario; when one cannot be, the representative set is incomplete and its cards get no weight.
-    check None: the cards without criteria, each in the topic of its business scenario."""
+    """The cards of the two sets ({cards, sets, catalogRevision}): one for every episode of the catalog, the rare ones
+    of them in the stress set too. A card the model fails is built again (ROUNDS in all) and then kept in its sets'
+    manifests as failed. check None: the cards without criteria, each in the topic of its business scenario."""
     analysis = storage.documents.load(checks.result(check)) if check else None
     if check and not analysis:
         raise RuntimeError(f'У проверки «{checks.NAMES[check]}» ещё нет итога. Сначала проверьте разговоры.')
@@ -140,28 +140,17 @@ async def built(check: str | None, progress: Progress = lambda **_: None) -> dic
     found = await catalog.build(progress)
     episodes = found.get('episodes') or {}
     scenario_of = business.scenarios_of(found['categories'])
-    groups = business.strata(episodes)
     agent = profile.current()
-    chosen, sampled, manifests = _chosen(episodes, groups, agent)
-    manifest = manifests['representative']
+    chosen, manifests = _chosen(business.strata(episodes), agent)
     deck = _Building(check, analysis, episodes, scenario_of, chosen, progress, agent)
     await deck.make(list(chosen))
-    lost = [dialogue_id for dialogue_id in sampled if not deck.carded(dialogue_id)]
-    extra = business.replacements(groups, sampled, lost, set(chosen))
-    for dialogue_id, key in extra:
-        chosen[dialogue_id] = ['representative']
-        sampled[dialogue_id] = key
-    if extra:
-        await deck.make([dialogue_id for dialogue_id, _ in extra])
-    weights, coverage = business.weighted(groups, {i: key for i, key in sampled.items() if deck.carded(i)})
-    manifest.update(coverage, replacements=[dialogue_id for dialogue_id, _ in extra])
     built_cards = [deck.made[dialogue_id] for dialogue_id in chosen if dialogue_id in deck.made]
     if not any(card.get('eligible', True) for card in built_cards):
         # Nothing to test: the deck saved before stays.
         error = next(iter(deck.failed.values()), {}).get('error')
         raise models.ModelError(error or 'Ни одна карточка не собрана: ни в одном разговоре нет задачи для сценария.')
     lost_builds = [dict(item, sets=chosen[i]) for i, item in deck.failed.items()]
-    return scenarios.deck(built_cards, manifests, weights, lost_builds) | {'catalogRevision': found['revision']}
+    return scenarios.deck(built_cards, manifests, lost_builds) | {'catalogRevision': found['revision']}
 
 
 class _Building:
@@ -184,11 +173,9 @@ class _Building:
         self.made: dict[str, dict] = {}
         self.failed: dict[str, dict] = {}
 
-    def carded(self, dialogue_id: str) -> bool:
-        return dialogue_id in self.made and self.made[dialogue_id].get('eligible', True)
-
     async def make(self, ids: list[str]) -> None:
-        """The cards of these conversations; one the model fails is tried again, ROUNDS in all."""
+        """The cards of these conversations; those the task kept already are taken as they are, one the model fails is
+        tried again, ROUNDS in all."""
         dialogues = {str(d['id']): d for d in storage.dialogues.read(ids)}
         if self.analysis:
             self._told('Распределяем разговоры по темам проверки')
@@ -196,7 +183,7 @@ class _Building:
                 topic_of = await _topics(self.analysis, list(dialogues.values()))
         else:
             topic_of = {dialogue_id: self._scenario(dialogue_id) for dialogue_id in dialogues}
-        plan = {}
+        plan, kept = {}, storage.tasks.steps()
         for dialogue_id in ids:
             # Whether the customer has a task of the agent's domain is the episode reader's decision.
             episode = self.episodes.get(dialogue_id) or {}
@@ -212,6 +199,8 @@ class _Building:
             )
             if reason is None:
                 plan[dialogue_id] = topic_of[dialogue_id]
+                if _step(dialogue_id) in kept:
+                    self.made[dialogue_id] = kept[_step(dialogue_id)]
             else:
                 self.made[dialogue_id] = {
                     'eligible': False,
@@ -235,8 +224,11 @@ class _Building:
         episode = self.episodes.get(dialogue_id) or {}
         scenario = self.scenario_of.get(episode.get('scenarioId') or '')
         try:
-            self.made[dialogue_id] = await build_card(
-                topic, dialogue, sets, self.general, scenario, episode, self.agent, judged=self.analysis is not None
+            self.made[dialogue_id] = storage.tasks.keep(
+                _step(dialogue_id),
+                await build_card(
+                    topic, dialogue, sets, self.general, scenario, episode, self.agent, judged=self.analysis is not None
+                ),
             )
             self.failed.pop(dialogue_id, None)
         except models.ModelError as error:
@@ -260,22 +252,29 @@ class _Building:
         self.progress(stage='cards', done=done, total=len(self.chosen), message=message, **more)
 
 
-def _chosen(
-    episodes: dict[str, dict], groups: dict[str, list[str]], agent: dict
-) -> tuple[dict[str, list[str]], dict[str, str], dict]:
-    """The conversations of the two sets, each with its sets; the representative sample's scenario of each sampled
-    one; the sets' manifests."""
-    sample, manifest = business.allocate(groups, scenarios.REPRESENTATIVE)
-    manifests = {'representative': manifest}
-    sampled = {dialogue_id: key for dialogue_id, key, _ in sample}
-    chosen = {dialogue_id: ['representative'] for dialogue_id in sampled}
-    found = storage.dialogues.read([i for i, e in episodes.items() if business.in_domain(e)])
-    rare, manifests['stress'] = scenarios.stress(found, set(chosen), profile_domain.rare(agent, found))
-    for dialogue in rare:
-        chosen.setdefault(str(dialogue['id']), []).append('stress')
+def _step(dialogue_id: str) -> str:
+    """The key a conversation's card is kept under in its task."""
+    return f'card:{dialogue_id}'
+
+
+def _chosen(groups: dict[str, list[str]], agent: dict) -> tuple[dict[str, list[str]], dict]:
+    """The conversations of the two sets, each with its sets, and the sets' manifests: every episode the catalog placed
+    (groups: by scenario) is a card of the representative set; the rare ones of them are the stress set too."""
+    chosen = {dialogue_id: ['representative'] for ids in groups.values() for dialogue_id in ids}
     if not chosen:
         raise RuntimeError('Нет разговоров, из которых можно собрать сценарии.')
-    return chosen, sampled, manifests
+    manifests = {
+        'representative': {
+            'method': 'карточка на каждый разговор выгрузки по теме агента',
+            'population': len(chosen),
+            'scenarios': len(groups),
+        }
+    }
+    found = storage.dialogues.read(list(chosen))
+    rare, manifests['stress'] = scenarios.stress(found, profile_domain.rare(agent, found))
+    for dialogue in rare:
+        chosen[str(dialogue['id'])].append('stress')
+    return chosen, manifests
 
 
 async def _topics(analysis: dict, dialogues: list[dict]) -> dict[str, dict]:

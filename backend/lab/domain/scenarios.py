@@ -1,4 +1,4 @@
-"""Scenarios: the customers of real conversations as tests, chosen into two sets. Pure functions.
+"""Scenarios: the customers of real conversations as tests, a card for each, in two sets. Pure functions.
 
 A scenario (a card) is the customer of one logged episode of the agent's domain (domain/cards.py), the business
 scenario of the catalog it belongs to (domain/catalog.py), its frozen criteria (the grounded rules of its topic,
@@ -6,8 +6,10 @@ observable in the agent's replies or its system calls) and its test data for the
 every run of the deck's check stands beside the others; nothing here says whether the agent got better or worse.
 
 Sets are never averaged together:
-- representative: a sample stratified by the catalog's scenarios, at least one card each; a card stands for N_h/n_h;
-- stress: rare combinations from the export's service columns; their prevalence is not the point.
+- representative: every episode of the agent's domain the catalog placed, a card each, so every scenario has as many
+  customers as the export has conversations in it;
+- stress: some of those cards, rare combinations from the export's service columns, the ones customer types play;
+  their prevalence is not the point.
 """
 
 import hashlib
@@ -21,10 +23,9 @@ from .metric import FINISHED
 from .personas import DEFAULT
 from .tone import for_judging
 
-REPRESENTATIVE = 24  # the representative sample before every scenario of the catalog gets its one card
 STRESS = 6
 SEED = 20261002  # the same stress sample for the same export
-# Why a card exists, by its first set: a sampled episode or a rare one.
+# Why a card exists, by its first set: an episode of the export, or a rare one.
 SETS = {'representative': 'Представительный набор', 'stress': 'Стрессовый набор'}
 # Applies to every scenario: instructions must come from the knowledge base, not be invented.
 FOLLOWS_KNOWLEDGE = {
@@ -56,14 +57,14 @@ ANSWERS_THE_QUESTION = {
 
 
 def stress(
-    dialogues: list[dict], taken: set[str], rare: dict[str, Callable[[dict], bool]], size: int = STRESS
+    dialogues: list[dict], rare: dict[str, Callable[[dict], bool]], size: int = STRESS
 ) -> tuple[list[dict], dict]:
     """Rare combinations of the export's service columns (rare: the conditions of the agent's profile,
-    profile.rare), in turn per condition; their share is reported, not used."""
+    profile.rare), in turn per condition, each conversation once; their share is reported, not used."""
     rng = random.Random(SEED)
     found = {name: [d for d in dialogues if test(d)] for name, test in rare.items()}
     queues = {name: rng.sample(items, len(items)) for name, items in found.items()}
-    chosen, why = [], {}
+    chosen, why, taken = [], {}, set()
     while len(chosen) < size and any(queues.values()):
         for name, queue in queues.items():
             while queue and str(queue[0]['id']) in taken:
@@ -74,7 +75,7 @@ def stress(
                 chosen.append(dialogue)
                 why[str(dialogue['id'])] = name
     shares = {name: f'{len(items)} из {len(dialogues)}' for name, items in found.items()}
-    return chosen, {'conditions': shares, 'because': why, 'weight': None, 'note': 'частота в проде не оценивается'}
+    return chosen, {'conditions': shares, 'because': why, 'note': 'частота в проде не оценивается'}
 
 
 def general_rules(analysis: dict) -> list[dict]:
@@ -138,10 +139,9 @@ def card(
     return found
 
 
-def deck(built: list[dict], manifests: dict, weights: dict[str, float], failed: Sequence[dict] = ()) -> dict:
+def deck(built: list[dict], manifests: dict, failed: Sequence[dict] = ()) -> dict:
     """Eligible cards and each set's manifest: its cards, the chosen conversations excluded (no task for a scenario, no
-    topic with criteria) and those the model failed ({dialogueId, topic, error, sets}). A card of the representative
-    set carries its weight (catalog.weighted), none when that set is incomplete."""
+    topic with criteria) and those the model failed ({dialogueId, topic, error, sets})."""
     cards = [card for card in built if card.get('eligible', True)]
     for key, label in SETS.items():
         manifest = manifests.setdefault(key, {})
@@ -155,9 +155,6 @@ def deck(built: list[dict], manifests: dict, weights: dict[str, float], failed: 
         manifest['failed'] = [
             {'dialogueId': item['dialogueId'], 'error': item['error']} for item in failed if key in item['sets']
         ]
-    for card in cards:
-        if 'representative' in (card.get('sets') or []):
-            card['weight'] = weights.get(card['sourceDialogueId'])
     return {'cards': cards, 'sets': manifests, 'checks': checked(cards)}
 
 

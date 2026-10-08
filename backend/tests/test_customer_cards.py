@@ -470,9 +470,9 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
         talks = [long, refused, mortgage, common]
         acquiring = support.agent()
         acquiring['export']['longTurns'] = 4
-        chosen, manifest = scenarios.stress(talks, {'long'}, profile.rare(acquiring, talks))
-        self.assertEqual({d['id'] for d in chosen}, {'refused', 'mortgage'})  # another agent took the mortgage chat
-        self.assertIsNone(manifest['weight'])
+        chosen, manifest = scenarios.stress(talks, profile.rare(acquiring, talks))
+        # Another agent took the mortgage chat; the common one is no rare case.
+        self.assertEqual({d['id'] for d in chosen}, {'long', 'refused', 'mortgage'})
         self.assertEqual(manifest['conditions']['4 и больше реплик клиента'], '1 из 4')
         # The same export for a mortgage agent: its own failure status counts, and it is no other agent to itself.
         export = {'agentCode': 'MORTGAGE_AGENT', 'statusMarker': 'agent-mortgage', 'stressStatuses': ['202_7']}
@@ -482,17 +482,16 @@ class CustomerCardTests(unittest.IsolatedAsyncioTestCase):
         # An export read before statuses were kept by agent has those of the agent it was made for.
         self.assertEqual(profile.statuses({'acquiringStatuses': ['202_7']}, 'agent-mortgage'), {'202_7'})
 
-    def test_sets_reach_the_run_and_are_measured_apart_the_representative_one_also_weighted(self):
+    def test_sets_reach_the_run_and_are_measured_apart(self):
         card = {'id': 'c', 'name': 'n', 'topic': 't', 'origin': 'o', 'situation': 's', 'criteria': []}
-        failed = simulation.new_item({**card, 'sets': ['stress', 'representative'], 'weight': 3.0}, 'default', 1)
-        self.assertEqual(failed['sets'], ['stress', 'representative'])
-        passed = simulation.new_item({**card, 'id': 'd', 'sets': ['representative'], 'weight': 1.0}, 'default', 1)
+        failed = simulation.new_item({**card, 'sets': ['representative', 'stress']}, 'default', 1)
+        self.assertEqual(failed['sets'], ['representative', 'stress'])
+        passed = simulation.new_item({**card, 'id': 'd', 'sets': ['representative']}, 'default', 1)
         value = metric.metric([{**failed, 'status': 'FAIL'}, {**passed, 'status': 'PASS'}])
         self.assertEqual(value['sets']['stress'], {'accuracy': 0, 'passed': 0, 'measured': 1})
-        self.assertEqual(value['sets']['representative'], {'accuracy': 50, 'passed': 1, 'measured': 2, 'weighted': 25})
-        # A run of part of the deck's sample (here 1 of its 2 cards) gives no estimate for the export.
-        alone = simulation.new_item({**card, 'id': 'd', 'sets': ['representative'], 'weight': 1.0}, 'default', 1, 2)
-        part = metric.metric([{**alone, 'status': 'PASS'}])['sets']['representative']
-        self.assertEqual((part['partial'], 'weighted' in part), (True, False))
+        self.assertEqual(value['sets']['representative'], {'accuracy': 50, 'passed': 1, 'measured': 2})
+        # A run of part of the deck's set (here 1 of its 2 cards) says so.
+        alone = simulation.new_item({**card, 'id': 'd', 'sets': ['representative']}, 'default', 1, 2)
+        self.assertTrue(metric.metric([{**alone, 'status': 'PASS'}])['sets']['representative']['partial'])
         whole = [{**failed, 'sample': 2, 'status': 'FAIL'}, {**alone, 'status': 'PASS'}]
-        self.assertEqual(metric.metric(whole)['sets']['representative']['weighted'], 25)
+        self.assertNotIn('partial', metric.metric(whole)['sets']['representative'])

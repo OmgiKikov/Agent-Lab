@@ -329,8 +329,10 @@ export function ScenariosPage() {
                 renderCard={(c) => (
                   <Row on={c.id === id} onClick={() => pick(c)}>
                     <span className="block text-body font-medium text-fg">{c.name}</span>
-                    <span className="mt-0.5 flex items-center gap-1.5 text-small text-fg-3">
-                      {c.sets?.includes("stress") ? <Tag tone="warn">стрессовый</Tag> : "представительный"}
+                    {/* The customers of one scenario differ by how they begin: its first message tells them apart. */}
+                    <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-small text-fg-3">
+                      {c.sets?.includes("stress") && <Tag tone="warn">стрессовый</Tag>}
+                      <span className="truncate">«{c.opening}»</span>
                     </span>
                     {judged && <LastResults record={records.get(c.id)} personas={state.personas} />}
                   </Row>

@@ -159,11 +159,6 @@ export function PlayDialog({
             onChange={setPick}
             options={[
               { value: "all", label: "Все", count: cards.length },
-              {
-                value: "representative",
-                label: "Представительный",
-                count: pickOf(cards, "representative", chosen).length,
-              },
               { value: "stress", label: "Стрессовый", count: pickOf(cards, "stress", chosen).length },
               { value: "chosen", label: "Выбранные", count: chosen.size },
             ]}

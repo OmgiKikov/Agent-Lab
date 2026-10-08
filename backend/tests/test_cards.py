@@ -186,8 +186,8 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
             [('Представительный набор', 'd'), ('Представительный набор', 'p')],
         )
         self.assertTrue(all('reproduces' not in card for card in deck))
-        # The id is the hash of the card's content; the model and the weight of the sample stay outside.
+        # The id is the hash of the card's content; the model stays outside.
         for card in deck:
-            content = {key: value for key, value in card.items() if key not in ('id', 'model', 'weight')}
+            content = {key: value for key, value in card.items() if key not in ('id', 'model')}
             digest = hashlib.sha256(json.dumps(content, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
             self.assertEqual(card['id'], digest[:12])

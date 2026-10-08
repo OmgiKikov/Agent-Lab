@@ -5,8 +5,8 @@ Accuracy = conversations where the agent met every applicable criterion / measur
 Trust: agreement of the second judge, stability of a scenario across its repeats, and a person's decisions on verdicts,
 kept apart from them and counted when the run is read (answers.human).
 With several customer types, accuracy per type shows where the agent breaks on how people write.
-Scenario sets (representative, regression, stress) each get their own accuracy; the representative one also weighted
-by how many conversations of the export each card stands for, its estimate for the export.
+Scenario sets (representative, stress) each get their own accuracy; a run that played only part of the
+representative set says so.
 """
 
 from .personas import DEFAULT
@@ -66,18 +66,8 @@ def metric(items: list[dict]) -> dict:
     if by_set:
         value['sets'] = {key: _accuracy([i['status'] for i in found]) for key, found in by_set.items()}
         representative = by_set.get('representative', [])
-        sampled = [i for i in representative if i.get('weight')]
-        # A run that played part of the sample (sample: its size in the deck) stands for no export either.
+        # A run that played part of the set (sample: its size in the deck) stands for part of the export.
         size = next((i['sample'] for i in representative if i.get('sample')), None)
         if size and len({i['cardId'] for i in representative}) < size:
             value['sets']['representative']['partial'] = True
-        elif sampled and len(sampled) == len(representative):
-            measured_weight = sum(i['weight'] for i in sampled if i['status'] in DECIDED)
-            passed_weight = sum(i['weight'] for i in sampled if i['status'] == 'PASS')
-            value['sets']['representative']['weighted'] = (
-                round(100 * passed_weight / measured_weight) if measured_weight else None
-            )
-        elif representative:
-            # A scenario of the sample has no card (deck: catalog.weighted): the rest would not stand for the export.
-            value['sets']['representative']['incomplete'] = True
     return value

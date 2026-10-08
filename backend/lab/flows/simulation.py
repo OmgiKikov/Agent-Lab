@@ -207,8 +207,8 @@ def new_run(
 
 
 def new_item(card: dict, persona: str, attempt: int, sample: int | None = None) -> dict:
-    """A conversation of a run before it is played; one of the representative set names the size of the deck's sample
-    (sample), so the run's metric knows whether it played all of it."""
+    """A conversation of a run before it is played; one of the representative set names how many cards the deck's
+    set has (sample), so the run's metric knows whether it played all of it."""
     return {
         'cardId': card['id'],
         'persona': persona,
@@ -217,7 +217,6 @@ def new_item(card: dict, persona: str, attempt: int, sample: int | None = None) 
         'attempt': attempt,
         'origin': card['origin'],
         'sets': list(card.get('sets') or []),
-        'weight': card.get('weight'),
         **({'sample': sample} if sample and 'representative' in (card.get('sets') or []) else {}),
         'scenario': card.get('scenario'),
         'situation': card['situation'],

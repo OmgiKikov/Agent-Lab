@@ -15,11 +15,10 @@ import hashlib
 import json
 import random
 from collections import Counter
-from collections.abc import Collection
 
 NONE = 'none'  # an episode in the domain the router placed in no scenario of the catalog
 NONE_TITLE = 'Не попал в каталог'
-SEED = 20261005  # the same sample and the same examples for the same catalog
+SEED = 20261005  # the same episodes to propose the catalog from and the same examples, for the same export
 EXAMPLES = 3
 RARE = 3  # a scenario with fewer episodes is marked rare: its share is not an estimate
 EVENT_CHARS = 1000  # a message as the episode reader sees it: long instructions are cut, the start stays
@@ -197,71 +196,10 @@ def counted(categories: list[dict], episodes: dict[str, dict], dialogues: dict[s
 
 
 def strata(episodes: dict[str, dict]) -> dict[str, list[str]]:
-    """The placed episodes in the domain by scenario (the unplaced ones are a stratum of their own), each sorted by
-    id."""
+    """The placed episodes in the domain by scenario (the unplaced ones are a group of their own), each sorted by id:
+    every one of them gets its card."""
     found: dict[str, list[str]] = {}
     for dialogue_id, episode in episodes.items():
         if in_domain(episode) and episode.get('scenarioId'):
             found.setdefault(episode['scenarioId'], []).append(dialogue_id)
     return {key: sorted(ids) for key, ids in sorted(found.items())}
-
-
-def allocate(groups: dict[str, list[str]], size: int) -> tuple[list[tuple[str, str, float]], dict]:
-    """A stratified sample: each scenario gets its share of size by its number of episodes (largest remainders), and
-    at least one card, so every scenario of the catalog has a customer. Each chosen episode stands for N_h / n_h
-    episodes of its scenario: weighted, the sample estimates the whole export; unweighted, rare scenarios count as
-    much as frequent ones. (episode, scenario, weight) and the sample's manifest."""
-    population = sum(len(ids) for ids in groups.values())
-    if not population:
-        return [], {'method': 'стратифицированная выборка по сценариям', 'population': 0, 'sample': 0}
-    exact = {key: size * len(ids) / population for key, ids in groups.items()}
-    counts = {key: int(value) for key, value in exact.items()}
-    for key in sorted(exact, key=lambda k: (counts[k] - exact[k], k))[: max(0, size - sum(counts.values()))]:
-        counts[key] += 1
-    chosen = []
-    for key, ids in groups.items():
-        n = min(len(ids), max(1, counts[key]))
-        weight = round(len(ids) / n, 3)
-        picked = random.Random(f'{SEED}:{key}').sample(ids, n)
-        chosen.extend((dialogue_id, key, weight) for dialogue_id in sorted(picked))
-    manifest = {
-        'method': 'стратифицированная выборка по сценариям, не меньше одной карточки на сценарий',
-        'population': population,
-        'sample': len(chosen),
-        'strata': len(groups),
-        'seed': SEED,
-    }
-    return chosen, manifest
-
-
-def replacements(
-    groups: dict[str, list[str]], sampled: dict[str, str], lost: Collection[str], taken: Collection[str]
-) -> list[tuple[str, str]]:
-    """For each sampled episode left without a card (lost: the model failed it, or it was excluded), another episode of
-    its scenario, drawn at random from those not taken by any set: the scenario keeps its number of cards. (episode,
-    scenario); fewer when a scenario has no episode left."""
-    found = []
-    for key in sorted({sampled[i] for i in lost}):
-        need = sum(1 for i in lost if sampled[i] == key)
-        rest = [i for i in groups.get(key, []) if i not in taken]
-        chosen = random.Random(f'{SEED}:{key}:reserve').sample(rest, min(need, len(rest)))
-        found.extend((dialogue_id, key) for dialogue_id in sorted(chosen))
-    return found
-
-
-def weighted(groups: dict[str, list[str]], carded: dict[str, str]) -> tuple[dict[str, float], dict]:
-    """The weight of each card of the representative set (carded: the episodes that got a card, by scenario): N_h / n_h,
-    n_h the cards its scenario actually has. A scenario left without a card makes the sample incomplete, and then no
-    card gets a weight: the others would stand for the whole export without it. (weights, what the manifest tells)."""
-    counts = Counter(carded.values())
-    missing = [{'scenarioId': key, 'population': len(ids)} for key, ids in groups.items() if not counts[key]]
-    population = sum(len(ids) for ids in groups.values())
-    covered = population - sum(item['population'] for item in missing)
-    told = {
-        'complete': not missing,
-        'missing': missing,
-        'coverage': round(covered / population, 4) if population else None,
-    }
-    if missing:
-        return {}, told
-    return {dialogue_id: round(len(groups[key]) / counts[key], 3) for dialogue_id, key in carded.items()}, told
