@@ -82,9 +82,12 @@ def current(record: dict) -> bool:
     ones selected. Only such a launch is started again or continued: another one would silently put its old rules and
     dataset back in force (prepare)."""
     given = record.get('inputs') or {}
-    selected = storage.judges.active(given.get('check') or record.get('check'))
+    check = given.get('check') or record.get('check')
+    selected = storage.judges.active(check)
     chosen = given.get('judgeId') or None
-    same_rules = chosen == (selected['id'] if selected else None)
+    # A tone launch that named no rules goes by the ones in force, so starting it again puts nothing back; one of
+    # Точность that named none goes by the agent's code and would put away a set in force.
+    same_rules = chosen == (selected['id'] if selected else None) or (chosen is None and check == checks.TONE)
     return storage.dialogues.meta().get('datasetId') == given.get('datasetId') and same_rules
 
 

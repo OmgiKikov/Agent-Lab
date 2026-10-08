@@ -694,6 +694,19 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 409, response.text)
         self.assertEqual(storage.judges.active('tone')['id'], newer['id'])
 
+    async def test_a_launch_is_made_of_what_is_in_force_by_its_rules_or_by_none_named(self):
+        """A tone launch that named no rules goes by the ones in force: starting it again puts nothing back. One of
+        Точность that named none goes by the agent's code, so with a set of Точность in force it is not current."""
+        self.assertTrue(launches.current({'check': 'tone', 'inputs': self.given(judgeId=None)}))
+        self.assertTrue(launches.current({'check': 'tone', 'inputs': self.given()}))
+        other = datasets.add([dialogue('d2', 'Другой вопрос')], 'other.json')
+        self.assertFalse(launches.current({'check': 'tone', 'inputs': self.given()}))
+        datasets.select(self.dataset['id'])
+        policy = 'Отвечайте только по статьям базы знаний банка.'
+        judges.save('code', 'Точность команды', policy, [criterion()], None, None)
+        self.assertFalse(launches.current({'check': 'code', 'inputs': self.given(check='code', judgeId=None)}))
+        self.assertNotEqual(other['id'], self.dataset['id'])
+
     async def test_a_check_published_before_a_stop_is_not_made_again(self):
         """A launch stopped after its check was published (while serious errors were marked), then continued when the
         result in force is another one: its mode is done with the check of the history, never «не сформировала

@@ -39,7 +39,7 @@ const words = (text: string) =>
 const WAY_LOOK: Record<string, { icon: typeof Globe; how: string }> = {
   prod: { icon: Globe, how: "по адресу на стенде" },
   "local-http": { icon: Monitor, how: "уже запущен здесь" },
-  "local-code": { icon: Code2, how: "запускаем на время прогона" },
+  "local-code": { icon: Code2, how: "запускаем на время проверки" },
 };
 
 const read = <T,>(key: string): T | null => {
@@ -385,7 +385,7 @@ export function ConnectionForm({
       </div>
       {target?.kind === "code" && (
         <p className="mt-3 text-small text-fg-3">
-          Агент запускается только на время прогона, поэтому связь заранее не проверить.
+          Агент запускается только на время проверки, поэтому связь заранее не проверить.
         </p>
       )}
       {check &&

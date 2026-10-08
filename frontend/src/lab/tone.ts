@@ -5,14 +5,17 @@ export const TONE_ID = "tone-of-voice";
 /** The result of the tone-of-voice check, or null. */
 export const toneResult = (state: LabState | null) => state?.checks.tone ?? null;
 
-/** What of a criterion the judge reads: the same wording, conditions and clarifications are the same criterion. */
-const judged = (c: { id: string; text: string; condition?: string; acceptable?: string; clarifications?: string[] }) =>
-  JSON.stringify([c.id, c.text, c.condition ?? "", c.acceptable ?? "", c.clarifications ?? []]);
+/**
+ * What makes a criterion the same one: its wording, when it applies and what is acceptable. A clarification people
+ * confirmed since is the same criterion explained (the next check reads it): its numbers stay its own.
+ */
+const judged = (c: { id: string; text: string; condition?: string; acceptable?: string }) =>
+  JSON.stringify([c.id, c.text, c.condition ?? "", c.acceptable ?? ""]);
 
 /**
  * Whether the result of tone of voice was judged by other criteria than the ones in force now: they were collected
  * again, replaced or edited since. Its numbers stand for the criteria it went by, never for the new ones; a set only
- * renamed, or criteria collected again into the very same ones, changed nothing.
+ * renamed, criteria collected again into the very same ones, or a criterion clarified changed nothing.
  */
 export function toneJudgedByOther(state: LabState | null): boolean {
   const result = toneResult(state);

@@ -72,6 +72,17 @@ export function useCompare(check: Check | null) {
 }
 
 /**
+ * Whether the check was never made for the agent: no result and no saved check, on any export. Its first run is ahead
+ * of the person then (sections/criteria/ToneCriteria, FirstSteps); null until the service has said.
+ */
+export function useFirstRun(check: Check): boolean | null {
+  const { state } = useLabState();
+  const { data } = useCompare(check);
+  if (resultOf(state, check)) return false;
+  return data ? !data.previous && !data.current : null;
+}
+
+/**
  * The comparison of the result on the screen, or nothing: an answer about another result (one replaced meanwhile)
  * says nothing about it, and a result is compared only once the service has it in the history.
  */

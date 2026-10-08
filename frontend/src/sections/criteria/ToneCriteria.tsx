@@ -11,6 +11,7 @@ import { useJudges, type JudgeVersion } from "../../lab/judges";
 import { useLabState } from "../../lab/LabProvider";
 import { download } from "../../lab/problemReport";
 import { useSource, type Problems } from "../../lab/problems";
+import { useFirstRun } from "../../lab/compare";
 import { TONE_ID, toneJudgedByOther, toneResult } from "../../lab/tone";
 import { MarkNo } from "../../product/MarkNo";
 import { Step, Steps, STEP_NEXT } from "../../product/Checklist";
@@ -297,10 +298,11 @@ function RulesDocument({
  * «Критерии» of tone of voice, one page before and after a check. Without rules, the step that gives them (AddRules);
  * while the model collects the criteria, their places wait. With rules: the rules in a block — which document, which
  * version (the others and a new set by hand in its menu), «Заменить правила» with the same cards as the first time,
- * «Изменить критерии», the document with each criterion marked, «Скачать»; before the first check «Новая проверка» is
- * the next step. Then every criterion as a card, the same before and after a check, with what the last check found by
- * it; a card opens the criterion (?c=): what it requires and where it is written, and after a check its decision of
- * seriousness, counts and conversations (CriterionPanel).
+ * «Изменить критерии», the document with each criterion marked, «Скачать»; before the first check the way to it
+ * (FirstSteps), with «Запустить проверку» as the next step. Then every criterion as a card, the same before and after a
+ * check, with what the last check found by it and, after a check, its seriousness decided on the card; a card opens the
+ * criterion (?c=): what it requires and where it is written, and after a check its counts and conversations
+ * (CriterionPanel).
  */
 export function ToneCriteria({ data, list }: { data: Problems | undefined; list: Criterion[] }) {
   const { state, refresh } = useLabState();
@@ -320,6 +322,9 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
   // asked again after new criteria came), so the page never says there are none while there are.
   const set = rules?.criteria ?? state?.toneOfVoice?.criteria ?? [];
   const hasResult = !!toneResult(state);
+  // Never checked yet, on any export: the way to the first check leads the page. One checked before and given a new
+  // export has its usual page, «Новая проверка» in the head the next step.
+  const first = useFirstRun("tone") === true;
   // The last check went by other criteria (collected again, replaced or edited since): its numbers stand for those,
   // never for these, and stay on «Итог» and in the history.
   const other = hasResult && toneJudgedByOther(state);
@@ -458,7 +463,7 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
         <Button className="mt-5" disabled={busy} onClick={stop}>
           Остановить
         </Button>
-        {!hasResult && <FirstSteps criteria={0} collecting line />}
+        {first && <FirstSteps criteria={0} collecting line />}
         <ol aria-hidden className="mt-10 grid gap-3 sm:grid-cols-2">
           {[0, 1, 2, 3].map((i) => (
             <li key={i} className="h-[132px] animate-pulse rounded-[18px] bg-inset" />
@@ -493,7 +498,7 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
           Дайте Lab правила общения банка: документ, текст или правила другого агента. Модель соберёт из них критерии, и
           по ним пойдёт проверка разговоров.
         </p>
-        {!hasResult && <FirstSteps criteria={0} line />}
+        {first && <FirstSteps criteria={0} line />}
         {failedLine}
         {state && <AddRules />}
       </>,
@@ -509,11 +514,11 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
           {source ? ` из «${source}»` : ""}
         </h2>
         <p className="mt-2 max-w-[66ch] text-read text-fg-3">
-          {hasResult
-            ? "По этим критериям идут проверки. Нажмите на критерий, чтобы увидеть его целиком и разговоры, где он нарушен."
-            : "Так мы поняли ваши правила общения. Проверьте, всё ли верно: по этим критериям пойдёт проверка."}
+          {first
+            ? "Так мы поняли ваши правила общения. Проверьте, всё ли верно: по этим критериям пойдёт проверка."
+            : "По этим критериям идут проверки. Нажмите на критерий, чтобы увидеть его целиком и разговоры, где он нарушен."}
         </p>
-        {!hasResult && <FirstSteps criteria={cards.length} />}
+        {first && <FirstSteps criteria={cards.length} />}
         <div className="mt-5 flex flex-wrap items-center gap-2">
           <Button icon={RefreshCw} disabled={blocked} onClick={() => setReplacing(true)}>
             Заменить правила

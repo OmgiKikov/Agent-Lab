@@ -10,7 +10,7 @@ import { secondOf } from "../../lab/problemStats";
 import { decisions } from "../../lab/verdicts";
 import { useKeys } from "../../app/keys";
 import { useLabState } from "../../lab/LabProvider";
-import { resultOf } from "../../lab/checks";
+import { useFirstRun } from "../../lab/compare";
 import { accuracySources, customAccuracy, TONE_ID } from "../../lab/tone";
 import { SeverityHint } from "../../product/Severity";
 import { Button, buttonClass } from "../../ui/Button";
@@ -51,6 +51,7 @@ export function CriteriaPage({ check }: { check: Check }) {
   const { data, list, error, retry } = useCriteria(check);
   const judges = useJudges(check);
   const tone = check === "tone";
+  const firstRun = useFirstRun("tone");
   const rulesOpen = params.get("rules") === "1";
   const set = (edit: (n: URLSearchParams) => void, replace = true) =>
     setParams(
@@ -129,7 +130,7 @@ export function CriteriaPage({ check }: { check: Check }) {
       <CheckHeader
         check={check}
         // Before the first check of tone of voice its page leads to it with steps of its own (ToneCriteria, FirstSteps).
-        quiet={tone && !resultOf(state, "tone")}
+        quiet={tone && firstRun === true}
         actions={
           // Read anew only once criteria were read: before the first check they come from the code anyway.
           !tone && !customAccuracy(state) && list.length > 0 ? (

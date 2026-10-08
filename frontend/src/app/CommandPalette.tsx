@@ -410,7 +410,11 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
                 setQuery(e.target.value);
                 setAt(0);
               }}
-              placeholder="Раздел, проблема, критерий, прогон или действие"
+              placeholder={
+                SIMULATIONS
+                  ? "Раздел, проблема, критерий, прогон или действие"
+                  : "Раздел, проблема, критерий или действие"
+              }
               className="h-12 w-full bg-transparent text-body text-fg outline-none placeholder:text-fg-4"
             />
           </div>

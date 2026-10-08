@@ -54,8 +54,8 @@ def begin(
     line: Callable[[dict], object] | None = None,
 ) -> dict:
     """A task running from now: the latest task of the kind when it stopped or failed doing the same work (an equal
-    fingerprint), with the steps it kept (continued), else a new one. Busy while another task runs. line: what parts
-    a kind into lines of work that never stand for each other (a launch of tone of voice and one of Точность; one
+    fingerprint), with the steps it kept (continued), else a new one. Busy while another task runs. line: how a kind
+    divides into lines of work that never stand for each other (a launch of tone of voice and one of Точность; one
     that checks the recorded answers and one that only asks the agent): only the latest task of the same line is
     continued, and only its line's earlier steps go."""
     with db.transaction(), db.connect() as connection:

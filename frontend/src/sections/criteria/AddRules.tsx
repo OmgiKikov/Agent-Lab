@@ -382,9 +382,9 @@ export function AddRules({ replacing, onDone }: { replacing?: boolean; onDone?: 
           </button>
         </div>
       )}
-      {replacing && hasSource && keeps && (
+      {replacing && hasSource && result && (
         <p className="mt-2 max-w-[62ch] text-small text-fg-3">
-          Собрать заново: {keeps.charAt(0).toLowerCase() + keeps.slice(1)}
+          Собранные заново критерии пойдут в следующую проверку, итог останется посчитанным по прежним.
         </p>
       )}
     </div>
