@@ -173,17 +173,7 @@ export function CriteriaPage({ check }: { check: Check }) {
       <div className="flex h-full flex-col">
         {header}
         <div className="min-h-0 flex-1 overflow-auto">
-          <BeforeCheck
-            check={check}
-            rules={judges.selected}
-            onRules={() => set((n) => n.set("rules", "1"), false)}
-            onDocument={() =>
-              set((n) => {
-                n.set("rules", "1");
-                n.set("doc", "1");
-              }, false)
-            }
-          />
+          <BeforeCheck check={check} rules={judges.selected} onRules={() => set((n) => n.set("rules", "1"), false)} />
         </div>
       </div>
     );

@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { BookOpen, Check as Tick, Play } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { judgesLink, launchLink, SECTIONS, type Check } from "../../app/links";
+import { criterionLink, launchLink, SECTIONS, type Check } from "../../app/links";
 import type { CheckLine } from "../../lab/agents";
 import { CHECK_NAME, CHECKS } from "../../lab/checks";
 import { useJudges } from "../../lab/judges";
@@ -28,7 +28,7 @@ const NEED: Record<Check, Need> = {
   tone: {
     text: "Сначала нужны правила общения: критерии соберутся из документа банка.",
     label: "Добавить правила",
-    to: `${judgesLink("tone")}&doc=1`,
+    to: criterionLink("tone"),
   },
   code: {
     text: "Сначала нужен код агента: критерии соберутся из его инструкций.",

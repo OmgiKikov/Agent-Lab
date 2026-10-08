@@ -1,7 +1,7 @@
 import { createBrowserRouter, Navigate, useLocation, useParams } from "react-router-dom";
 import {
+  criterionLink,
   historyLink,
-  judgesLink,
   launchLink,
   problemLink,
   SECTIONS,
@@ -151,8 +151,7 @@ function DialogRedirect() {
 /** The step-by-step check of tone of voice (/tone/check?step=): each of its steps, where it lives now. */
 function OldToneCheck() {
   const step = new URLSearchParams(useLocation().search).get("step");
-  const to =
-    step === "materials" ? `${judgesLink("tone")}&doc=1` : step === "criteria" ? launchLink("tone") : SECTIONS.tone;
+  const to = step === "materials" ? criterionLink("tone") : step === "criteria" ? launchLink("tone") : SECTIONS.tone;
   return <Navigate to={to} replace />;
 }
 

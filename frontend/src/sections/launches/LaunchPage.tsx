@@ -599,7 +599,7 @@ export function LaunchPage({ check }: { check: Check }) {
                   <span className="flex flex-wrap items-center gap-3">
                     {check === "tone" ? "Критерии соберутся из правил." : "Критерии соберутся из кода."}
                     <Link
-                      to={check === "tone" ? criterionLink("tone", null, { rules: "1", doc: "1" }) : criteriaPage}
+                      to={check === "tone" ? criterionLink("tone") : criteriaPage}
                       className={buttonClass({ variant: "primary", size: "sm" })}
                     >
                       {check === "tone" ? "Добавить правила" : "К критериям"}
