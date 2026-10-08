@@ -3,7 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { BookOpen, ChevronDown, RotateCcw } from "lucide-react";
 import { launchLink, type Check } from "../../app/links";
 import { useWide } from "../../app/useWide";
-import { useCriteria, type Criterion } from "../../lab/criteria";
+import { nameFromText, useCriteria, type Criterion } from "../../lab/criteria";
 import { count, day, plural } from "../../lab/format";
 import { useSource } from "../../lab/problems";
 import { secondOf } from "../../lab/problemStats";
@@ -186,6 +186,11 @@ export function CriteriaPage({ check }: { check: Check }) {
     { checked: 0, agree: 0 },
   );
   const people = decisions(data);
+  // The criteria of the rules in use that the last check did not judge — chosen out of it, or collected after it: the
+  // list below is the check's, and the next check goes by all of them, so the page says which are not in it yet.
+  const judged = new Set(list.flatMap((c) => [c.r.id, ...c.r.log.ruleIds]));
+  const inUse = judges.selected?.criteria ?? [];
+  const unjudged = inUse.filter((c) => !judged.has(c.id));
   // A second model's opinion on some verdict of this side (LAB_SECOND_MODEL). Without one, «Модели совпали» and «Две
   // проверки» would only say «—» and «не с чем сравнить» on every criterion: nothing to tell.
   const twice = (s: SideKey) => list.some((c) => c.r[s].examples.some((e) => !!e.second));
@@ -229,6 +234,17 @@ export function CriteriaPage({ check }: { check: Check }) {
               </>
             )}
           </p>
+          {unjudged.length > 0 && (
+            <p className="mt-0.5 text-small text-fg-3">
+              Последняя проверка шла по {inUse.length - unjudged.length}
+              {"\u00a0"}из{"\u00a0"}
+              {inUse.length}: {unjudged.map((c) => `«${c.name?.trim() || nameFromText(c.text)}»`).join(", ")}{" "}
+              {unjudged.length === 1 ? "в неё не входил" : "в неё не входили"}. Новая проверка пойдёт по всем.{" "}
+              <Link to={launchLink(check)} className="font-medium text-run hover:underline">
+                Новая проверка
+              </Link>
+            </p>
+          )}
           {/* Quietly, until a person decided every criterion: the automatic check's proposals, or why there are none. */}
           <SeverityHint check={check} data={data} className="mt-0.5" />
         </div>
