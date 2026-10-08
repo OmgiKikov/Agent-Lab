@@ -255,7 +255,8 @@ export type DeckChecks = {
   goalAhead: number;
   identifierAnswers: Record<string, number>;
 };
-export type Deck = { check: Check; cards: Card[]; createdAt?: string; checks?: DeckChecks };
+/** check: null when the deck was built before any check: its cards carry no criteria. */
+export type Deck = { check: Check | null; cards: Card[]; createdAt?: string; checks?: DeckChecks };
 export type Job = {
   kind: string | null;
   running: boolean;

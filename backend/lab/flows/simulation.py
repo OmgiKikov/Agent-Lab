@@ -24,6 +24,10 @@ from . import Progress, connection, error_text, scenarios
 MAX_AGENT_TURNS = 3  # the budget of a conversation: reaching it cuts the conversation short, it is no outcome
 PARALLEL = 4
 NO_REPLIES = 'Агент не ответил ни в одном разговоре'
+UNJUDGED = (
+    'Сценарии собраны без проверки: в них нет критериев, и судить разговоры не по чему. '
+    'Проверьте разговоры («Точность» или tone of voice) и соберите сценарии заново.'
+)
 # What a re-judge changes in a conversation.
 JUDGED = ('status', 'rules', 'model', 'judgeVersion', 'second', 'error', 'criteria')
 
@@ -202,6 +206,8 @@ async def run(
     chosen = [card for card in scenarios.deck() if not card_ids or card['id'] in card_ids]
     if not chosen:
         raise RuntimeError('Нет сценариев для прогона. Сначала соберите сценарии.')
+    if scenarios.unjudged():
+        raise RuntimeError(UNJUDGED)
     persona_ids = [p for p in personas.PERSONAS if p in (persona_ids or [personas.DEFAULT])] or [personas.DEFAULT]
     config = connection.ways()[key]
     record = new_run(key, config, label, repeats, persona_ids)

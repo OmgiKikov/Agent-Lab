@@ -13,6 +13,13 @@ export const BY_CRITERIA: Record<Check, string> = {
   code: "по критериям точности",
 };
 
+/** What a deck's scenarios are counted by: its check's criteria, or none when it was built before any check. */
+export const deckCriteria = (check: Check | null): string => (check ? BY_CRITERIA[check] : "без критериев");
+
+/** A deck built without a check: its customers can be read, but no judge can count a run of them. */
+export const UNJUDGED =
+  "Сценарии собраны без проверки, и судить разговоры не по чему. Проверьте разговоры и соберите сценарии заново.";
+
 /** The task of the service that writes a check's result. */
 export const JOB_OF: Record<Check, string> = { tone: "tone-check", code: "discover" };
 

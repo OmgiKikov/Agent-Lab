@@ -7,7 +7,7 @@ import { SectionJob } from "../../app/SectionJob";
 import { StageTabs } from "../../app/StageTabs";
 import { runLink, scenariosLink, toneCheckLink, type Check } from "../../app/links";
 import { api } from "../../lab/api";
-import { CHECK_NAME, CHECKS, resultOf } from "../../lab/checks";
+import { CHECK_NAME, CHECKS, resultOf, UNJUDGED } from "../../lab/checks";
 import { count, longDay } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { useProblems } from "../../lab/problems";
@@ -19,6 +19,7 @@ import { Button, buttonClass } from "../../ui/Button";
 import { EmptyState } from "../../ui/EmptyState";
 import { Modal } from "../../ui/Modal";
 import { useToast } from "../../ui/toast";
+import { UploadButton } from "../../product/UploadLogs";
 import { PlayDialog } from "./PlayDialog";
 
 /**
@@ -123,28 +124,30 @@ export function SimHeader({ runId, actions = true }: { runId: string | null; act
   }, [follow, started, ended, navigate]);
 
   const cards = state?.cards?.cards.length ?? 0;
+  // Built before any check, the scenarios carry no criteria: they can be read, not played.
+  const judged = !!state?.cards?.cards.some((card) => card.criteria.length);
   const busy = !!state?.job.running;
-  // Scenarios are judged by the criteria of one check. Tone of voice whose criteria changed after its result is
-  // checked again first: its scenarios would carry the old criteria.
+  // Scenarios are judged by the criteria of one check, and built without one before any check. Tone of voice whose
+  // criteria changed after its result is checked again first: its scenarios would carry the old criteria.
   const results = CHECKS.filter((c) => resultOf(state, c));
   const outdated = !!toneResult(state) && toneResult(state)?.criteriaRevision !== state?.toneOfVoice?.revision;
   const ready = results.filter((c) => !(c === "tone" && outdated));
   const [ask, setAsk] = useState(false);
-  const send = (check: Check) => {
-    api("/api/cards", { check })
+  const send = (check: Check | null) => {
+    api("/api/cards", check ? { check } : {})
       .then(() => {
         refresh();
         toast.notify("Собираем сценарии. Ход виден внизу навигации.");
       })
       .catch(toast.error);
   };
-  // With two results the person says which check the scenarios come from; with one, that one.
-  const build = () => (results.length > 1 ? setAsk(true) : ready[0] && send(ready[0]));
+  // With two results the person says which check the scenarios come from; with one, that one; with none, none.
+  const build = () => (results.length > 1 ? setAsk(true) : results.length ? ready[0] && send(ready[0]) : send(null));
   const why = busy
     ? "Сейчас идёт другая задача"
-    : !results.length
-      ? "Сценарии оцениваются по критериям проверки. Сначала проверьте разговоры."
-      : !ready.length
+    : !state?.logs.total
+      ? "Сначала загрузите диалоги"
+      : results.length && !ready.length
         ? "Критерии tone of voice изменились. Сначала проверьте разговоры заново."
         : undefined;
   return (
@@ -155,12 +158,18 @@ export function SimHeader({ runId, actions = true }: { runId: string | null; act
         actions={
           actions ? (
             <>
+              <UploadButton variant="outline" />
               <Button
                 icon={Hammer}
                 onClick={build}
                 disabled={!!why}
                 className="hidden md:inline-flex"
-                title={why ?? "Из разговоров выгрузки, по каталогу бизнес-сценариев"}
+                title={
+                  why ??
+                  (results.length
+                    ? "Из разговоров выгрузки, по каталогу бизнес-сценариев"
+                    : "Из разговоров выгрузки, по каталогу бизнес-сценариев. Без проверки — без критериев: сыграть их можно будет после проверки")
+                }
               >
                 {cards ? "Собрать заново" : "Собрать сценарии"}
               </Button>
@@ -168,8 +177,16 @@ export function SimHeader({ runId, actions = true }: { runId: string | null; act
                 variant="primary"
                 icon={Play}
                 onClick={() => setPlay({ preset: null, types: null })}
-                disabled={busy || !cards}
-                title={busy ? "Сейчас идёт другая задача" : !cards ? "Сначала соберите сценарии" : undefined}
+                disabled={busy || !cards || !judged}
+                title={
+                  busy
+                    ? "Сейчас идёт другая задача"
+                    : !cards
+                      ? "Сначала соберите сценарии"
+                      : !judged
+                        ? UNJUDGED
+                        : undefined
+                }
               >
                 Сыграть
               </Button>

@@ -29,7 +29,7 @@ export type Scenarios = { check: Check | null; cards: ScenarioRecord[] };
 export function scenariosStamp(state: LabState | null): string {
   if (!state) return "";
   const deck = state.cards;
-  const result = deck ? state.checks[deck.check]?.finishedAt : "";
+  const result = deck?.check ? state.checks[deck.check]?.finishedAt : "";
   const runs = state.runs.map((r) => `${r.id}:${r.revision ?? ""}:${r.status}`).join(",");
   return `${deck?.check ?? ""}|${deck?.createdAt ?? ""}|${deck?.cards.length ?? 0}|${result ?? ""}|${runs}`;
 }

@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { ArrowLeft, ArrowRight, ArrowUpRight, Building2, Database, Play } from "lucide-react";
 import { criterionLink, runLink, type Check } from "../../app/links";
-import { BY_CRITERIA, CHECK_NAME } from "../../lab/checks";
+import { BY_CRITERIA, CHECK_NAME, UNJUDGED } from "../../lab/checks";
 import { duty } from "../../lab/criteria";
 import { dialogOf } from "../../lab/dialogs";
 import { count, longDay, time } from "../../lab/format";
@@ -82,22 +82,25 @@ function Results({
   record: ScenarioRecord;
   state: LabState;
   named: Map<string, Named>;
-  onPlay: () => void;
+  /** null: a scenario without criteria, which nothing could judge. */
+  onPlay: (() => void) | null;
 }) {
   const runs = runsOf(record.history, state.personas);
   if (!runs.length)
     return (
       <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
         <p className="text-read text-fg-2">Ещё не играли.</p>
-        <Button
-          size="sm"
-          icon={Play}
-          onClick={onPlay}
-          disabled={!!state.job.running}
-          title={state.job.running ? "Сейчас идёт другая задача" : undefined}
-        >
-          Сыграть этот сценарий
-        </Button>
+        {onPlay && (
+          <Button
+            size="sm"
+            icon={Play}
+            onClick={onPlay}
+            disabled={!!state.job.running}
+            title={state.job.running ? "Сейчас идёт другая задача" : undefined}
+          >
+            Сыграть этот сценарий
+          </Button>
+        )}
       </div>
     );
   return (
@@ -219,6 +222,8 @@ export function ScenarioView({
   const byNumber = (a: CardCriterion, b: CardCriterion) =>
     (named.get(a.id)?.n ?? Number.MAX_SAFE_INTEGER) - (named.get(b.id)?.n ?? Number.MAX_SAFE_INTEGER);
   const criteria = [...card.criteria].sort(byNumber);
+  // Built before any check, a scenario has no criteria: it can be read, not played.
+  const playable = criteria.length > 0;
   const pending =
     status === "loading" ? (
       <Skeleton className="mt-3 h-16 max-w-2xl" />
@@ -252,14 +257,14 @@ export function ScenarioView({
             variant="primary"
             icon={Play}
             onClick={onPlay}
-            disabled={busy}
-            title={busy ? "Сейчас идёт другая задача" : undefined}
+            disabled={busy || !playable}
+            title={busy ? "Сейчас идёт другая задача" : !playable ? UNJUDGED : undefined}
           >
             Сыграть этот сценарий
           </Button>
         </div>
         <Section label="Результаты">
-          {record ? <Results record={record} state={state} named={named} onPlay={onPlay} /> : pending}
+          {record ? <Results record={record} state={state} named={named} onPlay={playable ? onPlay : null} /> : pending}
         </Section>
         <Section label="Клиент">
           {card.knowledge ? <Profile card={card} /> : <p className="mt-2 max-w-[66ch] text-read text-fg">{summary}</p>}
@@ -289,13 +294,22 @@ export function ScenarioView({
             ))}
           </div>
         </Section>
-        <Section label={`Что проверят · ${count(card.criteria.length, "критерий", "критерия", "критериев")}`}>
-          <ul className="mt-2 divide-y divide-line">
-            {criteria.map((x) => (
-              <CriterionRow key={x.id} x={x} own={named.get(x.id)} check={check} />
-            ))}
-          </ul>
-        </Section>
+        {playable ? (
+          <Section label={`Что проверят · ${count(card.criteria.length, "критерий", "критерия", "критериев")}`}>
+            <ul className="mt-2 divide-y divide-line">
+              {criteria.map((x) => (
+                <CriterionRow key={x.id} x={x} own={named.get(x.id)} check={check} />
+              ))}
+            </ul>
+          </Section>
+        ) : (
+          <Section label="Что проверят">
+            <p className="mt-2 max-w-[66ch] text-read text-fg-2">
+              Критериев нет: сценарии собраны без проверки. Чтобы их сыграть, проверьте разговоры и соберите сценарии
+              заново.
+            </p>
+          </Section>
+        )}
         {world && (
           <Section label="Тестовые данные вместо систем банка">
             <div className="mt-3 rounded-sheet bg-inset px-4 py-4 sm:px-6">

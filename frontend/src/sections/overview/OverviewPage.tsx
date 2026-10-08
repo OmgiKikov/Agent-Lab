@@ -186,7 +186,7 @@ export function OverviewPage() {
           <h2 className="mt-1 text-page font-semibold text-fg">{first ? "С чего начать" : "Как работает агент"}</h2>
           <p className="mt-3 max-w-[66ch] text-lead text-fg-2">
             {first
-              ? "Две проверки оценивают настоящие разговоры клиентов из выгрузки чата, у каждой свои критерии. Из найденных ошибок потом собирают сценарии для синтетических клиентов."
+              ? "Две проверки оценивают настоящие разговоры клиентов из выгрузки чата, у каждой свои критерии. Симуляции собирают из той же выгрузки каталог бизнес-сценариев и профили клиентов, а синтетические клиенты играют их с агентом."
               : "У каждой проверки и у симуляций свои критерии и свой счёт, их числа не складываются. Каждая проверка сравнивает себя только со своей прошлой."}
           </p>
           {first ? (
@@ -229,15 +229,16 @@ function StartCards({ state }: { state: LabState }) {
     { title: CHECK_NAME.code, what: WHAT.code, begin: beginOf("code", state) },
     {
       title: "Симуляции",
-      what: "Синтетические клиенты играют с агентом сценарии из настоящих разговоров. Разговоры оценивают по критериям проверки.",
+      what: "Из выгрузки чата собираются каталог бизнес-сценариев и профили клиентов. Синтетические клиенты играют эти сценарии с агентом, разговоры оценивают по критериям проверки.",
       begin: {
-        status: "После первой проверки",
+        status: "Из выгрузки чата",
         needs: [
-          { label: "Итог проверки", value: null, later: "по его критериям оценят сценарии" },
+          needsOf("code", state)[0],
+          { label: "Итог проверки", value: null, later: "нужен, чтобы оценить сыгранные сценарии" },
           { label: "Подключение агента", value: ready ? "задано" : null, later: "задайте в «Агенте»" },
         ],
-        // Nothing to do here before the first check, unless the agent is not connected yet.
-        action: ready ? undefined : { label: "Подключить агента", to: SECTIONS.agent },
+        // The scenarios are built from the export alone; the check and the agent are needed to play them.
+        action: { label: state.logs.total ? "Собрать сценарии" : "Открыть симуляции", to: scenariosLink() },
       },
     },
   ];
@@ -379,6 +380,8 @@ function RunBlock({ state }: { state: LabState }) {
   const criteria = useCriteria(run?.check ?? null, run && !live ? run.id : null);
   const m = run?.metric;
   const deck = state.cards?.cards.length ? state.cards : null;
+  // Scenarios built before any check can be read, not played.
+  const playable = deck?.check ? deck.check : null;
   if (!run)
     return (
       <div className="mt-6 max-w-[640px]">
@@ -388,15 +391,17 @@ function RunBlock({ state }: { state: LabState }) {
           sub="Синтетические клиенты играют сценарии из разговоров"
         />
         <p className="mt-6 text-read text-fg-2">
-          {deck
-            ? `Сценарии ${BY_CRITERIA[deck.check]} собраны. Синтетические клиенты сыграют их с агентом.`
-            : "Симуляций ещё не было. Сценарии собирают из ошибок одной проверки, а разговоры оценивают по её критериям."}
+          {playable
+            ? `Сценарии ${BY_CRITERIA[playable]} собраны. Синтетические клиенты сыграют их с агентом.`
+            : deck
+              ? "Сценарии собраны без проверки: видны клиенты и их бизнес-сценарии. Чтобы сыграть их, проверьте разговоры и соберите сценарии заново."
+              : "Симуляций ещё не было. Сценарии собирают из разговоров выгрузки по каталогу бизнес-сценариев, а разговоры оценивают по критериям проверки."}
         </p>
         <Link
-          to={deck ? `${SECTIONS.simulations}?play=1` : scenariosLink()}
+          to={playable ? `${SECTIONS.simulations}?play=1` : scenariosLink()}
           className={`mt-5 ${buttonClass({ variant: "outline" })}`}
         >
-          {deck ? "Сыграть сценарии" : "Открыть сценарии"}
+          {playable ? "Сыграть сценарии" : "Открыть сценарии"}
         </Link>
       </div>
     );
@@ -559,20 +564,23 @@ function CheckSteps({ check, onReport }: { check: Check; onReport: () => void })
 
 /** What to do with the simulation: build the scenarios from a check's errors, play them, or connect the agent. */
 function simSteps(state: LabState): Step[] {
-  const deck = state.cards?.cards.length ? state.cards : null;
+  const check = state.cards?.cards.length ? state.cards.check : undefined;
   const ready = connected(state);
   return [
-    deck
+    check
       ? {
           icon: Play,
           title: "Проверьте правки агента в симуляции",
-          sub: `Синтетические клиенты сыграют сценарии ${BY_CRITERIA[deck.check]}.`,
+          sub: `Синтетические клиенты сыграют сценарии ${BY_CRITERIA[check]}.`,
           to: `${SECTIONS.simulations}?play=1`,
         }
       : {
           icon: Hammer,
-          title: "Соберите сценарии",
-          sub: "Из ошибок одной из проверок. Синтетические клиенты сыграют их с агентом.",
+          title: check === null ? "Соберите сценарии заново после проверки" : "Соберите сценарии",
+          sub:
+            check === null
+              ? "Сейчас они собраны без проверки, и судить их разговоры не по чему."
+              : "Из разговоров выгрузки, по каталогу бизнес-сценариев. Синтетические клиенты сыграют их с агентом.",
           to: scenariosLink(),
         },
     ...(ready

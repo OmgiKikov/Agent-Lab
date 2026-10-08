@@ -1,11 +1,13 @@
-"""Scenarios: the deck of one check, the customers of real conversations in two sets (domain.scenarios), and each
-scenario as a test, with its result in every run of the deck's check.
+"""Scenarios: the deck, the customers of real conversations in two sets (domain.scenarios), and each scenario as a
+test, with its result in every run of the deck's check.
 
 The catalog of business scenarios is brought up to date first (flows/catalog.py): the representative set is sampled by
 its scenarios, and every card names the scenario of its episode. A card's criteria are those of its conversation's
 topic in the check; a conversation the check did not sample is sorted into its topics by the router.
 A card the model fails to build is reported in the progress and never cancels the others; only a deck with no card is
-an error. The deck names the check it was built from: a run is measured by that check's criteria.
+an error. The deck names the check it was built from: a run is measured by that check's criteria. Built without a
+check (None), its cards are the customers alone, with their business scenarios and no criteria: nothing can judge a
+run of them until the conversations are checked and the deck is built again.
 """
 
 import asyncio
@@ -37,6 +39,13 @@ def sample() -> int | None:
     return len(found['cardIds']) if found.get('cardIds') else None
 
 
+def unjudged() -> bool:
+    """The deck was built without a check: its customers can be read, but no judge could measure a run of them. A deck
+    from before decks named their check names none at all."""
+    document = storage.documents.load(DECK) or {}
+    return 'check' in document and document['check'] is None
+
+
 def check() -> str | None:
     """The check whose criteria the deck's scenarios are judged by."""
     return (storage.documents.load(DECK) or {}).get('check')
@@ -64,9 +73,8 @@ def chosen_check(asked: str | None) -> str | None:
 
 
 async def build(check: str | None, progress: Progress) -> list[dict]:
-    """«Собрать сценарии»: the deck of the check, saved with the check it names and the catalog's revision."""
-    if check is None:
-        raise RuntimeError('Сценарии собираются по критериям проверки. Сначала проверьте разговоры.')
+    """«Собрать сценарии»: the deck of the check, or of no check (None), saved with the check it names and the
+    catalog's revision."""
     deck = await built(check, progress)
     document = {
         'check': check,
@@ -86,19 +94,21 @@ async def build_card(
     scenario: dict | None = None,
     episode: dict | None = None,
     agent: dict | None = None,
+    judged: bool = True,
 ) -> dict:
     """The card of one conversation: its customer from the whole chat, every item found in the log (roles.card,
     domain.cards), its frozen criteria, and the world of its test data when the stand's fixtures are there
     (roles.world); without them, or when the model gives no usable world, the scenario is played against the stand's
     default answers. episode: the catalog's reading of the conversation, where the episode starts and ends and its
     task (the card describes the episode its scenario was given for). agent: the profile of the agent under test
-    (flows/profile.py), the current one by default."""
+    (flows/profile.py), the current one by default. judged: False for a deck built without a check, whose cards carry
+    no criteria."""
     agent, episode = agent or profile.current(), episode or {}
     answer = await card_role.card(topic['title'], dialogue, agent, episode.get('start'), episode.get('end'))
     customer = cards.customer(answer.value, dialogue, agent, episode)
     raw, written = cards.episode_texts(customer, dialogue)
     prompts = '\n'.join(source['content'] for source in inputs.sources())
-    criteria = scenarios.criteria(topic, general, prompts)
+    criteria = scenarios.criteria(topic, general, prompts) if judged else []
     customer['checks']['audit'] = cards.audit(customer, dialogue, criteria)
     test_data, shapes = None, world.templates(connection.repo())
     if shapes is not None:
@@ -112,13 +122,14 @@ async def build_card(
     return found | {'model': answer.model}
 
 
-async def built(check: str, progress: Progress = lambda **_: None) -> dict:
+async def built(check: str | None, progress: Progress = lambda **_: None) -> dict:
     """The cards of the two sets ({cards, sets, catalogRevision}): a sample of the catalog's episodes stratified by
     scenario, and rare ones. A card the model fails is built again
     (ROUNDS in all) and then kept in its sets' manifests as failed. A sampled episode left without a card is replaced by
-    another of its scenario; when one cannot be, the representative set is incomplete and its cards get no weight."""
-    analysis = storage.documents.load(checks.result(check))
-    if not analysis:
+    another of its scenario; when one cannot be, the representative set is incomplete and its cards get no weight.
+    check None: the cards without criteria, each in the topic of its business scenario."""
+    analysis = storage.documents.load(checks.result(check)) if check else None
+    if check and not analysis:
         raise RuntimeError(f'У проверки «{checks.NAMES[check]}» ещё нет итога. Сначала проверьте разговоры.')
     if check == checks.TONE:
         draft = storage.documents.load(tone.DRAFT) or {}
@@ -159,8 +170,8 @@ class _Building:
 
     def __init__(
         self,
-        check: str,
-        analysis: dict,
+        check: str | None,
+        analysis: dict | None,
         episodes: dict[str, dict],
         scenario_of: dict[str, dict],
         chosen: dict[str, list[str]],
@@ -169,7 +180,7 @@ class _Building:
     ) -> None:
         self.check, self.analysis, self.episodes, self.scenario_of = check, analysis, episodes, scenario_of
         self.chosen, self.progress, self.agent = chosen, progress, agent
-        self.general = scenarios.general_rules(analysis)
+        self.general = scenarios.general_rules(analysis) if analysis else []
         self.made: dict[str, dict] = {}
         self.failed: dict[str, dict] = {}
 
@@ -179,9 +190,12 @@ class _Building:
     async def make(self, ids: list[str]) -> None:
         """The cards of these conversations; one the model fails is tried again, ROUNDS in all."""
         dialogues = {str(d['id']): d for d in storage.dialogues.read(ids)}
-        self._told('Распределяем разговоры по темам проверки')
-        with models.about(f'deck:{self.check}'):
-            topic_of = await _topics(self.analysis, list(dialogues.values()))
+        if self.analysis:
+            self._told('Распределяем разговоры по темам проверки')
+            with models.about(self.subject):
+                topic_of = await _topics(self.analysis, list(dialogues.values()))
+        else:
+            topic_of = {dialogue_id: self._scenario(dialogue_id) for dialogue_id in dialogues}
         plan = {}
         for dialogue_id in ids:
             # Whether the customer has a task of the agent's domain is the episode reader's decision.
@@ -192,7 +206,8 @@ class _Building:
                 else f'вне домена агента: {episode.get("reason") or "нет задачи"}'
                 if not business.in_domain(episode)
                 else None
-                if dialogue_id in dialogues and (topic_of.get(dialogue_id) or {}).get('rules')
+                if dialogue_id in dialogues
+                and (self.analysis is None or (topic_of.get(dialogue_id) or {}).get('rules'))
                 else 'не отнесён к теме с критериями'
             )
             if reason is None:
@@ -209,7 +224,7 @@ class _Building:
             todo = [dialogue_id for dialogue_id in plan if dialogue_id not in self.made]
             if not todo:
                 break
-            with models.about(f'deck:{self.check}'):
+            with models.about(self.subject):
                 async with asyncio.TaskGroup() as tasks:
                     for dialogue_id in todo:
                         tasks.create_task(self._one(dialogues[dialogue_id], plan[dialogue_id]))
@@ -221,13 +236,24 @@ class _Building:
         scenario = self.scenario_of.get(episode.get('scenarioId') or '')
         try:
             self.made[dialogue_id] = await build_card(
-                topic, dialogue, sets, self.general, scenario, episode, self.agent
+                topic, dialogue, sets, self.general, scenario, episode, self.agent, judged=self.analysis is not None
             )
             self.failed.pop(dialogue_id, None)
         except models.ModelError as error:
             self.failed[dialogue_id] = {'topic': topic['title'], 'dialogueId': dialogue_id, 'error': str(error)}
         missing = f'. Не удалось собрать: {len(self.failed)}' if self.failed else ''
         self._told(f'{BUILDING}{missing}', failed=list(self.failed.values()))
+
+    @property
+    def subject(self) -> str:
+        """What the deck's calls are about, in the journal."""
+        return f'deck:{self.check or "none"}'
+
+    def _scenario(self, dialogue_id: str) -> dict:
+        """Without a check, a conversation's topic is the business scenario of its episode: rules it has none."""
+        found = self.scenario_of.get((self.episodes.get(dialogue_id) or {}).get('scenarioId') or business.NONE)
+        found = found or self.scenario_of[business.NONE]
+        return {'id': found['id'], 'title': found['title'], 'rules': []}
 
     def _told(self, message: str, **more: object) -> None:
         done = len(self.made) + len(self.failed)

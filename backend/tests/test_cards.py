@@ -8,7 +8,9 @@ import support
 
 from lab import api, models, storage
 from lab.domain import checks
+from lab.flows import inputs
 from lab.flows import scenarios as cards
+from lab.flows.simulation import run as cards_run
 from lab.jobs import Jobs
 from lab.roles import world as world_role
 
@@ -71,7 +73,9 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_failed_card_does_not_cancel_the_others_and_is_reported(self):
         failed, release = asyncio.Event(), asyncio.Event()
 
-        async def build(topic, dialogue, sets, general=(), scenario=None, start=None, end=None, agent=None):
+        async def build(
+            topic, dialogue, sets, general=(), scenario=None, start=None, end=None, agent=None, judged=True
+        ):
             if dialogue['id'] == 'fail':
                 failed.set()
                 raise models.ModelError('model unavailable')
@@ -120,6 +124,44 @@ class CardsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['model'], 'actual-model')
         self.assertEqual(result['sourceDialogueId'], 'd')
         self.assertEqual(result['criteria'][1]['observation'], 'tool')
+
+    async def test_without_a_check_a_card_is_the_customer_of_its_business_scenario_without_criteria(self):
+        """No check has a result: no conversation is sorted into a check's topics, the card's topic is its scenario of
+        the catalog, and it carries no criteria even where the agent's prompts say the rules every scenario has."""
+        storage.dialogues.replace([dialogue()])
+        chat = AsyncMock(return_value=scenario('Тариф', 'Узнать тариф.'))
+        prompts = [{'id': 'p', 'kind': 'prompt', 'content': 'Используй ТОЛЬКО информацию из контекста.'}]
+        with (
+            catalog_of('d'),
+            patch.object(models, 'chat', chat),
+            patch.object(cards.world, 'templates', return_value=None),
+            patch.object(cards.inputs, 'sources', return_value=prompts),
+        ):
+            await cards.build(None, lambda **_: None)
+        deck = storage.documents.load(checks.DECK)
+        self.assertIsNone(deck['check'])
+        [card] = deck['cards']
+        self.assertEqual(
+            (card['eligible'], card['topic'], card['topicId'], card['criteria'], card['scenario']['title']),
+            (True, 'Узнать тариф', 'c1s1', [], 'Узнать тариф'),
+        )
+        self.assertEqual([call.kwargs['call'].role for call in chat.await_args_list], ['card'])
+
+    async def test_a_run_of_scenarios_without_criteria_is_refused_before_the_agent_is_called(self):
+        storage.documents.save(checks.DECK, {'check': None, 'cards': [{'id': 'c', 'criteria': []}]})
+        with self.assertRaisesRegex(RuntimeError, 'собраны без проверки'):
+            await cards_run('nowhere')
+
+    async def test_a_deck_built_without_a_check_stays_when_checks_change_and_goes_with_the_export(self):
+        storage.documents.save(checks.DECK, {'check': None, 'cards': [{'id': 'c'}]})
+        inputs.drop_deck(list(checks.RESULTS))
+        self.assertIsNotNone(storage.documents.load(checks.DECK))
+        inputs.replace_export([{'id': 'd2'}])
+        self.assertIsNone(storage.documents.load(checks.DECK))
+
+    def test_only_a_deck_from_before_decks_named_their_check_is_given_one(self):
+        self.assertEqual(checks.separated({checks.DECK: {'cards': []}})[checks.DECK]['check'], checks.CODE)
+        self.assertEqual(checks.separated({checks.DECK: {'check': None, 'cards': []}}), {})
 
     async def test_every_sampled_conversation_is_a_representative_card_named_by_the_hash_of_its_content(self):
         """No card comes from the check's errors: a conversation with an error and one without are both sampled

@@ -32,10 +32,11 @@ def sources() -> list[dict]:
 
 
 def drop_deck(changed: Collection[str]) -> None:
-    """The scenarios go with the result or the criteria of the check they were built from (changed); a deck that names
-    no check goes with any. Written in the caller's transaction."""
+    """The scenarios go with the result or the criteria of the check they were built from (changed); a deck from
+    before decks named their check goes with any, one built without a check (None) with none: it carries no criteria.
+    Written in the caller's transaction."""
     deck = storage.documents.load(checks.DECK)
-    if changed and (deck is None or deck.get('check') in (None, *changed)):
+    if changed and deck and ('check' not in deck or deck['check'] in changed):
         storage.documents.save(checks.DECK, None)
 
 
@@ -50,6 +51,8 @@ def replace_export(dialogues: list[dict], name: str | None = None, report: dict 
             storage.documents.save(checks.CODE_CRITERIA, accuracy.criteria_of(result))
         storage.dialogues.replace(dialogues, name, report)
         _clear(checks.RESULTS)
+        # Every card is a customer of the previous export, a deck built without a check too.
+        storage.documents.save(checks.DECK, None)
     return len(dialogues)
 
 

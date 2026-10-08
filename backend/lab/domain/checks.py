@@ -47,13 +47,14 @@ def of_run(record: dict) -> str:
 
 def separated(documents: dict) -> dict:
     """What changes in the documents of the time when both checks shared one result (discover.json): a tone-of-voice
-    result there moves to its own place, unless one is there already; a deck that names no check gets the check of
-    the result in the shared place, which it was built from. Only the documents that change; none the second time."""
+    result there moves to its own place, unless one is there already; a deck from before decks named their check gets
+    the check of the result in the shared place, which it was built from (a deck built without a check names None and
+    stays so). Only the documents that change; none the second time."""
     shared = documents.get(RESULTS[CODE])
     tone = isinstance(shared, dict) and shared.get('purpose') == TONE_OF_VOICE
     changes = {}
     deck = documents.get(DECK)
-    if isinstance(deck, dict) and not deck.get('check'):
+    if isinstance(deck, dict) and 'check' not in deck:
         changes[DECK] = deck | {'check': TONE if tone else CODE}
     if tone and not documents.get(RESULTS[TONE]):
         changes |= {RESULTS[TONE]: shared, RESULTS[CODE]: None}

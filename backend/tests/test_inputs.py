@@ -55,7 +55,8 @@ class InputsTests(unittest.TestCase):
     def test_what_resets_what(self) -> None:
         """What resets what: what each
         event leaves of the tone-of-voice criteria (D), the results of tone of voice (T) and Точность (C), and the
-        deck (K) built from tone of voice, from Точность, or one that names no check."""
+        deck (K) built from tone of voice, from Точность, without a check (None), or one from before decks named their
+        check (no check at all)."""
         policy = {'id': 'tone-of-voice', 'kind': 'tone-of-voice', 'content': 'Обращайтесь на вы.', 'sha256': 'p1'}
         code = {'id': 's1', 'kind': 'prompt', 'content': 'Называй срок.', 'sha256': 'c1'}
         names = {'D': 'tone-of-voice-criteria.json', 'T': 'tone-result.json', 'C': 'discover.json', 'K': 'cards.json'}
@@ -83,27 +84,28 @@ class InputsTests(unittest.TestCase):
             'new accuracy result with new criteria': lambda: accuracy.publish({'topics': []}, new_criteria=True),
             'new accuracy result with the same criteria': lambda: accuracy.publish({'topics': []}, new_criteria=False),
         }
-        kept = {  # deck built from: tone, code, no check named
-            'new export': ('D', 'D', 'D'),
-            'communication rules changed': ('C', 'CK', 'C'),
-            'code changed': ('DTK', 'DT', 'DT'),
-            'code read again unchanged': ('DTCK', 'DTCK', 'DTCK'),
-            'code read again, a prompt moved down a line': ('DTCK', 'DTCK', 'DTCK'),
-            'communication rules saved under another name': ('DTCK', 'DTCK', 'DTCK'),
-            'new tone-of-voice criteria': ('DTC', 'DTCK', 'DTC'),
-            'tone-of-voice criteria saved unchanged': ('DTCK', 'DTCK', 'DTCK'),
-            'new tone-of-voice result': ('DTC', 'DTCK', 'DTC'),
-            'new accuracy result with new criteria': ('DTCK', 'DTC', 'DTC'),
-            'new accuracy result with the same criteria': ('DTCK', 'DTCK', 'DTCK'),
+        kept = {  # deck built from: tone, code, without a check, from before decks named their check
+            'new export': ('D', 'D', 'D', 'D'),
+            'communication rules changed': ('C', 'CK', 'CK', 'C'),
+            'code changed': ('DTK', 'DT', 'DTK', 'DT'),
+            'code read again unchanged': ('DTCK', 'DTCK', 'DTCK', 'DTCK'),
+            'code read again, a prompt moved down a line': ('DTCK', 'DTCK', 'DTCK', 'DTCK'),
+            'communication rules saved under another name': ('DTCK', 'DTCK', 'DTCK', 'DTCK'),
+            'new tone-of-voice criteria': ('DTC', 'DTCK', 'DTCK', 'DTC'),
+            'tone-of-voice criteria saved unchanged': ('DTCK', 'DTCK', 'DTCK', 'DTCK'),
+            'new tone-of-voice result': ('DTC', 'DTCK', 'DTCK', 'DTC'),
+            'new accuracy result with new criteria': ('DTCK', 'DTC', 'DTCK', 'DTC'),
+            'new accuracy result with the same criteria': ('DTCK', 'DTCK', 'DTCK', 'DTCK'),
         }
         for event, happen in events.items():
-            for deck, expected in zip(('tone', 'code', None), kept[event], strict=True):
+            for deck, expected in zip(('tone', 'code', None, 'legacy'), kept[event], strict=True):
                 with self.subTest(event=event, deck=deck):
                     storage.documents.save('sources.json', [code, policy])
                     storage.documents.save(names['D'], {'revision': 'r1'})
                     storage.documents.save(names['T'], {'purpose': 'tone-of-voice', 'results': []})
                     storage.documents.save(names['C'], {'topics': [], 'results': []})
-                    storage.documents.save(names['K'], {'check': deck, 'cards': [{'id': 'card-1'}]})
+                    named = {} if deck == 'legacy' else {'check': deck}
+                    storage.documents.save(names['K'], {**named, 'cards': [{'id': 'card-1'}]})
                     happen()
                     left = ''.join(key for key, name in names.items() if storage.documents.load(name) is not None)
                     self.assertEqual(left, expected)

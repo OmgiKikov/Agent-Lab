@@ -4,7 +4,7 @@ import { Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useKeys } from "../../app/keys";
 import { useWide } from "../../app/useWide";
-import { BY_CRITERIA, CHECKS, resultOf } from "../../lab/checks";
+import { deckCriteria } from "../../lab/checks";
 import { useCriteria } from "../../lab/criteria";
 import { count, day } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
@@ -215,7 +215,7 @@ export function ScenariosPage() {
             <p className="text-read text-fg-3">
               {cards.length && deck ? (
                 <>
-                  {count(cards.length, "сценарий", "сценария", "сценариев")} {BY_CRITERIA[deck.check]}
+                  {count(cards.length, "сценарий", "сценария", "сценариев")} {deckCriteria(deck.check)}
                   {deck.createdAt ? ` · собраны ${day(deck.createdAt)}` : ""}
                 </>
               ) : (
@@ -315,9 +315,9 @@ export function ScenariosPage() {
               <p className="px-3 py-10 text-center text-small text-fg-3">
                 {cards.length
                   ? "Ничего не нашлось"
-                  : CHECKS.some((c) => resultOf(state, c))
+                  : state.logs.total
                     ? "Соберите сценарии из разговоров выгрузки."
-                    : "Сценарии оцениваются по критериям проверки. Сначала проверьте разговоры в разделе «Tone of voice» или «Точность»."}
+                    : "Загрузите диалоги: сценарии собираются из разговоров выгрузки."}
               </p>
             )}
           </div>

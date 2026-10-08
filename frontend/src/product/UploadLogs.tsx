@@ -41,7 +41,11 @@ function whatHappens(state: LabState | null): [string, string] {
         : code
           ? "Текущий итог точности уйдёт в «Историю»."
           : "";
-  const scenarios = deck ? `Сценарии из итога ${deck.check === "tone" ? "tone of voice" : "точности"} сбросятся.` : "";
+  const scenarios = !deck
+    ? ""
+    : deck.check
+      ? `Сценарии из итога ${deck.check === "tone" ? "tone of voice" : "точности"} сбросятся.`
+      : "Сценарии сбросятся.";
   return [
     [results, scenarios].filter(Boolean).join(" "),
     "Критерии, прогоны симуляций и ответы людей останутся. Новые разговоры можно проверить по тем же критериям и сравнить с прошлыми.",

@@ -227,11 +227,13 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.answer(None, 't1r1', check='accuracy')).status_code, 422)
 
     async def build_cards(self, body=None):
-        async def build(topic, dialogue, sets, general=(), scenario=None, start=None, end=None, agent=None):
+        async def build(
+            topic, dialogue, sets, general=(), scenario=None, start=None, end=None, agent=None, judged=True
+        ):
             return {
                 'id': f'{topic["title"]}:{dialogue["id"]}',
                 'topic': topic['title'],
-                'criteria': topic['rules'],
+                'criteria': topic['rules'] if judged else [],
                 'sets': list(sets),
                 'sourceDialogueId': dialogue['id'],
             }
@@ -247,9 +249,13 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
         return response
 
     async def test_scenarios_are_built_for_the_criteria_of_one_check(self):
+        # Before any check: the customers of the catalog's scenarios, with no criteria.
         self.assertEqual((await self.build_cards()).status_code, 200)
+        self.assertIsNone(self.jobs.state['error'])
+        deck = storage.documents.load(cards.DECK)
         self.assertEqual(
-            self.jobs.state['error'], 'Сценарии собираются по критериям проверки. Сначала проверьте разговоры.'
+            (deck['check'], {card['topic'] for card in deck['cards']}, [card['criteria'] for card in deck['cards']]),
+            (None, {'Узнать тариф'}, [[] for _ in deck['cards']]),
         )
         response = await self.build_cards({'check': 'code'})
         self.assertEqual(response.status_code, 200)
