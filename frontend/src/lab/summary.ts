@@ -2,6 +2,7 @@ import { agentKey } from "../app/agent";
 import { answersText, yesNoText, type Answers } from "./answers";
 import { CHECK_NAME, CHECKS } from "./checks";
 import { count, pct, plural } from "./format";
+import { cleanText } from "./history";
 import { headingOf, inlineText, quoteText } from "./problemReport";
 import { splitQuote } from "./quote";
 import type { Severity } from "./problems";
@@ -83,12 +84,13 @@ export const SUMMARY_WHAT: Record<Check, string> = {
 const ofConversations = (n: number) => count(n, "разговора", "разговоров", "разговоров");
 
 /**
- * «С ошибкой агента — 22 из 53 проверенных разговоров (42%)». With none checked there is no count to give, as on «Итог»
+ * «С ошибкой агента — 22 из 53 проверенных разговоров · 58% без найденных ошибок». With none checked there is no count
+ * to give, as on «Итог»
  * (product/StageResult): «Ни один из 60 разговоров не удалось проверить», never «0 из 0».
  */
 export const headline = (c: SummaryCheck) =>
   c.measured
-    ? `С ошибкой агента — ${c.failed}\u00a0из\u00a0${count(c.measured, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} (${pct(c.failed, c.measured)}%)`
+    ? `С ошибкой агента — ${c.failed}\u00a0из\u00a0${count(c.measured, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} · ${cleanText(c)}`
     : `Ни один ${c.unmeasured ? `из\u00a0${count(c.unmeasured, "разговора", "разговоров", "разговоров")}` : "разговор"} не удалось проверить`;
 
 /**
@@ -128,7 +130,7 @@ export const problemAnswers = (p: SummaryProblem) =>
 
 /** The quiet footnote: what the numbers count and what they do not say. */
 export const HOW = [
-  "«N из M» значит, что автоматическая проверка смогла оценить M разговоров и в N из них нашла ошибку агента. Разговоры, которые не удалось проверить, названы отдельно и в счёт не входят.",
+  "«N из M» значит, что автоматическая проверка смогла оценить M разговоров и в N из них нашла ошибку агента. Процент рядом — доля проверенных разговоров без найденных ошибок: чем он выше, тем лучше. Разговоры, которые не удалось проверить, названы отдельно и в счёт не входят.",
   "«Без найденных ошибок» не значит, что ошибок нет. Проверка находит не всё.",
   "«С учётом ответов людей» считает те же разговоры. Ошибка, которую человек снял, не считается, а ошибка, которую он нашёл сам, считается. Число автоматической проверки от этого не меняется, и с прошлыми проверками сравнивают только его.",
   "С прошлой проверкой сравнивают, только если критерии и способ проверки те же. Если хотя бы с одной стороны меньше 30 разговоров, этого мало, чтобы судить.",

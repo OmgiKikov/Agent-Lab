@@ -7,7 +7,8 @@ import { useArrived, useCountUp } from "./motion";
 
 /**
  * The result of a stage as the one number it exists to say: in how many of the checked conversations the agent erred,
- * its share, and the split of all of them — with an error, without one found, not checked (never in the count).
+ * the share without an error found beside it (it grows as the agent gets better: «5% без найденных ошибок», never 95%
+ * of errors), and the split of all of them — with an error, without one found, not checked (never in the count).
  * The error count is the screen's one red.
  */
 export function StageResult({
@@ -69,8 +70,8 @@ export function StageResult({
             {plural(checked, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} с ошибкой
             агента
             <span className="text-fg-3">
-              {"\u00a0·\u00a0"}
-              {pct(failed, checked)}%
+              {"\u00a0· "}
+              <span className="whitespace-nowrap">{pct(clean, checked)}% без найденных ошибок</span>
             </span>
           </p>
           {delta && (

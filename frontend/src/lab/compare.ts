@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
 import { resultOf } from "./checks";
 import { longDay, plural } from "./format";
-import { FEW, shareText, shiftText, type Counts, type Summary } from "./history";
+import { cleanOf, FEW, shareText, shiftText, type Counts, type Summary } from "./history";
 import { useLabState } from "./LabProvider";
 import type { Check, ResultHead } from "./types";
 
@@ -106,8 +106,20 @@ export const VERDICT: Record<Exclude<Verdict, "same">, string> = {
 const sideText = (counts: Counts) => (counts.measured ? shareText(counts) : "ни один разговор не удалось проверить");
 
 /**
+ * Two whole results side by side, as their share without an error found (lab/history, cleanPct): «без найденных
+ * ошибок 31 из 53 (58%) → сейчас 8 из 12 (67%)». The serious errors keep their own counts (seriousCompareText).
+ */
+const wholeText = (before: Counts, now: Counts, same: boolean) =>
+  `без найденных ошибок ${
+    before.measured && now.measured
+      ? shiftText(cleanOf(before), cleanOf(now), same, "сейчас")
+      : `${sideText(cleanOf(before))}, сейчас ${sideText(cleanOf(now))}`
+  }`;
+
+/**
  * The line under a check's number, in two parts: its first words (`head`, the way to the previous check) and the
- * rest. «Прошлая проверка, 3 октября: 22 из 53 (42%) → сейчас 4 из 12 (33%). Мало разговоров, чтобы судить.» The
+ * rest. «Прошлая проверка, 3 октября: без найденных ошибок 31 из 53 (58%) → сейчас 8 из 12 (67%). Мало разговоров,
+ * чтобы судить.» The
  * export of the previous check is not in the line: its link says it. A re-evaluation of the same conversations says
  * the difference is the evaluation's. Nothing before the first comparison, without a current result, or when the
  * checks are not comparable: that they are not compared is nothing to act on, and the history says why.
@@ -118,7 +130,7 @@ export function compareSentence(compare: Compare): { head: string; rest: string 
   const { before, now, verdict, direction } = overall;
   const same = direction === "same";
   const both = !!before.measured && !!now.measured;
-  const counts = both ? shiftText(before, now, same, "сейчас") : `${sideText(before)}, сейчас ${sideText(now)}`;
+  const counts = wholeText(before, now, same);
   if (compare.kind === "same-data")
     return {
       head: "Повторная оценка тех же разговоров",
@@ -139,7 +151,7 @@ export function compareParts(compare: Compare): { value: string; note: string } 
   const { before, now, verdict, direction } = overall;
   const same = direction === "same";
   const both = !!before.measured && !!now.measured;
-  const value = both ? shiftText(before, now, same, "сейчас") : `${sideText(before)}, сейчас ${sideText(now)}`;
+  const value = wholeText(before, now, same);
   if (compare.kind === "same-data")
     return {
       value,

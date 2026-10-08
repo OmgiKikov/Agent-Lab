@@ -21,8 +21,8 @@ import {
   type Verdict,
 } from "../../lab/compare";
 import { nameFromText } from "../../lab/criteria";
-import { longDay, pct } from "../../lab/format";
-import { shareText, type Counts } from "../../lab/history";
+import { longDay } from "../../lab/format";
+import { cleanPct, resultText, type Counts } from "../../lab/history";
 import { useLabState } from "../../lab/LabProvider";
 import type { RuleEntry } from "../../lab/problems";
 import { seriousFirst } from "../../lab/severity";
@@ -95,8 +95,10 @@ export function CompareDelta({
 }
 
 /**
- * The previous check beside a number: «↑ было 42% · 3 октября», opening it, and what may be read into the difference
- * (lab/compare, VERDICT). Coloured only beyond chance on other conversations; the same ones judged again say so.
+ * The previous check beside a number: «↑ было 58% · 3 октября» — its share without an error found, as the number says
+ * the current one (lab/history, cleanPct), the arrow up when that share grew — opening it, and what may be read into
+ * the difference (lab/compare, VERDICT). Coloured only beyond chance on other conversations: green when the errors
+ * fell, red when they grew; the same ones judged again say so.
  */
 export function Delta({
   to,
@@ -124,7 +126,8 @@ export function Delta({
   brief?: boolean;
 }) {
   const telling = !again && verdict === "beyond-chance";
-  const Icon = direction === "more" ? ArrowUp : direction === "fewer" ? ArrowDown : Equal;
+  // `direction` is the errors': more of them is less of the conversations without one.
+  const Icon = direction === "more" ? ArrowDown : direction === "fewer" ? ArrowUp : Equal;
   const note = again ? "Повторная оценка тех же разговоров." : verdict && verdict !== "same" ? VERDICT[verdict] : "";
   return (
     <>
@@ -142,7 +145,7 @@ export function Delta({
         )}
       >
         <Icon aria-hidden className="size-3.5" />
-        было {pct(before.failed, before.measured)}% · {longDay(at)}
+        было {cleanPct(before)}% · {longDay(at)}
       </Link>
       {note && !brief && <span>{note}</span>}
     </>
@@ -157,7 +160,7 @@ export function PreviousCheck({ check, line, className }: { check: Check; line: 
       <Link to={historyLink(check, line.id)} className={link}>
         Прошлая проверка
       </Link>
-      : {summary.measured ? shareText(summary) : "ни один разговор не удалось проверить"}
+      : {summary.measured ? resultText(summary) : "ни один разговор не удалось проверить"}
       {line.file ? ` · «${line.file}»` : ""} · {longDay(line.finishedAt)}
     </p>
   );

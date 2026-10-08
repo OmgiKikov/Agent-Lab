@@ -3,7 +3,8 @@ import { agentLine, headingOf, inlineText, quoteText, reliabilityWord } from "./
 import type { Problems, RuleEntry } from "./problems";
 import { seriousFirst, severityText } from "./severity";
 import type { ResultHead } from "./types";
-import { count, pct } from "./format";
+import { count } from "./format";
+import { cleanText } from "./history";
 
 const excerpt = (value: string, limit = 300) => value.trim().slice(0, limit).trimEnd();
 const cut = (value: string, limit = 300) => excerpt(value, limit) + (value.trim().length > limit ? "…" : "");
@@ -68,7 +69,7 @@ export function toneBrief(
     ...(filename ? [`Выгрузка «${short(filename, 160)}».`] : []),
     `В выборке ${count(result.sampled, "разговор", "разговора", "разговоров")}, проверка шла по\u00a0${count(criteria.length, "критерию", "критериям", "критериям")}.`,
     measured
-      ? `С ошибкой агента — ${failed}\u00a0из\u00a0${count(measured, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} (${pct(failed, measured)}%).`
+      ? `С ошибкой агента — ${failed}\u00a0из\u00a0${count(measured, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} · ${cleanText({ failed, measured })}.`
       : `Ни один разговор не удалось проверить.`,
     ...(measured && severity ? [severity] : []),
     `Без найденных ошибок — ${passed}. Не удалось проверить — ${unmeasured}\u00a0из\u00a0${result.sampled}, в счёт они не входят.`,

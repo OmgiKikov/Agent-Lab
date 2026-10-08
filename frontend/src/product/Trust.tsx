@@ -2,8 +2,8 @@ import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { reviewLink, type Check } from "../app/links";
 import { answersOf, answersSentence } from "../lab/answers";
-import { pct, plural } from "../lab/format";
-import { FEW } from "../lab/history";
+import { plural } from "../lab/format";
+import { cleanText, FEW } from "../lab/history";
 import type { ResultBrief } from "../lab/types";
 import { Step, Steps, STEP_ACTION, STEP_NEXT } from "./Checklist";
 
@@ -71,8 +71,13 @@ export function Trust({
                 <span className="whitespace-nowrap font-semibold">
                   {`${answers.counted}\u00a0из\u00a0${answers.measured}`}
                 </span>{" "}
-                {plural(answers.measured, "разговора", "разговоров", "разговоров")} (
-                {pct(answers.counted, answers.measured)}%)
+                {plural(answers.measured, "разговора", "разговоров", "разговоров")}
+                <span className="font-normal text-fg-3">
+                  {"\u00a0· "}
+                  <span className="whitespace-nowrap">
+                    {cleanText({ failed: answers.counted, measured: answers.measured })}
+                  </span>
+                </span>
               </>
             }
             text={sentence.rest.replace(/^\.\s*/, "")}

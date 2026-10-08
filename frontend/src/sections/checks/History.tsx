@@ -5,8 +5,8 @@ import { cn } from "@/lib/utils";
 import { historyLink, launchLink, type Check } from "../../app/links";
 import { SIMULATIONS } from "../../app/product";
 import { resultOf } from "../../lab/checks";
-import { count, longDay, pct, time } from "../../lab/format";
-import { comparisonText, loadHistory, type SavedCheck } from "../../lab/history";
+import { count, longDay, time } from "../../lab/format";
+import { cleanText, comparisonText, loadHistory, type SavedCheck } from "../../lab/history";
 import { MODE_NAME, useLaunches, type Launch, type Mode, type Outcome } from "../../lab/launches";
 import { useLabState } from "../../lab/LabProvider";
 import { Button } from "../../ui/Button";
@@ -23,14 +23,17 @@ const KEEPS: Record<Check, string> = {
   code: "Каждая завершённая проверка сохраняется со своими разговорами, критериями из кода агента и итогом. Новая выгрузка её не стирает.",
 };
 
-/** «22 из 53 проверенных разговоров — с ошибкой агента · 42%»: the number every row of the history starts with. */
+/** «22 из 53 проверенных разговоров — с ошибкой агента · 58% без найденных ошибок»: what every row starts with. */
 function CountLine({ failed, measured }: { failed: number; measured: number }) {
   if (!measured) return <>Ни один разговор не удалось проверить</>;
   return (
     <>
       <span className={cn("font-semibold tabular-nums", failed ? "text-bad" : "text-fg")}>{failed}</span> из{" "}
       {count(measured, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} — с ошибкой агента
-      <span className="text-fg-3"> · {pct(failed, measured)}%</span>
+      <span className="text-fg-3">
+        {" · "}
+        <span className="whitespace-nowrap">{cleanText({ failed, measured })}</span>
+      </span>
     </>
   );
 }
