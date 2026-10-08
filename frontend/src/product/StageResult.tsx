@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -16,6 +17,7 @@ export function StageResult({
   size = "hero",
   link,
   all,
+  delta,
   className,
 }: {
   failed: number;
@@ -26,6 +28,8 @@ export function StageResult({
   link?: (part: "bad" | "ok" | "none") => string;
   /** Where all of them open, at the end of the parts. */
   all?: string;
+  /** How the number stands to the previous check, on a line under it (checks/Compare, CompareDelta). */
+  delta?: ReactNode;
   className?: string;
 }) {
   const clean = Math.max(0, checked - failed);
@@ -69,6 +73,9 @@ export function StageResult({
               {pct(failed, checked)}%
             </span>
           </p>
+          {delta && (
+            <div className="mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-small text-fg-3">{delta}</div>
+          )}
         </>
       ) : (
         // Nothing measured is not «0 из 0»: no number to show, and no «без ошибок» to imply.

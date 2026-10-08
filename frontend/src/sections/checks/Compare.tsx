@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { ChevronRight } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronRight, Equal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { conversationsLink, historyLink, type Check } from "../../app/links";
 import { resultOf } from "../../lab/checks";
@@ -11,6 +11,7 @@ import {
   noLongerFound,
   seriousCompareText,
   useCompare,
+  VERDICT,
   VERDICT_WORD,
   wasText,
   type CheckLine,
@@ -18,7 +19,7 @@ import {
   type CompareRow,
 } from "../../lab/compare";
 import { nameFromText } from "../../lab/criteria";
-import { longDay } from "../../lab/format";
+import { longDay, pct } from "../../lab/format";
 import { shareText } from "../../lab/history";
 import { useLabState } from "../../lab/LabProvider";
 import type { RuleEntry } from "../../lab/problems";
@@ -98,6 +99,58 @@ export function CompareLine({
         )
       }
     />
+  );
+}
+
+/**
+ * «Стало лучше?» beside the number itself, as Braintrust sets a run beside its baseline: an arrow and the previous share,
+ * «↑ было 42% · 3 октября», opening that check, then what may be read into the difference. Red when the errors grew
+ * beyond chance, green when they fell; grey when the difference may be chance, the conversations are few, or the same
+ * ones were judged again. The serious comparison is in its tooltip. Nothing when there is nothing to compare with; when
+ * the service did not answer, a quiet «Повторить».
+ */
+export function CompareDelta({ check, compare, serious }: { check: Check; compare: Compare | null; serious?: number }) {
+  const asked = useCompare(check);
+  if (!compare && asked.isError)
+    return (
+      <button
+        type="button"
+        onClick={() => void asked.refetch()}
+        disabled={asked.isFetching}
+        className="rounded-sm text-small text-fg-3 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
+      >
+        Сравнение с прошлой проверкой не загрузилось · Повторить
+      </button>
+    );
+  const parts = compare && compareParts(compare);
+  const overall = compare?.overall;
+  if (!compare?.previous || !parts || !overall?.before.measured) return null;
+  const { before, direction, verdict } = overall;
+  const again = compare.kind === "same-data";
+  const telling = !again && verdict === "beyond-chance";
+  const Icon = direction === "more" ? ArrowUp : direction === "fewer" ? ArrowDown : Equal;
+  const note = again ? "Повторная оценка тех же разговоров." : verdict && verdict !== "same" ? VERDICT[verdict] : "";
+  const grave = serious ? seriousCompareText(compare, serious) : null;
+  return (
+    <>
+      <Link
+        to={historyLink(check, compare.previous.id)}
+        aria-label={`Прошлая проверка, ${longDay(compare.previous.finishedAt)}: ${parts.value}`}
+        title={[parts.value, grave].filter(Boolean).join("\n")}
+        className={cn(
+          "inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-small font-medium tabular-nums transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60",
+          telling && direction === "more"
+            ? "bg-bad/10 text-bad hover:bg-bad/15"
+            : telling && direction === "fewer"
+              ? "bg-ok/10 text-ok hover:bg-ok/15"
+              : "bg-inset text-fg-2 hover:bg-hover",
+        )}
+      >
+        <Icon aria-hidden className="size-3.5" />
+        было {pct(before.failed, before.measured)}% · {longDay(compare.previous.finishedAt)}
+      </Link>
+      {note && <span>{note}</span>}
+    </>
   );
 }
 
