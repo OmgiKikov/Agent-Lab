@@ -17,10 +17,12 @@ import {
   type CheckLine,
   type Compare,
   type CompareRow,
+  type Direction,
+  type Verdict,
 } from "../../lab/compare";
 import { nameFromText } from "../../lab/criteria";
 import { longDay, pct } from "../../lab/format";
-import { shareText } from "../../lab/history";
+import { shareText, type Counts } from "../../lab/history";
 import { useLabState } from "../../lab/LabProvider";
 import type { RuleEntry } from "../../lab/problems";
 import { seriousFirst } from "../../lab/severity";
@@ -125,18 +127,56 @@ export function CompareDelta({ check, compare, serious }: { check: Check; compar
   const parts = compare && compareParts(compare);
   const overall = compare?.overall;
   if (!compare?.previous || !parts || !overall?.before.measured) return null;
-  const { before, direction, verdict } = overall;
-  const again = compare.kind === "same-data";
+  const grave = serious ? seriousCompareText(compare, serious) : null;
+  return (
+    <Delta
+      to={historyLink(check, compare.previous.id)}
+      at={compare.previous.finishedAt}
+      before={overall.before}
+      direction={overall.direction}
+      verdict={overall.verdict}
+      again={compare.kind === "same-data"}
+      label={parts.value}
+      title={[parts.value, grave].filter(Boolean).join("\n")}
+    />
+  );
+}
+
+/**
+ * The previous check beside a number: «↑ было 42% · 3 октября», opening it, and what may be read into the difference
+ * (lab/compare, VERDICT). Coloured only beyond chance on other conversations; the same ones judged again say so.
+ */
+export function Delta({
+  to,
+  at,
+  before,
+  direction,
+  verdict,
+  again,
+  label,
+  title,
+}: {
+  to: string;
+  /** When the previous check finished. */
+  at: string;
+  before: Counts;
+  direction: Direction | null | undefined;
+  verdict: Verdict | null | undefined;
+  /** The same conversations judged again: the difference is the evaluation's. */
+  again: boolean;
+  /** Both sides in words, for a screen reader: «22 из 53 (42%) → сейчас 4 из 12 (33%)». */
+  label: string;
+  title?: string;
+}) {
   const telling = !again && verdict === "beyond-chance";
   const Icon = direction === "more" ? ArrowUp : direction === "fewer" ? ArrowDown : Equal;
   const note = again ? "Повторная оценка тех же разговоров." : verdict && verdict !== "same" ? VERDICT[verdict] : "";
-  const grave = serious ? seriousCompareText(compare, serious) : null;
   return (
     <>
       <Link
-        to={historyLink(check, compare.previous.id)}
-        aria-label={`Прошлая проверка, ${longDay(compare.previous.finishedAt)}: ${parts.value}`}
-        title={[parts.value, grave].filter(Boolean).join("\n")}
+        to={to}
+        aria-label={`Прошлая проверка, ${longDay(at)}: ${label}`}
+        title={title}
         className={cn(
           "inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1 text-small font-medium tabular-nums transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60",
           telling && direction === "more"
@@ -147,7 +187,7 @@ export function CompareDelta({ check, compare, serious }: { check: Check; compar
         )}
       >
         <Icon aria-hidden className="size-3.5" />
-        было {pct(before.failed, before.measured)}% · {longDay(compare.previous.finishedAt)}
+        было {pct(before.failed, before.measured)}% · {longDay(at)}
       </Link>
       {note && <span>{note}</span>}
     </>

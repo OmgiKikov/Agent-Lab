@@ -69,8 +69,8 @@ export const criterionLink = (
   extra: Record<string, string | null | undefined> = {},
 ) => `${ROOT[check]}/criteria${query({ c: ruleId, ...extra })}`;
 
-/** The saved checks of a check, one of them open when given. */
-export const historyLink = (check: Check, id?: string | null) => `${ROOT[check]}/history${query({ id })}`;
+/** The saved checks of a check, or one of them on its own page (checks/RunPage; the latest one is «Итог»). */
+export const historyLink = (check: Check, id?: string | null) => `${ROOT[check]}/history${id ? `/${enc(id)}` : ""}`;
 
 /** New work and its frozen report live inside the check they belong to. */
 export const launchLink = (check: Check, id?: string) => `${ROOT[check]}/${id ? `launches/${enc(id)}` : "launch"}`;

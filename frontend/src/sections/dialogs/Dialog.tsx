@@ -9,7 +9,8 @@ import { longDay, plural } from "../../lab/format";
 import { personaName } from "../../lab/look";
 import { download, secondLine } from "../../lab/problemReport";
 import { useReview, useTurns, type Decision, type Example } from "../../lab/problems";
-import type { Rule } from "../../lab/types";
+import type { Rule, Turn } from "../../lab/types";
+import { saysError } from "../../lab/verdicts";
 import { Conversation, type Mark } from "../../product/Conversation";
 import { Facts } from "../../product/Facts";
 import { MarkNo } from "../../product/MarkNo";
@@ -85,7 +86,8 @@ function Verdicts({
   shownOf: (r: Rule) => Example;
   lit: number | null;
   onLit: (n: number | null) => void;
-  onDecide: (e: Example, d: Decision) => void;
+  /** Without it the verdicts are of a past check: the answers given on them are said, not asked. */
+  onDecide?: (e: Example, d: Decision) => void;
 }) {
   const errors = rules.filter((r) => r.status === "FAIL");
   const kept = rules.filter((r) => r.status === "PASS");
@@ -124,11 +126,18 @@ function Verdicts({
           </p>
           <p className="mt-1 text-read text-fg-2">{r.reason}</p>
           {second && <p className="mt-1 text-small text-fg-3">{second}</p>}
-          {(r.status === "FAIL" || r.status === "PASS") && (
-            <div className="mt-3">
-              <ReviewButtons size="sm" example={shown} onDecide={(d) => onDecide(shown, d)} />
-            </div>
-          )}
+          {(r.status === "FAIL" || r.status === "PASS") &&
+            (onDecide ? (
+              <div className="mt-3">
+                <ReviewButtons size="sm" example={shown} onDecide={(d) => onDecide(shown, d)} />
+              </div>
+            ) : (
+              shown.review && (
+                <p className="mt-2 text-small text-fg-2">
+                  Ваш ответ: {saysError(shown.status, shown.review) ? "ошибка есть" : "ошибки нет"}
+                </p>
+              )
+            ))}
         </div>
       </li>
     );
@@ -161,12 +170,18 @@ export function Dialog({
   criteria,
   named,
   onBack,
+  saved,
 }: {
   row: DialogRow;
   criteria: Criterion[];
   /** Names and numbers of a run's criteria that applied nowhere in it (sections/dialogs/model.ts, frozenNames). */
   named?: Named;
   onBack?: () => void;
+  /**
+   * A conversation of a past check (checks/RunPage): its text as the check saved it (null when it was not saved), and
+   * no answers asked — they are given on the latest check.
+   */
+  saved?: { turns: Turn[] | null };
 }) {
   const [params, setParams] = useSearchParams();
   const { state } = useLabState();
@@ -193,7 +208,9 @@ export function Dialog({
     runId: row.runId,
     index: row.index,
   } as Example;
-  const { turns, loading, error } = useTurns(probe);
+  const fetched = useTurns(saved ? undefined : probe);
+  const turns = saved ? (saved.turns ?? undefined) : fetched.turns;
+  const { loading, error } = fetched;
   const byRule = criteriaByRule(criteria);
   const find = (ruleId: string) => byRule(row.source, ruleId);
   const rules = [...row.rules].sort((a, b) => (ORDER[a.status] ?? 9) - (ORDER[b.status] ?? 9));
@@ -340,6 +357,8 @@ export function Dialog({
                 </>
               ) : turns ? (
                 <Conversation turns={turns} marks={marks} lit={lit} onLit={(on, n) => setLit(on && n ? n : null)} />
+              ) : saved ? (
+                <p className="text-body text-fg-3">Текст разговора не сохранился.</p>
               ) : (
                 <p className="text-read text-fg">{row.title}</p>
               )}
@@ -352,7 +371,7 @@ export function Dialog({
                 shownOf={shownOf}
                 lit={lit}
                 onLit={setLit}
-                onDecide={decide}
+                onDecide={saved ? undefined : decide}
               />
             )}
           </>

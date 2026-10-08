@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams } from "react-router-dom";
 import { ArrowRight, RotateCcw, Square } from "lucide-react";
 import { Header } from "../../app/Header";
-import { historyLink, launchLink, runLink, stageRoot } from "../../app/links";
+import { historyLink, launchLink, runLink } from "../../app/links";
 import { api } from "../../lab/api";
 import { MODE_NAME, useLaunch, useQuestions, type Mode, type Pair } from "../../lab/launches";
 import { count, longDay, time } from "../../lab/format";
@@ -245,9 +245,7 @@ export function LaunchReport() {
           {Object.entries(record.modes).map(([mode, result]) => {
             const m = result.metric;
             const href = result.checkId
-              ? state?.checks[record.check]?.checkId === result.checkId
-                ? stageRoot(record.check)
-                : historyLink(record.check, result.checkId)
+              ? historyLink(record.check, result.checkId)
               : result.runId
                 ? runLink(result.runId)
                 : result.questionsId
