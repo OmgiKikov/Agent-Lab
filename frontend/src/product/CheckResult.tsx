@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import type { CheckLine } from "../lab/agents";
 import { longDay, plural } from "../lab/format";
@@ -6,7 +7,7 @@ import { longDay, plural } from "../lab/format";
  * The result of one check in a line: its name and date, errors of measured, the split as a thin bar. Each check has its
  * own line: the two are never added up. On an agent's card and on its dataset.
  */
-export function CheckResult({ name, line }: { name: string; line: CheckLine }) {
+export function CheckResult({ name, line }: { name: ReactNode; line: CheckLine }) {
   const { failed, measured, unmeasured } = line;
   const parts = [
     { key: "bad", n: failed, cls: "bg-bad" },

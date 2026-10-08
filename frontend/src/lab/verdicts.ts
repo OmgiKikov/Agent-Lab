@@ -104,6 +104,15 @@ export function queueOf(data: Problems, queue: Queue, ruleId?: string | null, so
   return [...all.filter((v) => v.example.status === "FAIL"), ...all.filter((v) => v.example.status === "PASS")];
 }
 
+/**
+ * Whether a person still has to check the model's answers on a run: on 10 of its errors at least, all of them when
+ * fewer, as after a check (product/Trust, answersPending).
+ */
+export function runAnswersPending(data: Problems): boolean {
+  const errors = verdictsOf(data, null, "sim").filter((v) => v.example.status === "FAIL");
+  return errors.filter((v) => v.example.review).length < Math.min(10, errors.length);
+}
+
 /** People's decisions on verdicts: each verdict once; an older decision on a whole simulated conversation once. */
 export function decisions(data: Problems): { agree: number; disagree: number } {
   const seen = new Set<string>();

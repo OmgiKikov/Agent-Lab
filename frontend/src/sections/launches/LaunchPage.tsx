@@ -28,6 +28,7 @@ import { codeSources } from "../../lab/tone";
 import type { Check } from "../../lab/types";
 import { Button, buttonClass } from "../../ui/Button";
 import { MarkNo } from "../../product/MarkNo";
+import { PAPER, SimulationPicture } from "../../product/Pictures";
 import { UploadButton } from "../../product/UploadLogs";
 import { shownName } from "../data/DatasetInfo";
 import { useConnectionMemory } from "../agent/Connection";
@@ -60,8 +61,6 @@ const OPTIONS: { id: Mode; icon: typeof Database; description: string; live: boo
 
 const bar = "block h-1.5 rounded-full bg-fg/10";
 /** The grid paper the pictures of the ways lie on, as the checks of a dataset show theirs. */
-const PAPER =
-  "rounded-control bg-inset [background-image:radial-gradient(rgb(var(--fg-4)/0.35)_1px,transparent_1px)] [background-size:8px_8px]";
 
 /** What checking the recorded answers gives: the agent's reply with the quote the check found marked. */
 function RecordedPicture() {
@@ -93,23 +92,6 @@ function LivePicture() {
           <span className={cn(bar, "w-3/4")} />
           <span className={cn(bar, "w-3/5")} />
         </div>
-      </div>
-    </div>
-  );
-}
-
-/** What the simulations give: clients of different kinds playing the scenarios through. */
-function SimulationPicture() {
-  return (
-    <div className="flex h-full flex-col justify-center gap-2 px-3">
-      <div className="flex -space-x-1">
-        {["bg-mark", "bg-run/40", "bg-fg/20"].map((tint) => (
-          <span key={tint} className={cn("size-4 rounded-full ring-2 ring-inset", tint)} />
-        ))}
-      </div>
-      <div className="space-y-1.5 rounded-lg bg-list p-2 ring-1 ring-line">
-        <span className={cn(bar, "w-14")} />
-        <span className={cn(bar, "w-9")} />
       </div>
     </div>
   );

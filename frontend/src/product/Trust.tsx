@@ -19,8 +19,8 @@ export function answersPending(result: ResultBrief | null | undefined): boolean 
 /**
  * The steps right under a check's number (product/Checklist), a row each, in the order they are taken: «Ваша проверка»,
  * how far it can be trusted; «Серьёзные ошибки» (`serious`, product/Severity, SeverityStatus); the main problem
- * (`problem`); «Прошлая проверка» (`compare`, checks/Compare, CompareLine). Leading a page (`lead`), the first step to
- * do has the black button. What counts is a person's answer on what the model found — two models agreeing is not proof they are
+ * (`problem`). How it stands to the previous check is beside the number (checks/Compare, CompareDelta). Leading a page
+ * (`lead`), the first step to do has the black button. What counts is a person's answer on what the model found — two models agreeing is not proof they are
  * right (Hamel Husain, «Using LLM-as-a-judge»; Kim et al. 2025). Before any answer the row leads to giving some. From
  * the first answer it counts the same conversations with the person's answers taken in and says what they did: the
  * errors they took back, the misses they found in the cases «без ошибки», how many verdicts they checked (lab/answers).
@@ -32,8 +32,6 @@ export function Trust({
   check,
   serious,
   problem,
-  compare,
-  compact,
   lead,
   className,
 }: {
@@ -42,9 +40,6 @@ export function Trust({
   serious?: ReactNode;
   /** The step after the serious errors: the main problem to open (checks/ResultPage). */
   problem?: ReactNode;
-  compare?: ReactNode;
-  /** A narrow column: each row's name above it (product/Checklist). */
-  compact?: boolean;
   /** The steps lead the page: the answers, while they are to do, are its one black button. */
   lead?: boolean;
   className?: string;
@@ -63,7 +58,7 @@ export function Trust({
   );
   return (
     <div className={className}>
-      <Steps compact={compact}>
+      <Steps>
         {sentence ? (
           <Step
             state={enough ? "done" : "todo"}
@@ -101,7 +96,6 @@ export function Trust({
         )}
         {serious}
         {problem}
-        {compare}
       </Steps>
       {answers.measured > 0 && answers.measured < FEW && (
         <p className="mt-2 text-small text-fg-3">{`Проверено меньше ${FEW}\u00a0разговоров, поэтому вывод предварительный.`}</p>

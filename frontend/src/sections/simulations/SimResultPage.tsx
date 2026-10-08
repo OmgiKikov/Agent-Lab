@@ -12,7 +12,7 @@ import { summarySentence } from "../../lab/problemReport";
 import { isRunning, runTitle, useRun } from "../../lab/runs";
 import type { Problems } from "../../lab/problems";
 import type { LabRun, LabState, RunSummary } from "../../lab/types";
-import { saysError, verdictsOf } from "../../lab/verdicts";
+import { runAnswersPending, saysError, verdictsOf } from "../../lab/verdicts";
 import { Step, Steps, STEP_ACTION, STEP_NEXT } from "../../product/Checklist";
 import { StageResult } from "../../product/StageResult";
 import { Button } from "../../ui/Button";
@@ -167,7 +167,7 @@ function RunSteps({ run, data, list }: { run: RunSummary; data: Problems; list: 
   const verdicts = verdictsOf(data, null, "sim");
   const errors = verdicts.filter((v) => v.example.status === "FAIL");
   const answered = verdicts.filter((v) => v.example.review);
-  const pending = errors.filter((v) => v.example.review).length < Math.min(10, errors.length);
+  const pending = runAnswersPending(data);
   const said = answered.filter((v) => saysError(v.example.status, v.example.review!)).length;
   const top = queueOf(list, "sim")[0];
   if (!errors.length && !top) return null;
