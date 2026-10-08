@@ -175,6 +175,51 @@ export type Card = {
   weight?: number | null;
   /** The business scenario of the catalog the card's conversation is in. */
   scenario?: { id: string; title: string; categoryId: string; category: string } | null;
+  /** How the customer writes, counted from their own messages in the episode (backend/lab/domain/cards.py, style). */
+  style?: CardStyle;
+  /** The part of the logged conversation the card describes: its messages, how the customer came to the task. */
+  episode?: { start: number; end: number; entry?: string | null; channel?: string | null };
+  /** What the customer can say about each identifier of the agent's customers, by its key. */
+  identifiers?: Record<string, { label: string; value: "knows" | "unknown" | "looks_up"; basis: "log" | "assumption" }>;
+};
+export type CardStyle = {
+  messages: number;
+  words: number;
+  greeting: boolean;
+  polite: boolean;
+  capital: number | null;
+  endMark: number | null;
+};
+/** One business scenario of the catalog: how many conversations of the export are in it and their share. */
+export type CatalogScenario = {
+  id: string;
+  title: string;
+  description: string;
+  count: number;
+  share: number;
+  rare: boolean;
+};
+export type CatalogCategory = {
+  id: string;
+  title: string;
+  description: string;
+  count: number;
+  share: number;
+  scenarios: CatalogScenario[];
+};
+/** The catalog of business scenarios (GET /api/catalog): its categories, and what became of the export's conversations. */
+export type Catalog = {
+  revision: string;
+  builtAt?: string;
+  categories: CatalogCategory[];
+  totals: {
+    dialogues: number;
+    inDomain: number;
+    outOfDomain: number;
+    unread: number;
+    placed: number;
+    unplaced: number;
+  };
 };
 export type LogResult = {
   error?: string | null;
@@ -256,7 +301,14 @@ export type DeckChecks = {
   identifierAnswers: Record<string, number>;
 };
 /** check: null when the deck was built before any check: its cards carry no criteria. */
-export type Deck = { check: Check | null; cards: Card[]; createdAt?: string; checks?: DeckChecks };
+export type Deck = {
+  check: Check | null;
+  cards: Card[];
+  createdAt?: string;
+  checks?: DeckChecks;
+  /** The revision of the catalog the cards were placed by: its counts belong to these cards only while it matches. */
+  catalogRevision?: string | null;
+};
 export type Job = {
   kind: string | null;
   running: boolean;

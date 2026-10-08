@@ -15,15 +15,14 @@ import { Conversation } from "../../product/Conversation";
 import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
 import { Label } from "../../ui/Label";
+import { Tag } from "../../ui/Tag";
 import { Dot, dotOf } from "./parts";
-import { Profile } from "./Profile";
+import { Fold, Profile, summaryClass, TaskHead } from "./Profile";
 
 /** How the scenario's record stands: still loading, failed to load, or here (possibly empty). */
 export type RecordState = "loading" | "error" | "ready";
 
 const WORD_TONE: Record<Played["status"], string> = { FAIL: "text-bad", PASS: "text-ok", UNMEASURED: "text-fg-3" };
-const summaryClass =
-  "inline-flex cursor-pointer list-none items-center gap-1 rounded-sm text-small text-fg-3 transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60 [&::-webkit-details-marker]:hidden";
 
 function Section({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -31,15 +30,6 @@ function Section({ label, children }: { label: string; children: ReactNode }) {
       <Label>{label}</Label>
       {children}
     </section>
-  );
-}
-
-/** «›» that turns when its folded block opens. */
-function Fold() {
-  return (
-    <span aria-hidden className="transition-transform group-open:rotate-90">
-      ›
-    </span>
   );
 }
 
@@ -144,7 +134,7 @@ function Source({ id }: { id: string }) {
   const [open, setOpen] = useState(false);
   const { turns, loading, error } = useTurns(open ? ({ source: "log", dialogueId: id } as Example) : undefined);
   return (
-    <details className="group mt-2" onToggle={(e) => setOpen(e.currentTarget.open)}>
+    <details className="group" onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary className={summaryClass}>
         Настоящий разговор, из которого собран
         <Fold />
@@ -232,6 +222,21 @@ export function ScenarioView({
     );
   // Tone of voice has one topic, named as the check: the topic is said only when it adds something.
   const topic = check && card.topic !== CHECK_NAME[check] ? card.topic : null;
+  // What a person opens only when they need it: the text the synthetic customer reads, the real conversation.
+  const folds = (
+    <>
+      {summary !== card.situation.trim() && (
+        <details className="group">
+          <summary className={summaryClass}>
+            Как это играет синтетический клиент
+            <Fold />
+          </summary>
+          <p className="mt-2 max-w-[66ch] whitespace-pre-line text-read text-fg-2">{card.situation}</p>
+        </details>
+      )}
+      {card.sourceDialogueId && <Source id={card.sourceDialogueId} />}
+    </>
+  );
   return (
     <article className="min-h-0 overflow-auto" aria-label={card.name}>
       {onBack && (
@@ -245,69 +250,59 @@ export function ScenarioView({
         </button>
       )}
       <div className="max-w-4xl px-4 pb-16 pt-5 lg:px-10 lg:pt-7">
-        <p className="text-small text-fg-3">
-          {card.scenario ? `${card.scenario.category} · ${card.scenario.title} · ` : ""}
-          {topic ? `${topic} · ` : ""}
-          <span className="text-fg-2">{card.origin.toLowerCase()}</span>
-          {check ? ` · ${BY_CRITERIA[check]}` : ""}
+        <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-small text-fg-3">
+          {card.scenario && (
+            <>
+              <span>{card.scenario.category}</span>
+              <span aria-hidden>›</span>
+              <span className="text-fg-2">{card.scenario.title}</span>
+            </>
+          )}
+          {topic && <span>· {topic}</span>}
+          <span className="ml-1 inline-flex gap-1.5">
+            <Tag tone={card.sets?.includes("stress") ? "warn" : "neutral"}>{card.origin.toLowerCase()}</Tag>
+            {check ? <Tag>{BY_CRITERIA[check]}</Tag> : <Tag title={UNJUDGED}>без критериев</Tag>}
+          </span>
         </p>
         <h2 className="mt-2 text-balance text-title font-semibold text-fg">{card.name}</h2>
-        <div className="mt-5 flex flex-wrap items-center gap-3">
-          <Button
-            variant="primary"
-            icon={Play}
-            onClick={onPlay}
-            disabled={busy || !playable}
-            title={busy ? "Сейчас идёт другая задача" : !playable ? UNJUDGED : undefined}
-          >
-            Сыграть этот сценарий
-          </Button>
-        </div>
-        <Section label="Результаты">
-          {record ? <Results record={record} state={state} named={named} onPlay={playable ? onPlay : null} /> : pending}
-        </Section>
-        <Section label="Клиент">
-          {card.knowledge ? <Profile card={card} /> : <p className="mt-2 max-w-[66ch] text-read text-fg">{summary}</p>}
-          {summary !== card.situation.trim() && (
-            <details className="group mt-2">
-              <summary className={summaryClass}>
-                Как это играет синтетический клиент
-                <Fold />
-              </summary>
-              <p className="mt-2 max-w-[66ch] whitespace-pre-line text-read text-fg-2">{card.situation}</p>
-            </details>
-          )}
-          {card.sourceDialogueId && <Source id={card.sourceDialogueId} />}
-        </Section>
-        <Section label="Клиент начинает так">
-          <div className="mt-3 space-y-3 rounded-sheet bg-inset px-4 py-4 sm:px-6">
-            {[
-              ["обычный клиент", card.opening] as const,
-              ...openings.map(([id, text]) => [personaName(state.personas, id), text] as const),
-            ].map(([who, text]) => (
-              <div key={who} className="flex flex-col items-end gap-1">
-                <span className="text-small text-fg-3">{who}</span>
-                <span className="max-w-[78%] rounded-xl rounded-br-sm bg-customer px-3 py-2 text-read text-customer-fg">
-                  {text}
-                </span>
-              </div>
-            ))}
-          </div>
-        </Section>
-        {playable ? (
+        {/* Built before any check, a card is read, not played: no button that cannot be pressed, no empty results. */}
+        {playable && (
+          <>
+            <div className="mt-5 flex flex-wrap items-center gap-3">
+              <Button
+                variant="primary"
+                icon={Play}
+                onClick={onPlay}
+                disabled={busy}
+                title={busy ? "Сейчас идёт другая задача" : undefined}
+              >
+                Сыграть этот сценарий
+              </Button>
+            </div>
+            <Section label="Результаты">
+              {record ? <Results record={record} state={state} named={named} onPlay={onPlay} /> : pending}
+            </Section>
+          </>
+        )}
+        <TaskHead
+          card={card}
+          openings={openings.map(([id, text]) => [personaName(state.personas, id), text] as const)}
+        />
+        {card.knowledge ? (
+          <Profile card={card} folds={folds} />
+        ) : (
+          <>
+            <p className="mt-6 max-w-[66ch] text-read text-fg">{summary}</p>
+            <div className="mt-4 space-y-2">{folds}</div>
+          </>
+        )}
+        {playable && (
           <Section label={`Что проверят · ${count(card.criteria.length, "критерий", "критерия", "критериев")}`}>
             <ul className="mt-2 divide-y divide-line">
               {criteria.map((x) => (
                 <CriterionRow key={x.id} x={x} own={named.get(x.id)} check={check} />
               ))}
             </ul>
-          </Section>
-        ) : (
-          <Section label="Что проверят">
-            <p className="mt-2 max-w-[66ch] text-read text-fg-2">
-              Критериев нет: сценарии собраны без проверки. Чтобы их сыграть, проверьте разговоры и соберите сценарии
-              заново.
-            </p>
           </Section>
         )}
         {world && (
