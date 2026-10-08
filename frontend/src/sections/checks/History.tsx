@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { historyLink, launchLink, type Check } from "../../app/links";
+import { SIMULATIONS } from "../../app/product";
 import { resultOf } from "../../lab/checks";
 import { count, longDay, pct, time } from "../../lab/format";
 import { comparisonText, loadHistory, type SavedCheck } from "../../lab/history";
@@ -71,7 +72,10 @@ function CheckRow({
   );
 }
 
-const ORDER: Mode[] = ["dataset", "questions", "simulations"];
+/** The ways a launch checked, in order; the simulations' only while they are shown (app/product). */
+const ORDER = (["dataset", "questions", "simulations"] as Mode[]).filter(
+  (mode) => mode !== "simulations" || SIMULATIONS,
+);
 
 /**
  * A launch in the history, one row whatever it checked: the first way it checked gives the number (the recorded
@@ -153,10 +157,14 @@ export function HistoryPage({ check }: { check: Check }) {
   const launches = useLaunches(check, `${state?.job.id}-${state?.job.running}`);
   // One list, newest first: a launch is one row with all it checked; a saved check that came from no launch (an older
   // one, or a check of chosen criteria) is a row of its own.
-  const fromLaunch = new Set((launches.data?.launches ?? []).map((l) => l.modes.dataset?.checkId).filter(Boolean));
+  // A launch that only played the simulations is not in the list while they are hidden (app/product).
+  const shown = (launches.data?.launches ?? []).filter(
+    (l) => ORDER.some((mode) => l.modes[mode]) || !l.modes.simulations,
+  );
+  const fromLaunch = new Set(shown.map((l) => l.modes.dataset?.checkId).filter(Boolean));
   const previousOf = (saved?: SavedCheck) => checks.find((item) => item.id === saved?.comparison.previousId);
   const rows = [
-    ...(launches.data?.launches ?? []).map((launch) => ({ at: launch.startedAt, launch, saved: undefined })),
+    ...shown.map((launch) => ({ at: launch.startedAt, launch, saved: undefined })),
     ...checks
       .filter((saved) => !fromLaunch.has(saved.id))
       .map((saved) => ({ at: saved.finishedAt, launch: undefined, saved })),
