@@ -19,6 +19,7 @@ import { Menu } from "../../ui/Menu";
 import { Segmented } from "../../ui/Segmented";
 import { CheckHeader } from "../checks/CheckHeader";
 import { BeforeCheck } from "./BeforeCheck";
+import { ToneCriteria } from "./ToneCriteria";
 import { RulesSheet } from "../judges/RulesSheet";
 import { useJudges } from "../../lab/judges";
 import { CodeView } from "./CodeView";
@@ -139,7 +140,8 @@ export function CriteriaPage({ check }: { check: Check }) {
           ) : undefined
         }
       />
-      <RulesSheet check={check} open={rulesOpen} onClose={() => set((n) => n.delete("rules"), false)} />
+      {/* Tone of voice keeps its rules on the page itself (ToneCriteria); Точность, in this sheet. */}
+      {!tone && <RulesSheet check={check} open={rulesOpen} onClose={() => set((n) => n.delete("rules"), false)} />}
     </>
   );
   const rulesButton = (
@@ -171,6 +173,16 @@ export function CriteriaPage({ check }: { check: Check }) {
         </div>
       </div>
     );
+  // Tone of voice: one page before and after a check — its rules, and every criterion as a card that opens.
+  if (tone)
+    return (
+      <div className="flex h-full flex-col">
+        {header}
+        <div className="min-h-0 flex-1 overflow-auto">
+          <ToneCriteria data={data} list={list} />
+        </div>
+      </div>
+    );
   // Before the first check the criteria are the step after the rules: the ones collected from them, or where they come
   // from. After it, every criterion with its verdicts.
   if (!list.length)
@@ -178,7 +190,7 @@ export function CriteriaPage({ check }: { check: Check }) {
       <div className="flex h-full flex-col">
         {header}
         <div className="min-h-0 flex-1 overflow-auto">
-          <BeforeCheck check={check} rules={judges.selected} onRules={() => set((n) => n.set("rules", "1"), false)} />
+          <BeforeCheck rules={judges.selected} onRules={() => set((n) => n.set("rules", "1"), false)} />
         </div>
       </div>
     );

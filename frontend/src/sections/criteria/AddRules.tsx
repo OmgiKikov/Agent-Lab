@@ -8,7 +8,8 @@ import { api, upload } from "../../lab/api";
 import { count } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { useSource } from "../../lab/problems";
-import { rememberName, rememberText, savedName, savedText, TONE_ID } from "../../lab/tone";
+import { rememberName, rememberText, savedName, savedText, TONE_ID, toneResult } from "../../lab/tone";
+import { SIMULATIONS } from "../../app/product";
 import { Button } from "../../ui/Button";
 import { Textarea } from "../../ui/Field";
 import { Menu } from "../../ui/Menu";
@@ -80,9 +81,11 @@ function TextPicture() {
  * its name and its text, with «Собрать критерии»; the model collects them, and the criteria come in the step's place
  * (BeforeCheck). Criteria are collected against the conversations, so without a dataset the step says so. Rules saved
  * without criteria (a collection that failed, rules taken before criteria were collected) open as the text given. The
- * text being written survives a reload (lab/tone).
+ * text being written survives a reload (lab/tone). `replacing` — other rules in place of the current ones (ToneCriteria,
+ * «Заменить правила»): the same cards from the start, what the replacement takes away said above them, the current
+ * document collected anew as one more way, and «Отмена».
  */
-export function AddRules() {
+export function AddRules({ replacing, onDone }: { replacing?: boolean; onDone?: () => void } = {}) {
   const { state, refresh } = useLabState();
   const hasSource = !!state?.sources.some((s) => s.id === TONE_ID);
   const source = useSource(hasSource ? TONE_ID : null);
@@ -92,16 +95,19 @@ export function AddRules() {
   const [over, setOver] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const take = useTakeRules(state!, () => void refresh());
+  const take = useTakeRules(state!, () => {
+    void refresh();
+    onDone?.();
+  });
   // What the person typed wins over the saved rules; until they type, the step shows the rules.
   const edited = useRef(!!text);
   const area = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
-    if (!source.data || edited.current) return;
+    if (!source.data || edited.current || replacing) return;
     setText(source.data.content);
     setName(source.data.origin);
     setOpen(true);
-  }, [source.data]);
+  }, [source.data, replacing]);
   const change = (value: string) => {
     edited.current = true;
     setText(value);
@@ -152,7 +158,20 @@ export function AddRules() {
       rememberText("");
       edited.current = false;
       await refresh();
+      onDone?.();
     });
+  // The current document collected anew: the same rules, the criteria read again.
+  const again = () =>
+    run(async () => {
+      await api("/api/tone-of-voice/criteria", {});
+      await refresh();
+      onDone?.();
+    });
+  const result = !!toneResult(state);
+  const deck = state?.cards?.check === "tone" && !!state.cards.cards.length;
+  const replaces =
+    replacing &&
+    `Новые правила заменят текущие.${result ? " Итог Tone of voice по прежним правилам уйдёт в историю." : ""}${deck && SIMULATIONS ? " Сценарии из него сбросятся." : ""} Уточнения останутся там, где цитата из правил не изменилась.`;
   const noDataset = !dialogues && (
     <p className="mt-4 max-w-[62ch] text-body text-fg-2">
       Критерии собираются по разговорам, поэтому сначала нужен датасет.{" "}
@@ -229,6 +248,7 @@ export function AddRules() {
 
   return (
     <div className="mt-8">
+      {replaces && <p className="mb-4 max-w-[68ch] text-body text-fg-2">{replaces}</p>}
       <ul className={cn("grid max-w-[920px] gap-3", take.sources.length ? "sm:grid-cols-3" : "sm:grid-cols-2")}>
         <li>
           <label
@@ -328,6 +348,28 @@ export function AddRules() {
       </ul>
       {noDataset}
       {failed}
+      {replacing && (
+        <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-2">
+          {hasSource && (
+            <button
+              type="button"
+              disabled={waiting || !dialogues}
+              onClick={() => void again()}
+              className="rounded-sm text-body font-medium text-run hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60 disabled:opacity-40"
+            >
+              Собрать критерии заново из «{source.data?.origin ?? "текущих правил"}»
+            </button>
+          )}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onDone}
+            className="rounded-sm text-body font-medium text-fg-3 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
+          >
+            Отмена
+          </button>
+        </div>
+      )}
     </div>
   );
 }
