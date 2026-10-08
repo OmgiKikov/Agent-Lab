@@ -10,10 +10,11 @@ calls the stand recorded.
 from collections.abc import Sequence
 from typing import Protocol
 
-from . import quotes
+from . import match, quotes
 from .export import words
 
 NO_QUOTE = 'Модель привела цитату, которой нет в ответах агента. Вывод не засчитан. '
+NO_RAG_QUOTE = 'Модель привела цитату, которой нет в обращении к базе знаний. Вывод не засчитан. '
 
 
 class Row(Protocol):
@@ -35,10 +36,22 @@ def verdict_of(rows: list[dict]) -> str:
     return 'UNMEASURED'
 
 
+def step_status(rows: list[dict]) -> str:
+    """A replayed step's status: its rows but the match with production (match.py)."""
+    return verdict_of(match.counted(rows))
+
+
 def checked(
-    rows: Sequence[Row], rules: list[dict], agent_text: str, *, tools: str = '', knowledge_available: bool = False
+    rows: Sequence[Row],
+    rules: list[dict],
+    agent_text: str,
+    *,
+    tools: str = '',
+    knowledge_available: bool = False,
+    rag_text: str = '',
 ) -> list[dict]:
-    """One row per criterion; validate reply, tool and knowledge evidence at this single seam.
+    """One row per criterion; validate reply, tool, knowledge and knowledge-base call (rag_text) evidence at this
+    single seam.
 
     The Lab does not record backend state changes, so a state criterion cannot be measured here.
     Applicability is evaluated separately: a criterion that did not arise remains NOT_APPLICABLE.
@@ -63,10 +76,11 @@ def checked(
         status, reason, quote = row.status, row.reason, row.agent_quote
         if status in ('PASS', 'FAIL'):
             observation = rule.get('observation', 'reply')
-            evidence = tools if observation == 'tool' else agent_text
+            evidence = {'tool': tools, 'rag': rag_text}.get(observation, agent_text)
             missing_evidence = {
                 'reply': '',
                 'tool': '' if tools else 'Вызовы инструментов не записаны. ',
+                'rag': '' if rag_text else 'Обращение к базе знаний не записано. ',
                 'state': 'Изменения в системах банка не записаны. ',
                 'knowledge': ''
                 if knowledge_available
@@ -74,7 +88,7 @@ def checked(
             }
             missing = missing_evidence.get(observation, 'Неизвестный способ проверки критерия. ')
             if missing or not quotes.cited(quote, evidence):
-                status, reason = 'UNKNOWN', (missing or NO_QUOTE) + reason
+                status, reason = 'UNKNOWN', (missing or (NO_RAG_QUOTE if observation == 'rag' else NO_QUOTE)) + reason
         out.append(
             {
                 'ruleId': rule['id'],

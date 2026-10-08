@@ -48,6 +48,10 @@ def undeclared(rows):
 PAIR = 'CLIENT Не знаю номер\nAGENT Назовите номер терминала\n'
 
 
+def contents(dialogue):
+    return [message['content'] for message in dialogue['messages']]
+
+
 class LogImportTests(unittest.TestCase):
     def test_malformed_excel_is_a_validation_error(self):
         with self.assertRaisesRegex(ValueError, 'Файл .xlsx повреждён'):
@@ -179,6 +183,77 @@ class LogImportTests(unittest.TestCase):
         data = '\n'.join(json.dumps(row, ensure_ascii=False) for row in rows).encode()
         dialogues, skipped = logs.read_export('export.jsonl', data)
         self.assertEqual(([d['id'] for d in dialogues], skipped), (['usable'], 2))
+
+
+class OneLineExportTests(unittest.TestCase):
+    """The Voice360 export that writes a whole conversation on one line and repeats some of its messages."""
+
+    def test_a_conversation_on_one_line_is_split_at_its_markers(self):
+        text = 'CLIENT как поменять мсс код AGENT Извиняюсь, уточните CLIENT Код терминала AGENT Откройте настройки'
+        dialogues = logs.prepare('export.xlsx', excel(text, '[1, 2, 3, 4]'))
+        self.assertEqual(
+            dialogues[0]['messages'],
+            [
+                {'role': 'user', 'content': 'как поменять мсс код'},
+                {'role': 'assistant', 'content': 'Извиняюсь, уточните'},
+                {'role': 'user', 'content': 'Код терминала'},
+                {'role': 'assistant', 'content': 'Откройте настройки'},
+            ],
+        )
+
+    def test_an_exchange_repeated_right_after_itself_is_kept_once(self):
+        text = 'CLIENT Вопрос AGENT Ответ CLIENT Вопрос AGENT Ответ CLIENT Ещё AGENT Готово'
+        dialogues = logs.prepare('export.xlsx', excel(text, '[1, 2, 3, 4]'))
+        self.assertEqual(contents(dialogues[0]), ['Вопрос', 'Ответ', 'Ещё', 'Готово'])
+
+    def test_a_message_repeated_right_after_itself_is_kept_once(self):
+        text = 'CLIENT Вопрос AGENT Ответ AGENT Ответ CLIENT Ещё AGENT Готово'
+        dialogues = logs.prepare('export.xlsx', excel(text, '[1, 2, 3, 4]'))
+        self.assertEqual(contents(dialogues[0]), ['Вопрос', 'Ответ', 'Ещё', 'Готово'])
+
+    def test_a_copy_that_differs_by_the_final_period_is_kept_once_as_first_written(self):
+        text = 'CLIENT Вопрос AGENT Ответ CLIENT Вопрос AGENT Ответ.'
+        dialogues = logs.prepare('export.xlsx', excel(text, '[1, 2]'))
+        self.assertEqual(contents(dialogues[0]), ['Вопрос', 'Ответ'])
+
+    def test_an_exchange_repeated_as_its_order_confirms_is_kept(self):
+        text = 'CLIENT Вопрос AGENT Ответ CLIENT Вопрос AGENT Ответ'
+        dialogues = logs.prepare('export.xlsx', excel(text, '[1, 2, 3, 4]'))
+        self.assertEqual(contents(dialogues[0]), ['Вопрос', 'Ответ', 'Вопрос', 'Ответ'])
+
+    def test_a_customer_message_repeated_as_its_order_confirms_is_kept(self):
+        text = 'CLIENT оператор CLIENT оператор AGENT Переключаю'
+        dialogues = logs.prepare('export.xlsx', excel(text, '[1, 2, 3]'))
+        self.assertEqual(contents(dialogues[0]), ['оператор', 'оператор', 'Переключаю'])
+
+    def test_a_marker_word_inside_a_one_line_message_splits_it_and_the_conversation_is_read_as_written(self):
+        data = undeclared(
+            [
+                ['d1', 'CLIENT Вопрос AGENT Ответ', '[1, 2]'],
+                ['d2', 'CLIENT Позовите AGENT человека AGENT Соединяю', '[1, 2]'],
+            ]
+        )
+        dialogues = logs.prepare('export.xlsx', data)
+        self.assertEqual(contents(dialogues[1]), ['Позовите', 'человека', 'Соединяю'])
+
+    def test_a_one_line_conversation_that_still_does_not_match_its_order_is_read_as_written(self):
+        data = undeclared(
+            [
+                ['d1', 'CLIENT Вопрос AGENT Ответ', '[1, 2]'],
+                ['d2', 'CLIENT Вопрос AGENT Ответ CLIENT Другой AGENT Иной', '[1, 2]'],
+            ]
+        )
+        dialogues = logs.prepare('export.xlsx', data)
+        self.assertEqual(contents(dialogues[1]), ['Вопрос', 'Ответ', 'Другой', 'Иной'])
+
+    def test_a_file_whose_only_one_line_conversation_does_not_match_its_order_is_read(self):
+        text = 'CLIENT Вопрос AGENT Ответ CLIENT Другой AGENT Иной'
+        dialogues = logs.prepare('export.xlsx', excel(text, '[1, 2]'))
+        self.assertEqual([dialogue['id'] for dialogue in dialogues], ['d1'])
+
+    def test_a_conversation_written_line_by_line_is_never_collapsed_to_its_order(self):
+        dialogues = logs.prepare('export.xlsx', excel(PAIR * 3, '[1, 2]'))
+        self.assertEqual(len(dialogues[0]['messages']), 6)
 
 
 class SeenTextTests(unittest.TestCase):

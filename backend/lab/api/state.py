@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException
 from .. import agents, models, storage
 from ..domain import checks, personas
 from ..flows import checks as results_of
-from ..flows import connection, inputs, scenarios, tone
+from ..flows import connection, inputs, replay, scenarios, tone
 from ..jobs import BusyError, view
 from . import work
 from .base import Jobs
@@ -67,7 +67,10 @@ def state() -> dict:
             {key: summary.get(key) for key in RUN_FIELDS} | {'targetName': agents.run_name(summary)}
             for summary in storage.runs.summaries()
         ],
+        # The latest replay in brief: the screen fetches it whole (GET /api/replay) when it changes.
+        'replay': replay.summary(),
         'targets': [agents.public(key, way) for key, way in connection.ways().items()],
+        'replayTargets': agents.replay_targets(connection.replay_ways()),
         'personas': personas.public(),
     }
 

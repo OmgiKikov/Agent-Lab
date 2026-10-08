@@ -17,6 +17,7 @@ import { SettingsPage } from "./sections/settings/SettingsPage";
 import { RunListPage } from "./sections/simulations/RunList";
 import { ScenariosPage } from "./sections/simulations/ScenariosPage";
 import { SimResultPage } from "./sections/simulations/SimResultPage";
+import { ReplayPage } from "./sections/replay/ReplayPage";
 import { CheckPage } from "./sections/tone/CheckPage";
 import { HistoryPage } from "./sections/checks/History";
 import { ServiceDown } from "./ui/EmptyState";
@@ -186,6 +187,8 @@ const productRoutes = [
         path: "simulations/scenarios/:scenarioId",
         element: <To to="/simulations/scenarios" from={(p) => ({ s: p.scenarioId ?? "" })} />,
       },
+      // The replay: conversations of the export played again through the local agent, with what it did inside.
+      { path: "replay", element: <ReplayPage /> },
       { path: "agent", element: <AgentPage /> },
       { path: "settings", element: <SettingsPage /> },
       // The addresses of the time when one result lived in «Диалоги» and the start chose what it was.

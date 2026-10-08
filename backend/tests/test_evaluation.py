@@ -6,13 +6,24 @@ from unittest.mock import AsyncMock, patch
 import support
 
 from lab import config, models, roles, storage
-from lab.domain import export, quotes, verdicts
+from lab.domain import export, match, quotes, verdicts
 from lab.domain.accuracy import ground
 from lab.domain.metric import metric
 from lab.flows import accuracy, conversations, simulation
 from lab.flows import scenarios as cards
 from lab.roles import judge as roles_judge
 from lab.roles.judge import RuleReply
+
+RAG_RULE = {'id': 'rag:query', 'text': 'Запрос передаёт вопрос', 'observation': 'rag'}
+REPLAYED_STEP = {
+    'history': [
+        {'role': 'customer', 'text': 'Здравствуйте'},
+        {'role': 'agent', 'text': 'Чем помочь? ``` transition-code TRANSFER_INTO_CHAT ```'},
+    ],
+    'customer': 'Как вернуть платёж покупателю?',
+    'reply': {'text': 'Откройте раздел «Операции».', 'status': 200, 'options': ['Позвать оператора'], 'seconds': 1},
+    'trace': {'rag': [{'query': 'как вернуть платёж покупателю', 'passages': [], 'answer': ''}]},
+}
 
 
 def completion(value):
@@ -502,3 +513,77 @@ class ModelAnswerTests(unittest.IsolatedAsyncioTestCase):
             result = await cards.built('code')
         self.assertEqual(result, [{'id': 'card', 'model': 'actual-main'}])
         save.assert_not_called()
+
+
+class RagEvidenceTests(unittest.TestCase):
+    def row(self, quote: str) -> RuleReply:
+        return RuleReply.model_validate({'ruleId': 'rag:query', 'status': 'PASS', 'reason': 'ok', 'agentQuote': quote})
+
+    def test_rag_quote_is_found_in_the_trace(self) -> None:
+        rows = verdicts.checked([self.row('вернуть платёж')], [RAG_RULE], 'ответ агента', rag_text='как вернуть платёж')
+        self.assertEqual(rows[0]['status'], 'PASS')
+
+    def test_rag_quote_from_the_reply_is_not_evidence(self) -> None:
+        rows = verdicts.checked([self.row('ответ агента')], [RAG_RULE], 'ответ агента', rag_text='как вернуть платёж')
+        self.assertEqual(rows[0]['status'], 'UNKNOWN')
+
+
+class StepVerdictTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        support.lab(self)
+
+    async def judged(self, quote: str) -> tuple[roles_judge.Verdict, dict]:
+        answer = {'rules': [verdict('rag:query', 'PASS', quote)]}
+        model = AsyncMock(return_value=completion(answer))
+        with patch.object(models, 'chat', model):
+            result = await roles_judge.step_verdict([RAG_RULE], REPLAYED_STEP)
+        return result, json.loads(model.call_args.args[1])
+
+    async def test_payload_shows_the_step_and_its_trace(self) -> None:
+        _, payload = await self.judged('вернуть платёж покупателю')
+        self.assertEqual(
+            list(payload), ['expectations', 'history', 'customerMessage', 'replayReply', 'prodReply', 'trace']
+        )
+
+    async def test_payload_carries_productions_reply(self) -> None:
+        answer = {'rules': [verdict('rag:query', 'PASS', 'вернуть платёж покупателю')]}
+        model = AsyncMock(return_value=completion(answer))
+        with patch.object(models, 'chat', model):
+            await roles_judge.step_verdict(
+                [RAG_RULE], {**REPLAYED_STEP, 'prodReply': 'Возврат — в разделе «Операции».'}
+            )
+        self.assertEqual(json.loads(model.call_args.args[1])['prodReply'], 'Возврат — в разделе «Операции».')
+
+    async def test_history_shows_the_agent_as_the_customer_saw_it(self) -> None:
+        _, payload = await self.judged('вернуть платёж покупателю')
+        self.assertEqual(payload['history'][1], {'role': 'AGENT', 'text': 'Чем помочь?\n[Кнопки: TRANSFER_INTO_CHAT]'})
+
+    async def judged_with_a_failed_match(self) -> roles_judge.Verdict:
+        answer = {
+            'rules': [
+                verdict('rag:query', 'PASS', 'вернуть платёж покупателю'),
+                verdict(match.CRITERION['id'], 'FAIL', 'Откройте раздел'),
+            ]
+        }
+        with patch.object(models, 'chat', AsyncMock(return_value=completion(answer))):
+            return await roles_judge.step_verdict([RAG_RULE, match.CRITERION], REPLAYED_STEP)
+
+    async def test_the_match_with_production_is_not_in_the_steps_status(self) -> None:
+        result = await self.judged_with_a_failed_match()
+        self.assertEqual(result.status, 'PASS')
+
+    async def test_the_failed_match_with_production_stays_in_the_rows(self) -> None:
+        result = await self.judged_with_a_failed_match()
+        self.assertEqual({row['ruleId']: row['status'] for row in result.rows}[match.CRITERION['id']], 'FAIL')
+
+    def test_step_status_leaves_the_match_with_production_out(self) -> None:
+        rows = [verdict('rag:query', 'PASS'), verdict(match.CRITERION['id'], 'FAIL')]
+        self.assertEqual(verdicts.step_status(rows), 'PASS')
+
+    async def test_rag_quote_from_the_query_stays_pass(self) -> None:
+        result, _ = await self.judged('вернуть платёж покупателю')
+        self.assertEqual(result.rows[0]['status'], 'PASS')
+
+    async def test_rag_quote_absent_from_the_trace_is_unknown(self) -> None:
+        result, _ = await self.judged('Откройте раздел Операции')
+        self.assertEqual(result.rows[0]['status'], 'UNKNOWN')

@@ -3,7 +3,7 @@
 import re
 import time
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from urllib.parse import urlsplit
 
 import httpx
@@ -11,6 +11,12 @@ import httpx
 from .. import config
 
 AGENT_PATH = '/api/v1/ai/agents/agent-ckr-pa-acquiring'
+# Who speaks when a recorded conversation is replayed: the bank chat (Voice360 «agentCode» AGENT_GIGACHAT). With it
+# the agent reads every customer phrase and drops its own, as in production
+# (aigw-local, form_dialog_parts_from_phrases).
+REPLAY_SENDER = 'GIGAASSISTANT'
+PHRASES_FROM = datetime(2026, 1, 1, tzinfo=UTC)
+TRACE_PATH = '/local/agent-lab/trace/'
 BAD_ADDRESS = 'Адрес агента записан с ошибкой. Нужен вид https://хост:порт/путь без пробелов, с портом от 1 до 65535.'
 
 
@@ -63,8 +69,9 @@ def prod_request(conversation_id: str, text: str, epk_ids: list[str]) -> tuple[d
     return headers, body
 
 
-def local_request(conversation_id: str, text: str) -> tuple[dict, dict]:
-    """Headers and body the local stand expects; x-trace-id keys the scenario's mock data."""
+def local_request(conversation_id: str, text: str, history: list[dict] | None = None) -> tuple[dict, dict]:
+    """Headers and body the local stand expects; x-trace-id keys the scenario's mock data and the turn's trace.
+    With history (a replayed conversation) the earlier phrases go along, spoken as the bank chat."""
     headers = {
         'Content-Type': 'application/json',
         'x-trace-id': str(uuid.uuid4()),
@@ -72,15 +79,19 @@ def local_request(conversation_id: str, text: str) -> tuple[dict, dict]:
         'x-request-time': datetime.now(UTC).isoformat(timespec='seconds'),
         'x-session-id': str(uuid.uuid4()),
     }
+    content: dict = {'user_input': text}
+    if history is not None:
+        said = phrases([*history, {'role': 'customer', 'text': text}])
+        content.update(phrases=said, trigger_phrase_id=said[-1]['phrase_id'])
     body = {
         'message': {
             'version': '1.4',
             'performative': 'request',
-            'sender': 'user',
+            'sender': 'user' if history is None else REPLAY_SENDER,
             'receiver': 'agent',
             'conversation_id': conversation_id,
             'reply_with': str(uuid.uuid4()),
-            'content': {'user_input': text},
+            'content': content,
         },
         'metadata': {
             'surface_mode': 'CHAT',
@@ -91,6 +102,19 @@ def local_request(conversation_id: str, text: str) -> tuple[dict, dict]:
         },
     }
     return headers, body
+
+
+def phrases(messages: list[dict]) -> list[dict]:
+    """The conversation as the agent's phrases, one second apart: it orders them by time."""
+    return [
+        {
+            'phrase_id': str(number),
+            'speaker_type': 'CUSTOMER' if message['role'] == 'customer' else 'ROBOT',
+            'text': message['text'],
+            'time': (PHRASES_FROM + timedelta(seconds=number)).isoformat(timespec='seconds'),
+        }
+        for number, message in enumerate(messages, 1)
+    ]
 
 
 def read_reply(data: object, http_status: int) -> dict:
@@ -131,10 +155,15 @@ class HttpAgent:
         """The bank's systems behind this agent are the stand's mocks, so a scenario's test data can be applied."""
         return self.profile == 'local'
 
-    def request(self, conversation_id: str, text: str) -> tuple[dict, dict]:
+    @property
+    def traced(self) -> bool:
+        """It gives the trace of a replayed turn: the local agent with its trace harness does."""
+        return self.mocked
+
+    def request(self, conversation_id: str, text: str, history: list[dict] | None = None) -> tuple[dict, dict]:
         if self.profile == 'prod':
             return prod_request(conversation_id, text, self.epk)
-        return local_request(conversation_id, text)
+        return local_request(conversation_id, text, history)
 
     async def open(self) -> None:
         if not self.url:
@@ -145,11 +174,15 @@ class HttpAgent:
     async def close(self) -> None:
         pass
 
-    async def say(self, conversation_id: str, text: str, world: dict | None = None) -> dict:
-        """One turn: the reply, its status and buttons, seconds taken, and the systems it called (local stand)."""
+    async def say(
+        self, conversation_id: str, text: str, world: dict | None = None, history: list[dict] | None = None
+    ) -> dict:
+        """One turn: the reply, its status and buttons, seconds taken, the systems it called (local stand) and, from a
+        local agent in a replayed conversation (history), what happened inside it (trace; None when the agent does not
+        give one or the turn is not replayed)."""
         if not address_valid(self.url):
             raise AgentError(BAD_ADDRESS)  # saved before addresses were checked: the agent cannot be reached
-        headers, body = self.request(conversation_id, text)
+        headers, body = self.request(conversation_id, text, history)
         # A long answer is normal; an unreachable address should fail fast.
         async with httpx.AsyncClient(timeout=httpx.Timeout(config.current().agent_timeout, connect=10)) as client:
             if world and self.mocked:
@@ -162,13 +195,15 @@ class HttpAgent:
                 raise AgentError(f'Нет связи с агентом ({type(error).__name__}).') from error
             seconds = round(time.monotonic() - started, 2)
             events = await _mock_events(client, cursor, headers.get('x-trace-id'))
+            traced = self.mocked and history is not None
+            trace = await agent_trace(client, self.url, headers['x-trace-id']) if traced else None
         if response.status_code >= 500 or response.status_code in (401, 403, 404):
             raise AgentError(f'Агент ответил ошибкой (HTTP {response.status_code}).')
         try:
             data = response.json()
         except ValueError as error:
             raise AgentError('Агент ответил не в JSON.') from error
-        return {**read_reply(data, response.status_code), 'seconds': seconds, 'events': events}
+        return {**read_reply(data, response.status_code), 'seconds': seconds, 'events': events, 'trace': trace}
 
 
 async def _stand_version(url: str) -> str | None:
@@ -206,6 +241,22 @@ async def _mock_cursor(client: httpx.AsyncClient) -> int | None:
         return data.get('cursor') if isinstance(data, dict) else None
     except (httpx.HTTPError, httpx.InvalidURL, ValueError):
         return None
+
+
+async def agent_trace(client: httpx.AsyncClient, agent_url: str, trace_id: str) -> dict | None:
+    """What the local agent recorded inside itself for this turn (aigw-local replay/recorder.py)."""
+    parts = urlsplit(agent_url)
+    try:
+        response = await client.get(f'{parts.scheme}://{parts.netloc}{TRACE_PATH}{trace_id}', timeout=5)
+    except httpx.HTTPError:
+        return None
+    if response.status_code != 200:
+        return None
+    try:
+        value = response.json()
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) else None
 
 
 async def _mock_events(client: httpx.AsyncClient, cursor: int | None, trace_id: str | None) -> list[dict]:

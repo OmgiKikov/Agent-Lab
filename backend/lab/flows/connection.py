@@ -4,7 +4,7 @@ as, the folder of its code; and the ways to reach it by those settings (agents.c
 import uuid
 from pathlib import Path
 
-from .. import agents, storage
+from .. import agents, config, storage
 
 SETTINGS = 'settings.json'
 CHECK_QUESTION = 'Какой процент эквайринга?'  # what «Проверить связь» asks the agent
@@ -31,9 +31,14 @@ def ways() -> dict[str, dict]:
     return agents.configs(settings())
 
 
-def connect(key: str) -> agents.HttpAgent:
+def replay_ways() -> dict[str, dict]:
+    """The ways a replay may reach the agent: its own ways, and the replay service on the stand, which only replays."""
+    return ways() | {agents.REPLAY_SERVICE: agents.replay_config(config.current().replay_url)}
+
+
+def connect(key: str) -> agents.Agent:
     """The agent reached this way; one started from its code writes its output beside the agent's database."""
-    connection = ways().get(key)
+    connection = replay_ways().get(key)
     if not connection:
         raise agents.AgentError(f'Неизвестный способ подключения агента: {key}.')
     folder = storage.db.database().parent

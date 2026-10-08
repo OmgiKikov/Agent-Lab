@@ -127,7 +127,16 @@ export type Pattern = {
   titles: string[];
   examples: PatternExample[];
 };
-export type Target = { id: string; name: string; kind: string; note: string; where: string; ready: boolean };
+/** local: the agent runs on the local stand, so it gives its trace to a replay; the replay service does too (kind replay). */
+export type Target = {
+  id: string;
+  name: string;
+  kind: string;
+  note: string;
+  where: string;
+  ready: boolean;
+  local: boolean;
+};
 export type Persona = { id: string; name: string; note: string };
 export type Settings = { prodUrl: string; epk: string[]; repo: string };
 export type Source = { id: string; kind: string; origin: string; chars: number; rules: number; sha256?: string | null };
@@ -263,7 +272,11 @@ export type LabState = {
   cards: null | Deck;
   runs: RunSummary[];
   targets: Target[];
+  /** The ways a replay reaches the agent (backend agents.replay_targets). Older services have no such field. */
+  replayTargets?: Target[];
   personas: Persona[];
+  /** The latest replay of exported conversations, enough to know it changed. Older services have no such field. */
+  replay?: { id: string; finishedAt: string } | null;
 };
 
 export type ToneCriterion = Criterion & { name: string; condition: string; acceptable: string };
@@ -287,4 +300,82 @@ export type Turn = {
   ok?: boolean;
   status?: string;
   seconds?: number;
+};
+
+/** What the agent did inside one replayed step (aigw-local replay/recorder.py). */
+export type RagPassage = {
+  article: string | number | null;
+  passage: number | null;
+  text: string;
+  retrieval: number | null;
+  reranker: number | null;
+};
+export type RagCall = {
+  seq?: number;
+  /** idp: a call to the knowledge base; cache: an answer from its warmed cache, no call made. Older traces have none. */
+  source?: "idp" | "cache";
+  /** ok, error, timeout, cancelled, pending; an HTTP status in older traces. */
+  status: string | number;
+  /** The request to IDP as sent; none for a cached answer. */
+  request?: unknown;
+  query: string;
+  filter: string | null;
+  systemPrompt: string;
+  passages: RagPassage[];
+  answer: string;
+  reason: string | null;
+};
+export type AgentTrace = {
+  traceId: string;
+  chains: { seq?: number; name: string; output: string | null; seconds?: number; error?: string }[];
+  rag: RagCall[];
+  systems: { seq?: number; tool: string; arguments: unknown; status: number | string; response?: unknown }[];
+};
+export type ReplayStep = {
+  index: number;
+  customer: string;
+  prodReply: string | null;
+  reply?: { text: string; status: string; options: string[]; seconds: number };
+  trace?: AgentTrace;
+  rules?: Rule[];
+  status?: Status;
+  error?: string | null;
+  /** The second model's verdict on the step (judge.second_opinion); null with one model. */
+  second?: { model: string; status: string; rules?: Rule[]; error?: string } | null;
+};
+export type ReplayDialogue = { dialogueId: string; status: Status; steps: ReplayStep[] };
+export type Family = "tone" | "code" | "rag";
+export type FamilyScore = { pass: number; fail: number; accuracy: number | null };
+/** A step of a replay by where it sits: the conversation and the step's index in it. */
+export type StepRef = { dialogueId: string; step: number };
+export type KnowledgeBaseCriterion = {
+  id: string;
+  name: string;
+  pass: number;
+  fail: number;
+  unknown: number;
+  failed: StepRef[];
+};
+/** What a replay says about the knowledge base (backend rag.summary), counted by the service on every read. */
+export type KnowledgeBaseSummary = {
+  steps: number;
+  called: number;
+  match: { same: number; different: number; unknown: number; differentSteps: StepRef[] };
+  criteria: KnowledgeBaseCriterion[];
+};
+export type ReplayResult = {
+  id: string;
+  target: string;
+  version: string;
+  /** What the replay service said of itself before the replay; none for an agent on this computer. */
+  stand?: {
+    prompts?: { version: string };
+    idpCache?: { total: number; warmed: number; failed: string[] };
+  } | null;
+  startedAt: string;
+  finishedAt: string;
+  model: string;
+  metric: Record<Family, FamilyScore>;
+  dialogues: ReplayDialogue[];
+  knowledgeBase: KnowledgeBaseSummary;
 };

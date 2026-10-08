@@ -1,9 +1,10 @@
 """The judge: a verdict on each criterion of a conversation with the agent's own words as evidence (domain/verdicts.py),
 and an independent second judge, the same role asked of another model.
 
-Two roles, one per kind of conversation: a recorded one from the logs (judge.log), and one the synthetic customer just
-had with the agent (judge.run), which also names what the customer wanted. The answer is read once into JudgeReply
-inside the repeatable call; the evidence is interpreted only after that.
+Three roles, one per kind of conversation: a recorded one from the logs (judge.log), one the synthetic customer just
+had with the agent (judge.run), which also names what the customer wanted, and one step of a recorded conversation
+replayed through the agent (judge.replay), judged with the agent's trace and production's reply. The answer is read
+once into JudgeReply inside the repeatable call; the evidence is interpreted only after that.
 """
 
 from collections.abc import Awaitable, Callable
@@ -13,7 +14,8 @@ from typing import Annotated, Literal, Self
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StringConstraints, model_validator
 
 from .. import models
-from ..domain import verdicts
+from ..domain import rag, verdicts
+from ..domain.export import as_seen
 from .base import Role, ask, instructions
 
 NonEmptyText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -49,6 +51,7 @@ class JudgeReply(BaseModel):
 
 JUDGE_LOG = Role('judge.log', instructions('judge.log'), JudgeReply)
 JUDGE_RUN = Role('judge.run', instructions('judge.run'), JudgeReply)
+JUDGE_REPLAY = Role('judge.replay', instructions('judge.replay'), JudgeReply)
 
 
 @dataclass(frozen=True)
@@ -108,6 +111,37 @@ async def run_verdict(evidence: Evidence, model: models.Endpoint | None = None) 
         knowledge_available=evidence.knowledge_available,
     )
     return Verdict(rows, verdicts.verdict_of(rows), answer.model, JUDGE_RUN.version)
+
+
+async def step_verdict(rules: list[dict], step: dict, model: models.Endpoint | None = None) -> Verdict:
+    """One step of a replayed conversation (flows/replay.py): the agent's new reply and its trace against the rules,
+    with production's reply for the match with it (domain/match.py), which the step's status leaves out."""
+    reply, trace = step['reply'], step.get('trace')
+    shown_history = [
+        {'role': 'CUSTOMER', 'text': m['text']}
+        if m['role'] == 'customer'
+        else {'role': 'AGENT', 'text': as_seen(m['text'])}
+        for m in step['history']
+    ]
+    payload = {
+        'expectations': rules,
+        'history': shown_history,
+        'customerMessage': step['customer'],
+        'replayReply': {'text': reply['text'], 'status': reply['status'], 'buttons': reply.get('options') or []},
+        'prodReply': step.get('prodReply'),
+        'trace': rag.for_judge(trace),
+    }
+    answer = await ask(JUDGE_REPLAY, payload, accept=covered(rules), model=model)
+    agent_text = '\n'.join([reply['text'], *(reply.get('options') or [])])
+    rows = verdicts.checked(
+        answer.value.rules,
+        rules,
+        agent_text,
+        tools=rag.tools(trace),
+        knowledge_available=rag.called(trace),
+        rag_text=rag.evidence(trace),
+    )
+    return Verdict(rows, verdicts.step_status(rows), answer.model, JUDGE_REPLAY.version)
 
 
 async def second_opinion(verdict: Callable[..., Awaitable[Verdict]], *args: object) -> dict | None:

@@ -4,6 +4,7 @@ import {
   FlaskConical,
   LayoutGrid,
   MessageSquareQuote,
+  Repeat,
   Search,
   Settings,
   Target,
@@ -21,8 +22,8 @@ export type NavItem = { to: string; label: string; mobileLabel?: string; icon: L
 
 /**
  * The work in its order: the overview; what is checked in the real conversations of the export, each check its own
- * section; the trials with synthetic customers. Group labels are quiet text, not links. No counts: «Диалоги 8» read
- * as eight conversations; a running task shows in its own card.
+ * section; the trials: synthetic customers, the export replayed through the local agent. Group labels are quiet text,
+ * not links. No counts: «Диалоги 8» read as eight conversations; a running task shows in its own card.
  */
 export const GROUPS: { label?: string; items: NavItem[] }[] = [
   { items: [{ to: SECTIONS.overview, label: "Обзор", icon: LayoutGrid }] },
@@ -33,10 +34,16 @@ export const GROUPS: { label?: string; items: NavItem[] }[] = [
       { to: SECTIONS.accuracy, label: CHECK_NAME.code, icon: Target },
     ],
   },
-  { label: "Испытания", items: [{ to: SECTIONS.simulations, label: "Симуляции", icon: FlaskConical }] },
+  {
+    label: "Испытания",
+    items: [
+      { to: SECTIONS.simulations, label: "Симуляции", icon: FlaskConical },
+      { to: SECTIONS.replay, label: "Повтор разговоров", icon: Repeat },
+    ],
+  },
 ];
 
-/** The places of the work in one row, as the bottom of a phone shows them. */
+/** The places of the work in one row; the bottom of a phone shows as many of them as fit (BottomNav). */
 export const WORK: NavItem[] = GROUPS.flatMap((g) => g.items);
 
 /** The agent and settings stay below the day-to-day work: they are the developer's. */

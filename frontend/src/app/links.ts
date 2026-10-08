@@ -17,6 +17,7 @@ export const SECTIONS = {
   tone: "/tone",
   accuracy: "/accuracy",
   simulations: "/simulations",
+  replay: "/replay",
   agent: "/agent",
   settings: "/settings",
 };

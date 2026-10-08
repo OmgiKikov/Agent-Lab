@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from fastapi import HTTPException
 
 from .. import storage
-from ..flows import accuracy, inputs, scenarios, severity, simulation, tone
+from ..flows import accuracy, inputs, replay, scenarios, severity, simulation, tone
 from ..jobs import BusyError, PerAgent, Work, view
 
 
@@ -42,6 +42,9 @@ KINDS: dict[str, Kind] = {
     'rejudge': Kind(
         lambda given: lambda progress: simulation.rejudge(_run(given['runId']), progress),
         simulation.rejudge_fingerprint,
+    ),
+    'replay': Kind(
+        lambda given: lambda progress: replay.run(given['target'], given['count'], progress), replay.fingerprint
     ),
     'cards': Kind(lambda given: lambda progress: scenarios.build(given['check'], progress)),
     'sources': Kind(lambda given: lambda progress: inputs.read_code()),

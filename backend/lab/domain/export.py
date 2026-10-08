@@ -3,8 +3,10 @@ conversation as the customer saw it, with the agent's own words in it.
 
 Excel exports contain CLIENT/AGENT turns, on lines of their own or all on one line, and an order column. Some exports
 repeat every exchange twice: only that complete pattern, confirmed by the order column's count, is removed, and a
-customer's actual repeated question is preserved. Otherwise the text is the conversation: the bank's export often
-counts other messages than its text holds, and a row it disagrees with is read as written, never refused or cut.
+customer's actual repeated question is preserved. Voice360 writes a whole conversation on one line and repeats some
+of its messages: there the repeats are collapsed as far as the count confirms them. Otherwise the text is the
+conversation: the bank's export often counts other messages than its text holds, and a row it disagrees with is read
+as written, never refused or cut.
 Parsing is pure so a cancelled import cannot commit from a thread.
 """
 
@@ -24,6 +26,9 @@ SHEET = 'Данные'
 ID, TEXT, ORDER = 'Id диалога', 'Текст', 'Порядок сообщения в диалоге'
 # A turn starts at CLIENT or AGENT standing alone: at a line start, or mid-line in the bank's export.
 MARKER = re.compile(r'(?:^|(?<=\s))(CLIENT|AGENT)(?=\s|$)')
+# A turn that starts a line: the export with a line per turn has one for every turn, Voice360's one-line text none
+# after the first.
+LINE_MARKER = re.compile(r'^[ \t]*(CLIENT|AGENT)\b', re.M)
 # A broken workbook: openpyxl names a part the archive does not have (KeyError), zipfile meets a broken stream or a
 # feature it does not read.
 UNREADABLE = (BadZipFile, InvalidFileException, ParseError, KeyError, zlib.error, EOFError, NotImplementedError)
@@ -89,6 +94,45 @@ def _export_messages(messages: list[dict], count: int | None) -> list[dict]:
     return messages
 
 
+def _is_one_line(text: str) -> bool:
+    """The Voice360 layout: several turns, and no turn after the first starts a line."""
+    return len(LINE_MARKER.findall(text)) <= 1 < len(MARKER.findall(text))
+
+
+def _one_line_messages(messages: list[dict], count: int | None) -> list[dict] | None:
+    """The first reading that matches the count: as written, without repeated messages, then also without repeated
+    exchanges. The count comes first, so a repeat the customer really made stays. None when no reading matches: the
+    text is then read as written (_export_messages)."""
+    without_messages = _collapse_repeated_messages(messages)
+    readings = (messages, without_messages, _collapse_repeated_pairs(without_messages))
+    return next((reading for reading in readings if len(reading) == count), None)
+
+
+def _collapse_repeated_messages(messages: list[dict]) -> list[dict]:
+    kept = []
+    for message in messages:
+        if not kept or not _same(kept[-1], message):
+            kept.append(message)
+    return kept
+
+
+def _collapse_repeated_pairs(messages: list[dict]) -> list[dict]:
+    kept, index = [], 0
+    while index < len(messages):
+        pair = messages[index : index + 2]
+        if len(pair) == 2 and len(kept) >= 2 and all(map(_same, kept[-2:], pair)):
+            index += 2
+        else:
+            kept.append(messages[index])
+            index += 1
+    return kept
+
+
+def _same(first: dict, second: dict) -> bool:
+    """The export ends the whole text with a period, so the last copy of a repeat differs from the first by it."""
+    return first['role'] == second['role'] and first['content'].rstrip(' .') == second['content'].rstrip(' .')
+
+
 def _check_parts(data: bytes) -> None:
     """Every part of a workbook unpacks to the size it declares, all of them to at most INFLATED. openpyxl reads some
     parts whole, and a zip bomb that declares little would fill memory there; here each part is unpacked a piece at a
@@ -133,9 +177,12 @@ def from_excel(data: bytes) -> list[dict]:
             if not any(value is not None for value in row):
                 continue
             count = _message_count(_cell(row, column[ORDER]))
+            text = str(_cell(row, column[TEXT]) or '')
             # A marker with nothing after it is no message: it never sinks the upload.
-            said = [turn for turn in turns(str(_cell(row, column[TEXT]) or '')) if turn['content']]
-            messages = _export_messages(said, count)
+            said = [turn for turn in turns(text) if turn['content']]
+            messages = _one_line_messages(said, count) if _is_one_line(text) else None
+            if messages is None:
+                messages = _export_messages(said, count)
             dialogues.append({'id': _cell(row, column[ID]), 'messages': messages})
         return dialogues
     finally:

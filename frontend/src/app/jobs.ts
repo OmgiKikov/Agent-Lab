@@ -15,6 +15,7 @@ export const JOBS: Record<string, { label: string; to: string }> = {
   cards: { label: "Сборка сценариев", to: scenariosLink() },
   run: { label: "Прогон симуляции", to: SECTIONS.simulations },
   rejudge: { label: "Повторная оценка прогона", to: SECTIONS.simulations },
+  replay: { label: "Повтор разговоров", to: SECTIONS.replay },
   // «Отметить автоматически» (lab/severity): to the criteria of the check it proposes for (jobOf), else «Обзор».
   severity: { label: PROPOSING, to: SECTIONS.overview },
 };

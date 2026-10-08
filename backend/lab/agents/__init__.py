@@ -2,7 +2,8 @@
 
 - prod:       the agent on the IFT stand, reachable from the work computer;
 - local-http: the acquiring agent already running on this computer (localhost:8080);
-- local-code: the Lab starts the agent from its repository for one run.
+- local-code: the Lab starts the agent from its repository for one run;
+- replay-service: the acquiring agent on the stand that only replays recorded conversations, with its trace.
 The settings they are reached by are set on the page (flows.connection keeps them); here is how to reach each.
 """
 
@@ -11,12 +12,20 @@ from urllib.parse import urlsplit
 
 from .code import START, CodeAgent
 from .http import AGENT_PATH, BAD_ADDRESS, UNKNOWN_VERSION, AgentError, HttpAgent, address_valid
+from .replay_service import ReplayServiceAgent
 from .session import session
 
 DEFAULT_REPO = '~/Desktop/aigw-local'
-# The three ways to reach the agent, in words without a developer's slang: the same in «Агент», «Сыграть», the runs and
+REPLAY_SERVICE = 'replay-service'
+Agent = HttpAgent | ReplayServiceAgent
+# The ways to reach the agent, in words without a developer's slang: the same in «Агент», «Сыграть», the runs and
 # the reports. A run keeps the name it was played under (targetName); it is shown under the current one (run_name).
-NAMES = {'prod': 'Тестовый стенд банка', 'local-http': 'На этом компьютере', 'local-code': 'Запуск из кода'}
+NAMES = {
+    'prod': 'Тестовый стенд банка',
+    'local-http': 'На этом компьютере',
+    'local-code': 'Запуск из кода',
+    REPLAY_SERVICE: 'Сервис повтора на стенде',
+}
 # The test client in the local stand's fixtures: the synthetic customer gives these details when asked.
 STAND_CUSTOMER = (
     'Твоя организация: ООО «Ромашка», ИНН 7701234567. Торговая точка «Ромашка, Тверская», '
@@ -80,10 +89,30 @@ def configs(current: dict) -> dict[str, dict]:
     }
 
 
+def replay_config(url: str) -> dict:
+    """How to reach the replay service on the stand (aigw-local replay/) at its origin, http://host:port: it replays
+    recorded conversations and does not talk, so it is not among the ways to reach the agent (configs)."""
+    return {
+        'name': NAMES[REPLAY_SERVICE],
+        'kind': 'replay',
+        'profile': 'replay',
+        'url': url.strip(),
+        'note': 'Агент эквайринга на стенде. Во внешние системы не пишет, трейс отдаёт на каждом шаге.',
+    }
+
+
+def replay_targets(ways: dict[str, dict]) -> list[dict]:
+    """The ways a replay may reach the agent (ways: the agent's own and the replay service), as the page shows them:
+    set up and giving their trace."""
+    shown = [public(key, way) for key, way in ways.items()]
+    return [target for target in shown if target['ready'] and (target['local'] or target['kind'] == 'replay')]
+
+
 def public(key: str, config: dict) -> dict:
     """What the page shows about an agent: the host or the repository, never the full internal address.
     Ready: its address is set, or its folder has what starts it from its code (START). Whether it answers is what
-    «Проверить связь» tells."""
+    «Проверить связь» tells. Local: it runs on the local stand (HttpAgent.mocked; the code one always does), so it gives
+    its trace to a replay; the replay service does too (replay_targets)."""
     where = urlsplit(config.get('url') or '').hostname or ''
     ready = bool(config.get('url'))
     if config['kind'] == 'code':
@@ -96,6 +125,7 @@ def public(key: str, config: dict) -> dict:
         'note': config.get('note', ''),
         'where': where,
         'ready': ready,
+        'local': config['kind'] == 'code' or config.get('profile') == 'local',
     }
 
 
@@ -105,22 +135,30 @@ def run_name(run: dict) -> str:
     return NAMES.get(str(run.get('target') or ''), run.get('targetName') or '')
 
 
-def create(connection: dict) -> HttpAgent:
-    """The agent reached this way (configs); one started from its code writes its output to connection['log']."""
+def create(connection: dict) -> Agent:
+    """The agent reached this way (configs, replay_config); one started from its code writes its output to
+    connection['log']."""
+    if connection['kind'] == 'replay':
+        return ReplayServiceAgent(connection)
     return CodeAgent(connection) if connection['kind'] == 'code' else HttpAgent(connection)
 
 
 __all__ = [
     'NAMES',
+    'REPLAY_SERVICE',
     'STAND_CUSTOMER',
     'UNKNOWN_VERSION',
+    'Agent',
     'AgentError',
     'CodeAgent',
     'HttpAgent',
+    'ReplayServiceAgent',
     'changed',
     'configs',
     'create',
     'public',
+    'replay_config',
+    'replay_targets',
     'run_name',
     'session',
     'settings',

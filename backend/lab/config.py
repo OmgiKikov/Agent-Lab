@@ -42,6 +42,9 @@ class Settings(BaseModel):
     mock_url: str = Field('http://127.0.0.1:8090', alias='AGENT_LAB_MOCK_URL')
     agent_timeout: float = Field(180, gt=0, alias='LAB_AGENT_TIMEOUT')
     prod_system_id: str = Field('6ba7b810-9dad-11d1-80b4-00c04fd430c8', alias='LAB_PROD_SYSTEM_ID')
+    # The replay service on the stand (aigw-local replay/) for «Повтор разговоров», its origin http://host:port; without
+    # it a replay is not offered that way (agents.replay_targets).
+    replay_url: str = Field('', alias='LAB_REPLAY_URL')
 
     # The models (models/__init__.py): an OpenAI-compatible endpoint, else the bank's gateway when it is set up, else
     # OpenRouter; a second judge only when named.

@@ -13,7 +13,7 @@ from lab import agents, api, models, storage
 from lab.agents import knowledge
 from lab.domain import checks, comparison
 from lab.domain.results import summarize
-from lab.flows import accuracy, answers, connection, inputs
+from lab.flows import accuracy, answers, connection, inputs, replay
 from lab.flows import checks as results_of
 from lab.flows import scenarios as cards
 
@@ -557,6 +557,44 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result['items'][1]['stage'], '')
             self.assertEqual(result['revision'], 2)
         self.assertEqual(storage.runs.recover(), 0)
+
+    async def test_replay_rejects_an_unknown_way_to_the_agent(self) -> None:
+        response = await self.client.post('/api/replay', json={'target': 'nowhere', 'count': 3})
+        self.assertEqual(response.status_code, 400)
+
+    async def test_no_replay_yet_is_an_empty_result(self) -> None:
+        self.assertEqual((await self.client.get('/api/replay')).json(), {})
+
+    async def test_the_replay_comes_with_its_knowledge_base_summary(self) -> None:
+        storage.documents.save(replay.RESULT, self.replay_with_a_knowledge_base_call())
+        summary = (await self.client.get('/api/replay')).json()['knowledgeBase']
+        self.assertEqual(summary['called'], 1)
+
+    async def test_the_knowledge_base_summary_is_not_saved(self) -> None:
+        storage.documents.save(replay.RESULT, self.replay_with_a_knowledge_base_call())
+        await self.client.get('/api/replay')
+        self.assertNotIn('knowledgeBase', storage.documents.load(replay.RESULT))
+
+    @staticmethod
+    def replay_with_a_knowledge_base_call() -> dict:
+        trace = {'chains': [], 'rag': [{'query': 'q'}], 'systems': []}
+        return {
+            'id': 'replay-1',
+            'dialogues': [{'dialogueId': 'd-1', 'steps': [{'index': 0, 'trace': trace, 'rules': []}]}],
+        }
+
+    async def test_state_has_no_replay_before_the_first_one(self) -> None:
+        self.assertIsNone((await self.client.get('/api/state')).json()['replay'])
+
+    async def test_state_tells_the_latest_replay_without_parsing_it(self) -> None:
+        stamp = {'id': 'replay-1', 'finishedAt': '2026-10-05T10:00:00.000+00:00'}
+        storage.documents.save(
+            replay.RESULT, {**stamp, 'dialogues': [{'dialogueId': 'replayed-dialogue', 'steps': []}]}
+        )
+        storage.documents.save(replay.REPLAY_SUMMARY, stamp)
+        state, parsed = await self.state_parsing()
+        self.assertEqual(state['replay'], stamp)
+        self.assertFalse([text for text in parsed if 'replayed-dialogue' in text])
 
 
 if __name__ == '__main__':
