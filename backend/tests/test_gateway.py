@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import anyio
 import httpx
 import support
 
@@ -319,6 +320,24 @@ class _Models(BaseHTTPRequestHandler):
 
 class TlsTests(GatewayCase):
     """A gateway on this computer: what TLS refuses is said in words, at once, and never asked again."""
+
+    def test_a_connection_reset_or_cut_mid_tls_is_no_refusal_and_is_asked_again(self) -> None:
+        """As AnyIO leaves a reset: the transport's error over BrokenResourceError over ConnectionResetError, whose
+        context is the SSLWantReadError of the read it broke; or a TLS stream cut short (SSLEOFError)."""
+        for under in (ssl.SSLWantReadError(), ssl.SSLEOFError()):
+            with self.subTest(under=type(under).__name__):
+                reset = ConnectionResetError()
+                reset.__context__ = under
+                broken = anyio.BrokenResourceError()
+                broken.__cause__ = reset
+                failed = httpx.ReadError('reset')
+                failed.__cause__ = broken
+                self.assertIsNone(gateway._tls_failure(failed))
+        refused = ssl.SSLError()
+        refused.reason = 'TLSV1_ALERT_UNKNOWN_CA'
+        failed = httpx.ConnectError('refused')
+        failed.__cause__ = refused
+        self.assertIn('TLSV1_ALERT_UNKNOWN_CA', gateway._tls_failure(failed))
 
     def serve(self, *, client_from: Path | None = None) -> None:
         """The gateway with its own certificate; client_from: the authority whose client certificates it takes (TLS

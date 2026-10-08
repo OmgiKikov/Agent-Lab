@@ -359,13 +359,16 @@ async def _send(method: str, path: str, **options: object) -> httpx.Response:
 
 
 def _tls_failure(error: BaseException) -> str | None:
-    """Why TLS refused, from the errors under the transport's; None when TLS is not why (no network, no answer)."""
+    """Why TLS refused for good, from the errors under the transport's: the gateway's certificate failed its check, or
+    the gateway sent a TLS alert. None for the rest, which another try may pass: no network, no answer, a connection
+    reset or cut mid-TLS (its SSLWantReadError or SSLEOFError is no refusal)."""
     seen: BaseException | None = error
     while seen is not None:
         if isinstance(seen, ssl.SSLCertVerificationError):
             return UNVERIFIED
-        if isinstance(seen, ssl.SSLError):
-            return REJECTED.format(seen.reason or type(seen).__name__)
+        reason = getattr(seen, 'reason', None) or ''  # the ssl module names it; not every SSLError has one
+        if isinstance(seen, ssl.SSLError) and 'ALERT' in reason:
+            return REJECTED.format(reason)
         seen = seen.__cause__ or seen.__context__
     return None
 
