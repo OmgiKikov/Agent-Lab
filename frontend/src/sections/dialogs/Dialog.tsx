@@ -1,20 +1,19 @@
 import { KnowledgeEvidence } from "../../product/KnowledgeEvidence";
-import { useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
-import { ArrowLeft, ArrowRight, Download } from "lucide-react";
+import { useState, type ReactNode } from "react";
+import { useSearchParams } from "react-router-dom";
+import { ArrowLeft, ChevronDown, Download } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { reviewLink } from "../../app/links";
 import type { Criterion } from "../../lab/criteria";
 import { exampleFor, transcript, twoChecks, type DialogRow } from "../../lab/dialogs";
 import { longDay, plural } from "../../lab/format";
 import { personaName } from "../../lab/look";
 import { download, secondLine } from "../../lab/problemReport";
-import { useTurns, type Example } from "../../lab/problems";
+import { useReview, useTurns, type Decision, type Example } from "../../lab/problems";
 import type { Rule } from "../../lab/types";
-import { conversationKey, exampleKey, saysError } from "../../lab/verdicts";
 import { Conversation, type Mark } from "../../product/Conversation";
 import { Facts } from "../../product/Facts";
 import { MarkNo } from "../../product/MarkNo";
+import { ReviewButtons } from "../../product/ReviewButtons";
 import { useLabState } from "../../lab/LabProvider";
 import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
@@ -31,91 +30,127 @@ const WORD: Record<string, [string, string]> = {
   NOT_APPLICABLE: ["не относится к разговору", "text-fg-3"],
 };
 
+/** The verdicts of one kind folded under a line, «Без ошибки 11», opened on a press. */
+function Fold({
+  title,
+  n,
+  open,
+  onToggle,
+  children,
+}: {
+  title: string;
+  n: number;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className="border-t border-line">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={onToggle}
+        className="-mx-3 flex w-[calc(100%+1.5rem)] items-center gap-1.5 rounded-control px-3 py-3.5 text-left text-body font-medium text-fg-2 transition-colors hover:bg-hover hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
+      >
+        {title}
+        <span className="font-normal tabular-nums text-fg-3">{n}</span>
+        <ChevronDown
+          aria-hidden
+          className={cn("ml-auto size-4 text-fg-3 transition-transform duration-200", open && "rotate-180")}
+        />
+      </button>
+      {open && <ul className="divide-y divide-line border-t border-line">{children}</ul>}
+    </div>
+  );
+}
+
 /**
- * Every criterion the checks looked at in this conversation: errors first with their quote's number, then kept, then
- * undecided. Under a verdict, the person's answer on it and the way to give or change it: the answers are given in one
- * place, the queue (sections/review), which opens on this case.
+ * Every criterion the checks looked at in this conversation. The errors come open, each with its quote's number and the
+ * question whether it is one; the criteria kept and the ones not judged fold under a line each, opened on a press (the
+ * kept ones open when the conversation has no error). A person answers where they read, as in Langfuse or LangSmith:
+ * the same answer as in the queue, which only goes through a sample in a row.
  */
 function Verdicts({
   rules,
   find,
   named,
   shownOf,
-  answerAt,
   lit,
   onLit,
+  onDecide,
 }: {
   rules: Rule[];
   find: (ruleId: string) => Criterion | undefined;
   named?: Named;
   shownOf: (r: Rule) => Example;
-  answerAt: (e: Example) => string;
   lit: number | null;
   onLit: (n: number | null) => void;
+  onDecide: (e: Example, d: Decision) => void;
 }) {
+  const errors = rules.filter((r) => r.status === "FAIL");
+  const kept = rules.filter((r) => r.status === "PASS");
+  const rest = rules.filter((r) => r.status !== "FAIL" && r.status !== "PASS");
+  const [keptOpen, setKeptOpen] = useState(!errors.length);
+  const [restOpen, setRestOpen] = useState(false);
+  const row = (r: Rule) => {
+    // A criterion that applied nowhere in a run is not among the problems: its frozen name and number stand in.
+    const c = find(r.ruleId) ?? named?.get(r.ruleId);
+    const shown = shownOf(r);
+    // With one model there is no second check to speak of: the line is empty, and so is the place.
+    const second = r.status === "FAIL" ? secondLine(shown, null) : "";
+    const [word, tone] = WORD[r.status] ?? [r.status, "text-fg-3"];
+    const n = c?.n;
+    return (
+      <li
+        key={r.ruleId}
+        onMouseEnter={() => n && r.status === "FAIL" && onLit(n)}
+        onMouseLeave={() => onLit(null)}
+        className={cn(
+          "-mx-3 grid grid-cols-[24px_minmax(0,1fr)] gap-x-2 rounded-control px-3 py-4 transition-colors",
+          n && lit === n && "bg-hover",
+        )}
+      >
+        <span className="pt-0.5">
+          {r.status === "FAIL" && r.agentQuote && n ? (
+            <MarkNo n={n} on={lit === n} />
+          ) : (
+            <span className="text-small tabular-nums text-fg-4">{n ?? "·"}</span>
+          )}
+        </span>
+        <div className="min-w-0">
+          <p className="text-body text-fg">
+            <span className="font-medium">{c?.name ?? r.title ?? r.rule}</span>{" "}
+            <span className={cn("text-small", tone)}>· {word}</span>
+          </p>
+          <p className="mt-1 text-read text-fg-2">{r.reason}</p>
+          {second && <p className="mt-1 text-small text-fg-3">{second}</p>}
+          {(r.status === "FAIL" || r.status === "PASS") && (
+            <div className="mt-3">
+              <ReviewButtons size="sm" example={shown} onDecide={(d) => onDecide(shown, d)} />
+            </div>
+          )}
+        </div>
+      </li>
+    );
+  };
   return (
     <section className="mt-10" aria-label="Проверка по критериям">
       <h3 className="text-lead font-semibold text-fg">
         Проверка по критериям <span className="font-normal tabular-nums text-fg-3">{rules.length}</span>
       </h3>
-      <ul className="mt-3 divide-y divide-line">
-        {rules.map((r) => {
-          // A criterion that applied nowhere in a run is not among the problems: its frozen name and number stand in.
-          const c = find(r.ruleId) ?? named?.get(r.ruleId);
-          const shown = shownOf(r);
-          // With one model there is no second check to speak of: the line is empty, and so is the place.
-          const second = r.status === "FAIL" ? secondLine(shown, null) : "";
-          const [word, tone] = WORD[r.status] ?? [r.status, "text-fg-3"];
-          const n = c?.n;
-          return (
-            <li
-              key={r.ruleId}
-              onMouseEnter={() => n && r.status === "FAIL" && onLit(n)}
-              onMouseLeave={() => onLit(null)}
-              className={cn(
-                "-mx-3 grid grid-cols-[24px_minmax(0,1fr)] gap-x-2 rounded-control px-3 py-4 transition-colors",
-                n && lit === n && "bg-hover",
-              )}
-            >
-              <span className="pt-0.5">
-                {r.status === "FAIL" && r.agentQuote && n ? (
-                  <MarkNo n={n} on={lit === n} />
-                ) : (
-                  <span className="text-small tabular-nums text-fg-4">{n ?? "·"}</span>
-                )}
-              </span>
-              <div className="min-w-0">
-                <p className="text-body text-fg">
-                  <span className="font-medium">{c?.name ?? r.title ?? r.rule}</span>{" "}
-                  <span className={cn("text-small", tone)}>· {word}</span>
-                </p>
-                <p className="mt-1 text-read text-fg-2">{r.reason}</p>
-                {second && <p className="mt-1 text-small text-fg-3">{second}</p>}
-                {(r.status === "FAIL" || r.status === "PASS") && (
-                  <p className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-small">
-                    {shown.review && (
-                      <span className="text-fg-2">
-                        Ваш ответ: {saysError(shown.status, shown.review) ? "ошибка есть" : "ошибки нет"}
-                      </span>
-                    )}
-                    {/* An error asks for a word first; a verdict «без ошибки» keeps its way quiet, as the queue asks about few. */}
-                    <Link
-                      to={answerAt(shown)}
-                      className={cn(
-                        "inline-flex items-center gap-1 rounded-sm font-medium hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60",
-                        r.status === "FAIL" || shown.review ? "text-run" : "text-fg-3 hover:text-run",
-                      )}
-                    >
-                      {shown.review ? "Изменить" : "Ответить"}
-                      <ArrowRight aria-hidden className="size-3.5" />
-                    </Link>
-                  </p>
-                )}
-              </div>
-            </li>
-          );
-        })}
-      </ul>
+      {errors.length > 0 && <ul className="mt-3 divide-y divide-line">{errors.map(row)}</ul>}
+      <div className={errors.length ? "mt-1" : "mt-3"}>
+        {kept.length > 0 && (
+          <Fold title="Без ошибки" n={kept.length} open={keptOpen} onToggle={() => setKeptOpen((o) => !o)}>
+            {kept.map(row)}
+          </Fold>
+        )}
+        {rest.length > 0 && (
+          <Fold title="Не оценены" n={rest.length} open={restOpen} onToggle={() => setRestOpen((o) => !o)}>
+            {rest.map(row)}
+          </Fold>
+        )}
+      </div>
     </section>
   );
 }
@@ -135,7 +170,10 @@ export function Dialog({
 }) {
   const [params, setParams] = useSearchParams();
   const { state } = useLabState();
+  const review = useReview();
   const [lit, setLit] = useState<number | null>(null);
+  // Answers shown at once, by result and verdict: a new check or a changed verdict does not inherit them.
+  const [decided, setDecided] = useState<Record<string, Decision | null>>({});
   const raw = params.get("dt");
   const tab: Tab = raw === "details" ? raw : "talk";
   const setTab = (t: Tab) =>
@@ -182,15 +220,29 @@ export function Dialog({
         ]
           .filter(Boolean)
           .join(" · ");
-  const shownOf = (r: Rule): Example => exampleFor(row, r);
-  // The queue of this conversation's cases, on the one pressed: of the check's result, or of the run.
-  const answerAt = (e: Example) =>
-    reviewLink(e.source === "sim" ? "sim" : (row.check ?? "tone"), {
-      run: e.source === "sim" ? e.runId : null,
-      queue: "all",
-      d: conversationKey(e),
-      case: exampleKey(e),
-    });
+  // The check's result this conversation comes from; the service takes an answer only on it.
+  const finishedAt = row.source === "log" && row.check ? state?.checks[row.check]?.finishedAt : null;
+  const keyOf = (e: Example) => `${finishedAt ?? ""}|${e.ruleId}|${e.status}`;
+  const shownOf = (r: Rule): Example => {
+    const e = exampleFor(row, r);
+    const k = keyOf(e);
+    // The person's own answer here is on this criterion (as lab/problems withDecision puts it).
+    return k in decided ? { ...e, review: decided[k], reviewScope: decided[k] ? "rule" : null } : e;
+  };
+  const decide = (e: Example, d: Decision) => {
+    const next = e.review === d ? null : d;
+    const k = keyOf(e);
+    setDecided((x) => ({ ...x, [k]: next }));
+    // Refused (the result changed, a check is running) or lost: the buttons show what the service has again.
+    review.mutateAsync({ example: e, decision: next, finishedAt }).catch(() =>
+      setDecided((x) => {
+        if (x[k] !== next) return x;
+        const n = { ...x };
+        delete n[k];
+        return n;
+      }),
+    );
+  };
   const reviewed = rules.filter((r) => r.status === "FAIL" && shownOf(r).review).length;
   return (
     <article className="min-h-0 overflow-auto" aria-label={row.title}>
@@ -298,9 +350,9 @@ export function Dialog({
                 find={find}
                 named={named}
                 shownOf={shownOf}
-                answerAt={answerAt}
                 lit={lit}
                 onLit={setLit}
+                onDecide={decide}
               />
             )}
           </>
