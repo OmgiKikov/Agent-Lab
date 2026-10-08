@@ -206,10 +206,13 @@ export function LaunchReport() {
   // would put them back in force (api/launches.py, retry); «Новая проверка» goes by the current ones.
   const continues = record.continuable ?? state?.paused?.launch?.id === record.id;
   const again = record.current !== false;
+  // A finished check of the recorded answers: going through its result is the next step, the page's black button.
+  const lead = record.status !== "running" && record.modes.dataset?.status === "done" && !!record.modes.dataset.checkId;
   return (
     <div>
       <CheckHeader
         check={record.check}
+        quiet={lead}
         actions={
           record.status === "running" ? (
             <Button
@@ -324,7 +327,10 @@ export function LaunchReport() {
                           <ArrowRight className="size-3.5" />
                         </a>
                       ) : (
-                        <Link to={href} className={buttonClass({ variant: "outline" })}>
+                        <Link
+                          to={href}
+                          className={buttonClass({ variant: lead && mode === "dataset" ? "primary" : "outline" })}
+                        >
                           Разобрать результат
                           <ArrowRight className="size-3.5" />
                         </Link>
@@ -335,9 +341,12 @@ export function LaunchReport() {
               );
             })}
         </div>
-        <p className="mt-4 text-small text-fg-3">
-          У каждого режима свои разговоры и свой итог: их числа не складываются.
-        </p>
+        {/* Said only when there is more than one way: one has nothing to add up. */}
+        {Object.keys(record.modes).filter((mode) => mode !== "simulations" || SIMULATIONS).length > 1 && (
+          <p className="mt-4 text-small text-fg-3">
+            У каждого режима свои разговоры и свой итог: их числа не складываются.
+          </p>
+        )}
         {questions && <Pairs id={questions} />}
         <Link to={historyLink(record.check)} className="mt-8 inline-flex items-center gap-2 text-body text-run">
           История проверок

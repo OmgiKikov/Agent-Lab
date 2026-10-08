@@ -21,8 +21,11 @@ const tasksOf = (check: Check, job: Job | undefined) => [
   ...(job?.kind === "launch" && job.input?.check === check ? ["launch"] : []),
 ];
 
-/** The head of every page of a check: its name, its tabs, the page's actions, and the check's own task while it runs. */
-export function CheckHeader({ check, actions }: { check: Check; actions?: ReactNode }) {
+/**
+ * The head of every page of a check: its name, its tabs, the page's actions, and the check's own task while it runs.
+ * `quiet`: the page leads to the next step itself (its one black button), so «Новая проверка» here is not black.
+ */
+export function CheckHeader({ check, actions, quiet }: { check: Check; actions?: ReactNode; quiet?: boolean }) {
   const { state } = useLabState();
   return (
     <Header
@@ -31,7 +34,7 @@ export function CheckHeader({ check, actions }: { check: Check; actions?: ReactN
       actions={
         <>
           {actions}
-          <Link to={launchLink(check)} className={buttonClass({ variant: "primary" })}>
+          <Link to={launchLink(check)} className={buttonClass({ variant: quiet ? "outline" : "primary" })}>
             <Plus aria-hidden className="size-3.5" />
             Новая проверка
           </Link>

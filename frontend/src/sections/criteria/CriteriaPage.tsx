@@ -10,6 +10,7 @@ import { secondOf } from "../../lab/problemStats";
 import { decisions } from "../../lab/verdicts";
 import { useKeys } from "../../app/keys";
 import { useLabState } from "../../lab/LabProvider";
+import { resultOf } from "../../lab/checks";
 import { accuracySources, customAccuracy, TONE_ID } from "../../lab/tone";
 import { SeverityHint } from "../../product/Severity";
 import { Button, buttonClass } from "../../ui/Button";
@@ -127,6 +128,8 @@ export function CriteriaPage({ check }: { check: Check }) {
     <>
       <CheckHeader
         check={check}
+        // Before the first check of tone of voice its page leads to it with steps of its own (ToneCriteria, FirstSteps).
+        quiet={tone && !resultOf(state, "tone")}
         actions={
           // Read anew only once criteria were read: before the first check they come from the code anyway.
           !tone && !customAccuracy(state) && list.length > 0 ? (

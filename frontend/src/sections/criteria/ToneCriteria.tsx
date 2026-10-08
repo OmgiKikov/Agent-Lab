@@ -1,8 +1,8 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { ChevronDown, Download, FileText, Pencil, Plus, RefreshCw } from "lucide-react";
+import { ChevronDown, CircleCheck, Download, FileText, Pencil, Plus, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { launchLink } from "../../app/links";
+import { launchLink, SECTIONS } from "../../app/links";
 import { SIMULATIONS } from "../../app/product";
 import { api, textFile } from "../../lab/api";
 import { nameFromText, type Criterion } from "../../lab/criteria";
@@ -13,6 +13,7 @@ import { download } from "../../lab/problemReport";
 import { useSource, type Problems } from "../../lab/problems";
 import { TONE_ID, toneJudgedByOther, toneResult } from "../../lab/tone";
 import { MarkNo } from "../../product/MarkNo";
+import { Step, Steps, STEP_NEXT } from "../../product/Checklist";
 import { SeriousTag, SeverityHint, SeverityNote, SeveritySwitch } from "../../product/Severity";
 import { Button } from "../../ui/Button";
 import { EmptyState, Skeleton } from "../../ui/EmptyState";
@@ -138,6 +139,94 @@ function CriterionDetails({ card, onEdit }: { card: Card; onEdit: () => void }) 
   );
 }
 
+/**
+ * The way to the first check of tone of voice, while there is none: the conversations, the rules with their criteria,
+ * then the check. While the rules are being given (`line`) it is one line saying where the person is, so the step
+ * itself stays in view; once the criteria are ready, the steps as under a check's number (product/Checklist), each done
+ * ticked and the first check with the page's one black button, so the first run reads as one path to the result.
+ */
+function FirstSteps({ criteria, collecting, line }: { criteria: number; collecting?: boolean; line?: boolean }) {
+  const { state } = useLabState();
+  const total = state?.logs.total ?? 0;
+  const name = state?.logs.name || state?.logs.file;
+  const ready = criteria > 0;
+  if (line) {
+    const steps: [string, "done" | "now" | "later"][] = [
+      ["Разговоры", total ? "done" : "now"],
+      ["Правила и критерии", ready ? "done" : total ? "now" : "later"],
+      ["Первая проверка", ready && total ? "now" : "later"],
+    ];
+    return (
+      <ol aria-label="Путь к первой проверке" className="mt-5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-small">
+        {steps.map(([label, at], i) => (
+          <li key={label} className="flex items-center gap-2.5">
+            {i > 0 && <span aria-hidden className="h-px w-5 bg-line-strong" />}
+            <span
+              aria-current={at === "now" ? "step" : undefined}
+              className={cn("flex items-center gap-1.5", at === "now" ? "font-medium text-fg" : "text-fg-3")}
+            >
+              {at === "done" ? (
+                <CircleCheck aria-hidden className="size-4 text-ok" />
+              ) : (
+                <span
+                  aria-hidden
+                  className={cn("size-3 rounded-full border-2", at === "now" ? "border-fg" : "border-line-strong")}
+                />
+              )}
+              {label}
+              {at === "now" && collecting && <span className="font-normal text-fg-3">· собираются</span>}
+            </span>
+          </li>
+        ))}
+      </ol>
+    );
+  }
+  return (
+    <Steps className="mt-6">
+      <Step
+        state={total ? "done" : "todo"}
+        title={
+          total ? `${name ? `«${name}»: ` : ""}${count(total, "разговор", "разговора", "разговоров")}` : "Разговоры"
+        }
+        text={total ? undefined : "Загрузите выгрузку разговоров агента: по ним соберутся критерии и пойдёт проверка."}
+        action={
+          !total && (
+            <Link to={SECTIONS.data} className={STEP_NEXT}>
+              Добавить датасет
+            </Link>
+          )
+        }
+      />
+      <Step
+        state={ready ? "done" : "todo"}
+        title={ready ? "Критерии собраны" : "Правила и критерии"}
+        text={
+          ready
+            ? "Проверьте их ниже: по ним пойдёт проверка."
+            : "Дайте правила общения: модель соберёт из них критерии."
+        }
+      />
+      <Step
+        state="todo"
+        title="Первая проверка"
+        text={
+          ready && total
+            ? `Модель оценит разговоры по ${count(criteria, "критерию", "критериям", "критериям")} и покажет, где агент нарушает правила и как часто.`
+            : "Станет доступна, когда будут разговоры и критерии."
+        }
+        action={
+          ready &&
+          !!total && (
+            <Link to={launchLink("tone")} className={STEP_NEXT}>
+              Запустить проверку
+            </Link>
+          )
+        }
+      />
+    </Steps>
+  );
+}
+
 /** What people clarified about a criterion, each note as they confirmed it. */
 function Clarifications({ notes, className }: { notes: string[]; className?: string }) {
   return (
@@ -235,6 +324,18 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
   // never for these, and stay on «Итог» and in the history.
   const other = hasResult && toneJudgedByOther(state);
   const collecting = !!state?.job.running && state.job.kind === "tone-criteria";
+  // The criteria come where the rules were given, low on the page: the page goes back to its top, to them and to the
+  // next step. Its own scroll moves, not the frame around it (as checks/RunPage does).
+  const top = useRef<HTMLDivElement>(null);
+  const wasCollecting = useRef(collecting);
+  useEffect(() => {
+    if (wasCollecting.current && !collecting) {
+      let box = top.current?.parentElement ?? null;
+      while (box && !/(auto|scroll)/.test(getComputedStyle(box).overflowY)) box = box.parentElement;
+      box?.scrollTo({ top: 0 });
+    }
+    wasCollecting.current = collecting;
+  }, [collecting]);
   const failed =
     !state?.job.running && state?.job.kind === "tone-criteria" && state.job.error && state.job.error !== "Остановлено"
       ? state.job.error
@@ -329,7 +430,7 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
     });
 
   const page = (body: ReactNode) => (
-    <div className="max-w-[920px] px-4 pb-16 pt-8 lg:px-10">
+    <div ref={top} className="max-w-[920px] px-4 pb-16 pt-8 lg:px-10">
       {body}
       {editing !== undefined && (
         <RuleEditor
@@ -357,6 +458,7 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
         <Button className="mt-5" disabled={busy} onClick={stop}>
           Остановить
         </Button>
+        {!hasResult && <FirstSteps criteria={0} collecting line />}
         <ol aria-hidden className="mt-10 grid gap-3 sm:grid-cols-2">
           {[0, 1, 2, 3].map((i) => (
             <li key={i} className="h-[132px] animate-pulse rounded-[18px] bg-inset" />
@@ -386,11 +488,12 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
     return page(
       <>
         <p className="text-small font-medium text-fg-3">Правила общения</p>
-        <h2 className="mt-1 text-page font-semibold text-fg">Сначала нужны правила общения</h2>
+        <h2 className="mt-1 text-page font-semibold text-fg">Из правил банка — критерии проверки</h2>
         <p className="mt-2 max-w-[62ch] text-read text-fg-3">
           Дайте Lab правила общения банка: документ, текст или правила другого агента. Модель соберёт из них критерии, и
-          они появятся здесь.
+          по ним пойдёт проверка разговоров.
         </p>
+        {!hasResult && <FirstSteps criteria={0} line />}
         {failedLine}
         {state && <AddRules />}
       </>,
@@ -410,6 +513,7 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
             ? "По этим критериям идут проверки. Нажмите на критерий, чтобы увидеть его целиком и разговоры, где он нарушен."
             : "Так мы поняли ваши правила общения. Проверьте, всё ли верно: по этим критериям пойдёт проверка."}
         </p>
+        {!hasResult && <FirstSteps criteria={cards.length} />}
         <div className="mt-5 flex flex-wrap items-center gap-2">
           <Button icon={RefreshCw} disabled={blocked} onClick={() => setReplacing(true)}>
             Заменить правила
