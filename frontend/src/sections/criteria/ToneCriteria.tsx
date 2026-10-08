@@ -1,8 +1,9 @@
 import { useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { ChevronDown, Download, FileText, Pencil, Play, Plus, RefreshCw } from "lucide-react";
+import { ChevronDown, Download, FileText, Pencil, Plus, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { launchLink } from "../../app/links";
+import { SIMULATIONS } from "../../app/product";
 import { api, textFile } from "../../lab/api";
 import { nameFromText, type Criterion } from "../../lab/criteria";
 import { count, longDay, pct } from "../../lab/format";
@@ -10,11 +11,12 @@ import { useJudges, type JudgeVersion } from "../../lab/judges";
 import { useLabState } from "../../lab/LabProvider";
 import { download } from "../../lab/problemReport";
 import { useSource, type Problems } from "../../lab/problems";
-import { TONE_ID, toneResult } from "../../lab/tone";
+import { TONE_ID, toneJudgedByOther, toneResult } from "../../lab/tone";
 import { MarkNo } from "../../product/MarkNo";
-import { SeriousTag, SeverityHint } from "../../product/Severity";
-import { Button, buttonClass } from "../../ui/Button";
-import { Skeleton } from "../../ui/EmptyState";
+import { SeriousTag, SeverityHint, SeverityNote, SeveritySwitch } from "../../product/Severity";
+import { Button } from "../../ui/Button";
+import { EmptyState, Skeleton } from "../../ui/EmptyState";
+import { LoadFailed } from "../../ui/LoadFailed";
 import { Menu, type MenuItem } from "../../ui/Menu";
 import { Modal } from "../../ui/Modal";
 import { Sheet } from "../../ui/Sheet";
@@ -32,56 +34,81 @@ type Card = {
   quote: string;
   condition: string;
   acceptable: string;
+  /** What people clarified about it after a check, «Уточнить критерий» on a problem's page: the judge reads them too. */
+  clarifications: string[];
   result?: Criterion;
 };
 
 /**
  * One criterion as a card, as the criteria were shown before the first check: its number, name and words; after a
- * check, what it found — «45 из 100 с ошибкой» with a thin bar, «серьёзная» when it is. Pressed, it opens.
+ * check, what it found — «45 из 100 с ошибкой» with a thin bar, «серьёзная» when it is. Pressed, it opens. Under it,
+ * after a check, whether its errors are serious: switched on the card itself, with whose decision it is and the model's
+ * reason, so the proposals of the automatic check are read and decided on one screen.
  */
 function CriterionCard({ card, judged, onOpen }: { card: Card; judged: boolean; onOpen: () => void }) {
   const s = card.result?.r.log;
   const checked = s ? s.failed + s.passed : 0;
+  const sim = card.result?.r.sim;
+  const played = sim ? sim.failed + sim.passed : 0;
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="group flex h-full w-full flex-col rounded-[18px] bg-inset p-4 text-left transition-colors hover:bg-fg/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
-    >
-      <span className="flex items-center gap-2 text-small text-fg-3">
-        <span className="tabular-nums">Критерий {card.n}</span>
-        {card.result?.r.serious && <SeriousTag rule={card.result.r} />}
-      </span>
-      <span className="mt-1 text-read font-semibold text-fg">{card.name}</span>
-      <span className="mt-1 line-clamp-3 text-body text-fg-2">{plainRule(card.text)}</span>
-      {judged && (
-        <span className="mt-auto block pt-4">
-          {s && checked ? (
-            <>
-              <span className="flex items-baseline justify-between gap-3 text-small text-fg-3">
-                <span>
-                  <span className={cn("font-semibold tabular-nums", s.failed ? "text-bad" : "text-fg")}>
-                    {s.failed}
-                  </span>{" "}
-                  из {checked} с ошибкой
-                </span>
-                <span className="tabular-nums">{pct(s.failed, checked)}%</span>
-              </span>
-              <span className="mt-1.5 block h-1 overflow-hidden rounded-full bg-fg/10">
-                <span
-                  className="block h-full rounded-full bg-bad/70"
-                  style={{ width: `${s.failed ? Math.max(3, pct(s.failed, checked)) : 0}%` }}
-                />
-              </span>
-            </>
-          ) : (
-            <span className="text-small text-fg-3">
-              {card.result ? "Не встретился в разговорах последней проверки" : "В последней проверке его не было"}
-            </span>
+    <div className="flex h-full flex-col rounded-[18px] bg-inset">
+      <button
+        type="button"
+        onClick={onOpen}
+        className={cn(
+          "group flex w-full flex-1 flex-col p-4 text-left transition-colors hover:bg-fg/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60",
+          judged && card.result ? "rounded-t-[18px]" : "rounded-[18px]",
+        )}
+      >
+        <span className="flex items-center gap-2 text-small text-fg-3">
+          <span className="tabular-nums">Критерий {card.n}</span>
+          {card.clarifications.length > 0 && (
+            <span>· {count(card.clarifications.length, "уточнение", "уточнения", "уточнений")}</span>
           )}
+          {card.result?.r.serious && <SeriousTag rule={card.result.r} />}
         </span>
+        <span className="mt-1 text-read font-semibold text-fg">{card.name}</span>
+        <span className="mt-1 line-clamp-3 text-body text-fg-2">{plainRule(card.text)}</span>
+        {judged && (
+          <span className="mt-auto block pt-4">
+            {s && checked ? (
+              <>
+                <span className="flex items-baseline justify-between gap-3 text-small text-fg-3">
+                  <span>
+                    <span className={cn("font-semibold tabular-nums", s.failed ? "text-bad" : "text-fg")}>
+                      {s.failed}
+                    </span>{" "}
+                    из {checked} с ошибкой
+                  </span>
+                  <span className="tabular-nums">{pct(s.failed, checked)}%</span>
+                </span>
+                <span className="mt-1.5 block h-1 overflow-hidden rounded-full bg-fg/10">
+                  <span
+                    className="block h-full rounded-full bg-bad/70"
+                    style={{ width: `${s.failed ? Math.max(3, pct(s.failed, checked)) : 0}%` }}
+                  />
+                </span>
+              </>
+            ) : (
+              <span className="text-small text-fg-3">
+                {card.result ? "Не встретился в разговорах последней проверки" : "В последней проверке его не было"}
+              </span>
+            )}
+            {SIMULATIONS && played > 0 && (
+              <span className="mt-2 block text-small text-fg-3">
+                В симуляциях: <span className="tabular-nums">{sim!.failed}</span> из {played} с ошибкой
+              </span>
+            )}
+          </span>
+        )}
+      </button>
+      {judged && card.result && (
+        <div className="border-t border-fg/[0.07] px-4 pb-4 pt-3">
+          <SeveritySwitch check="tone" rule={card.result.r} />
+          <SeverityNote check="tone" rule={card.result.r} className="mt-1.5" />
+        </div>
       )}
-    </button>
+    </div>
   );
 }
 
@@ -98,6 +125,7 @@ function CriterionDetails({ card, onEdit }: { card: Card; onEdit: () => void }) 
       <RuleText text={card.text} className="text-read text-fg" />
       {card.condition && part("Когда применяется", card.condition)}
       {card.acceptable && part("Что допустимо", card.acceptable)}
+      {card.clarifications.length > 0 && part("Уточнения команды", <Clarifications notes={card.clarifications} />)}
       {card.quote &&
         part(
           "Как написано в правилах",
@@ -110,8 +138,32 @@ function CriterionDetails({ card, onEdit }: { card: Card; onEdit: () => void }) 
   );
 }
 
-/** The rules of communication as the bank wrote them, each criterion's words marked with its number; a mark opens it. */
-function RulesDocument({ content, cards, onOpen }: { content: string; cards: Card[]; onOpen: (id: string) => void }) {
+/** What people clarified about a criterion, each note as they confirmed it. */
+function Clarifications({ notes, className }: { notes: string[]; className?: string }) {
+  return (
+    <ul className={cn("list-disc space-y-1 pl-5", className)}>
+      {notes.map((note) => (
+        <li key={note}>{note}</li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * The rules of communication as the bank wrote them, each criterion's words marked with its number and, after a check,
+ * with what it found there («45 из 100»); a mark opens the criterion.
+ */
+function RulesDocument({
+  content,
+  cards,
+  judged,
+  onOpen,
+}: {
+  content: string;
+  cards: Card[];
+  judged: boolean;
+  onOpen: (id: string) => void;
+}) {
   const marks = cards
     .flatMap((card) => {
       const quote = card.quote.trim();
@@ -134,6 +186,16 @@ function RulesDocument({ content, cards, onOpen }: { content: string; cards: Car
       >
         <MarkNo n={card.n} className="mr-1 align-[1px]" />
         {content.slice(at, end)}
+        {judged && card.result && card.result.r.log.failed + card.result.r.log.passed > 0 && (
+          <span className="ml-1.5 whitespace-nowrap text-small text-fg-3">
+            ·{" "}
+            <span className={cn("tabular-nums", card.result.r.log.failed > 0 && "text-bad")}>
+              {card.result.r.log.failed}
+            </span>
+            {"\u00a0"}из{"\u00a0"}
+            {card.result.r.log.failed + card.result.r.log.passed}
+          </span>
+        )}
       </button>,
     );
     pos = end;
@@ -157,22 +219,28 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
   const [params, setParams] = useSearchParams();
   const [replacing, setReplacing] = useState(params.get("doc") === "1");
   const [editing, setEditing] = useState<JudgeVersion | null | undefined>();
-  const [reading, setReading] = useState(false);
+  // An older address of the rules with their criteria marked (?view=code, «В правилах») opens the document.
+  const [reading, setReading] = useState(params.get("view") === "code");
   const [asking, setAsking] = useState<JudgeVersion | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const policy = state?.sources.find((s) => s.id === TONE_ID);
   const text = useSource(reading && policy ? TONE_ID : null);
   const rules = judges.selected;
-  const set = rules?.criteria ?? [];
+  // The criteria in force: of the selected version, else as the service holds them (a library not here yet, or one
+  // asked again after new criteria came), so the page never says there are none while there are.
+  const set = rules?.criteria ?? state?.toneOfVoice?.criteria ?? [];
   const hasResult = !!toneResult(state);
+  // The last check went by other criteria (collected again, replaced or edited since): its numbers stand for those,
+  // never for these, and stay on «Итог» and in the history.
+  const other = hasResult && toneJudgedByOther(state);
   const collecting = !!state?.job.running && state.job.kind === "tone-criteria";
   const failed =
     !state?.job.running && state?.job.kind === "tone-criteria" && state.job.error && state.job.error !== "Остановлено"
       ? state.job.error
       : null;
 
-  const byRule = (id: string) => list.find((c) => c.r.id === id || c.r.log.ruleIds.includes(id));
+  const byRule = (id: string) => (other ? undefined : list.find((c) => c.r.id === id || c.r.log.ruleIds.includes(id)));
   const cards: Card[] = set.length
     ? set.map((c, i) => {
         const result = byRule(c.id);
@@ -184,10 +252,12 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
           quote: c.quote,
           condition: c.condition,
           acceptable: c.acceptable,
+          clarifications: c.clarifications ?? [],
           result,
         };
       })
-    : list.map((c) => ({
+    : // Without rules in force, the criteria of the last check, never those of a run of the simulations alone.
+      (hasResult ? list : []).map((c) => ({
         id: c.r.id,
         n: c.n,
         name: c.name,
@@ -195,9 +265,11 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
         quote: c.r.rule.quote,
         condition: c.r.rule.condition,
         acceptable: c.r.rule.acceptable,
+        clarifications: [],
         result: c,
       }));
-  const unjudged = hasResult ? cards.filter((c) => !c.result) : [];
+  const judged = hasResult && !other;
+  const unjudged = judged ? cards.filter((c) => !c.result) : [];
 
   const setUrl = (edit: (n: URLSearchParams) => void) =>
     setParams(
@@ -299,6 +371,17 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
     </p>
   );
 
+  if (!cards.length && judges.isError)
+    return page(
+      <LoadFailed title="Правила не загрузились" error={judges.error} onRetry={() => void judges.refetch()} />,
+    );
+  if (!cards.length && !judges.data)
+    return page(
+      <>
+        <Skeleton className="h-28 max-w-[620px]" />
+        <Skeleton className="mt-8 h-72" />
+      </>,
+    );
   if (!cards.length)
     return page(
       <>
@@ -328,12 +411,6 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
             : "Так мы поняли ваши правила общения. Проверьте, всё ли верно: по этим критериям пойдёт проверка."}
         </p>
         <div className="mt-5 flex flex-wrap items-center gap-2">
-          {!hasResult && (
-            <Link to={launchLink("tone")} className={buttonClass({ variant: "primary" })}>
-              <Play aria-hidden className="size-3.5" />
-              Новая проверка
-            </Link>
-          )}
           <Button icon={RefreshCw} disabled={blocked} onClick={() => setReplacing(true)}>
             Заменить правила
           </Button>
@@ -382,15 +459,26 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
 
       {hasResult && data && (
         <div className="mt-8 space-y-1 border-t border-line pt-5 text-small text-fg-3">
-          {data.log?.finishedAt && (
+          {other ? (
             <p>
-              Последняя проверка {longDay(data.log.finishedAt)}
-              {unjudged.length > 0
-                ? `: шла по ${cards.length - unjudged.length}\u00a0из\u00a0${cards.length}, ${unjudged.map((c) => `«${c.name}»`).join(", ")} ${unjudged.length === 1 ? "в неё не входил" : "в неё не входили"}. Новая проверка пойдёт по всем.`
-                : "."}
+              Последняя проверка{data.log?.finishedAt ? ` ${longDay(data.log.finishedAt)}` : ""} шла по прежним
+              критериям: её числа — в «Итоге» и «Истории».{" "}
+              <Link to={launchLink("tone")} className="font-medium text-run hover:underline">
+                Новая проверка
+              </Link>{" "}
+              пойдёт по этим.
             </p>
+          ) : (
+            data.log?.finishedAt && (
+              <p>
+                Последняя проверка {longDay(data.log.finishedAt)}
+                {unjudged.length > 0
+                  ? `: шла по ${cards.length - unjudged.length}\u00a0из\u00a0${cards.length}, ${unjudged.map((c) => `«${c.name}»`).join(", ")} ${unjudged.length === 1 ? "в неё не входил" : "в неё не входили"}. Новая проверка пойдёт по всем.`
+                  : "."}
+              </p>
+            )
           )}
-          <SeverityHint check="tone" data={data} />
+          {!other && <SeverityHint check="tone" data={data} />}
         </div>
       )}
 
@@ -399,7 +487,7 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
           .sort((a, b) => a.n - b.n)
           .map((card) => (
             <li key={card.id}>
-              <CriterionCard card={card} judged={hasResult} onOpen={() => open(card.id)} />
+              <CriterionCard card={card} judged={judged} onOpen={() => open(card.id)} />
             </li>
           ))}
         <li>
@@ -416,23 +504,40 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
       </ol>
 
       <Sheet
-        open={!!chosen}
+        open={!!asked}
         onClose={close}
-        title={chosen?.name ?? ""}
+        title={chosen?.name ?? "Критерий из ссылки"}
         sub={chosen ? `Критерий ${chosen.n}` : undefined}
       >
-        {chosen?.result ? (
-          <CriterionPanel
-            bare
-            key={chosen.result.r.id}
-            c={chosen.result}
-            check="tone"
-            side="log"
-            twice={twice}
-            shown={shown}
-            onShown={(v) => setUrl((n) => n.set("x", v))}
-            className="border-0 bg-transparent lg:border-l-0"
-          />
+        {asked && !chosen ? (
+          <EmptyState
+            drop
+            title="Такого критерия нет"
+            className="py-16"
+            action={<Button onClick={close}>Все критерии</Button>}
+          >
+            Критерия из ссылки нет в правилах, по которым идут проверки: возможно, их собрали заново или заменили.
+          </EmptyState>
+        ) : chosen?.result ? (
+          <>
+            {chosen.clarifications.length > 0 && (
+              <div className="px-5 pt-5 sm:px-7">
+                <p className="text-small font-medium text-fg-3">Уточнения команды</p>
+                <Clarifications notes={chosen.clarifications} className="mt-1 text-body text-fg-2" />
+              </div>
+            )}
+            <CriterionPanel
+              bare
+              key={chosen.result.r.id}
+              c={chosen.result}
+              check="tone"
+              side="log"
+              twice={twice}
+              shown={shown}
+              onShown={(v) => setUrl((n) => n.set("x", v))}
+              className="border-0 bg-transparent lg:border-l-0"
+            />
+          </>
         ) : chosen ? (
           <CriterionDetails card={chosen} onEdit={() => setEditing(rules)} />
         ) : null}
@@ -445,10 +550,13 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
         title={policy ? `«${policy.origin}»` : "Правила общения"}
         sub="Текст правил общения. Номер у фразы — критерий, собранный из неё; нажмите, чтобы открыть."
       >
-        {text.data ? (
+        {text.isError ? (
+          <LoadFailed title="Текст правил не загрузился" error={text.error} onRetry={() => void text.refetch()} />
+        ) : text.data ? (
           <RulesDocument
             content={text.data.content}
             cards={cards}
+            judged={judged}
             onOpen={(id) => {
               setReading(false);
               open(id);

@@ -24,7 +24,8 @@ import { count, longDay } from "../../lab/format";
 import { useJudges } from "../../lab/judges";
 import { useLabState } from "../../lab/LabProvider";
 import { isRunning } from "../../lab/runs";
-import { seriousOf } from "../../lab/severity";
+import { pendingOf, seriousOf, standingOf } from "../../lab/severity";
+import { answersOf, answersSentence } from "../../lab/answers";
 import { codeSources } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
 import { runAnswersPending } from "../../lab/verdicts";
@@ -81,13 +82,23 @@ function useCheckModel(check: Check, state: LabState | null): Model | null {
   if (result) {
     const { failed, measured, unmeasured } = result.summary;
     const top = queueOf(list, "log")[0];
+    const answers = answersOf(result);
+    // As «Итог» says it (product/Trust, Severity): a result without errors asks for a few checks by hand first.
+    const unchecked = !!answers && !answers.errors && !!answers.measured && !answersSentence(answers);
+    const st = standingOf(data);
     const step: Step = answersPending(result)
       ? { label: "Проверьте оценки модели", to: reviewLink(check, { queue: "unchecked" }), todo: true }
-      : seriousStep(data) === "todo"
-        ? { label: "Подтвердите серьёзные ошибки", to: stageRoot(check), todo: true }
-        : top
-          ? { label: "Разберите главную проблему", to: problemLink(top.r.id, check), todo: false }
-          : { label: "Открыть итог", to: stageRoot(check), todo: false };
+      : unchecked
+        ? { label: "Проверьте несколько оценок", to: reviewLink(check, { queue: "unchecked" }), todo: true }
+        : seriousStep(data) === "todo"
+          ? {
+              label: st && pendingOf(st) ? "Отметьте серьёзные ошибки" : "Подтвердите серьёзные ошибки",
+              to: stageRoot(check),
+              todo: true,
+            }
+          : top
+            ? { label: "Разберите главную проблему", to: problemLink(top.r.id, check), todo: false }
+            : { label: "Открыть итог", to: stageRoot(check), todo: false };
     return {
       line: { failed, measured, unmeasured, finishedAt: result.finishedAt },
       delta: <CompareDelta check={check} compare={compare} serious={seriousOf(data)?.marked} brief />,
@@ -102,15 +113,25 @@ function useCheckModel(check: Check, state: LabState | null): Model | null {
   }
   const job = state.job;
   const own = check === "tone" ? ["tone-check", "tone-criteria"] : ["discover"];
-  if (job.running && (own.includes(job.kind ?? "") || (job.kind === "launch" && job.input?.check === check)))
+  if (job.running && (own.includes(job.kind ?? "") || (job.kind === "launch" && job.input?.check === check))) {
+    // A launch is followed on its own page; one that only asks the agent again makes no «Итог» of the check.
+    const launch = job.kind === "launch" ? (job.progress.launch ?? job.id) : undefined;
+    const asking = job.kind === "launch" && !job.input?.modes?.includes("dataset");
     return {
-      status: job.kind === "tone-criteria" ? "Собираем критерии из правил общения." : "Идёт проверка разговоров.",
+      status:
+        job.kind === "tone-criteria"
+          ? "Собираем критерии из правил общения."
+          : asking
+            ? "Задаём агенту вопросы клиентов."
+            : "Идёт проверка разговоров.",
       step: {
         label: "Открыть",
-        to: job.kind === "tone-criteria" ? criterionLink("tone") : stageRoot(check),
+        to:
+          job.kind === "tone-criteria" ? criterionLink("tone") : launch ? launchLink(check, launch) : stageRoot(check),
         todo: false,
       },
     };
+  }
   const previous = previousOf(compare, state.logs.updatedAt);
   if (previous?.newExport)
     return {
@@ -128,6 +149,8 @@ function useCheckModel(check: Check, state: LabState | null): Model | null {
         : "Критерии соберутся из кода агента при первой проверке.",
       step: { label: "Новая проверка", to: launchLink(check), todo: true },
     };
+  // The rules not here yet: no step until they are, rather than «Добавить правила» to an agent that has them.
+  if (!judges.data && !judges.isError) return null;
   return check === "tone"
     ? {
         status: "Нужны правила общения: из них соберутся критерии.",
@@ -181,6 +204,13 @@ function useSimModel(state: LabState | null): Model | null {
     };
   const top = queueOf(criteria.list, "sim")[0];
   const answering = !!criteria.data?.sim && runAnswersPending(criteria.data);
+  // The newest run gave no number (it failed, or is not judged yet): the one before it is shown, and the card says so.
+  const later =
+    newest && newest.id !== run.id
+      ? newest.status === "failed"
+        ? `Последний прогон прервался${newest.error ? `: ${newest.error}` : ""}. Ниже — прогон перед ним.`
+        : "Последний прогон ещё не оценён. Ниже — прогон перед ним."
+      : null;
   return {
     line: {
       failed: m.failed,
@@ -188,7 +218,8 @@ function useSimModel(state: LabState | null): Model | null {
       unmeasured: Math.max(0, (m.total ?? 0) - m.measured),
       finishedAt: run.startedAt,
     },
-    sub: `Последний прогон ${BY_CRITERIA[run.check]}`,
+    sub: later ? `Прогон ${BY_CRITERIA[run.check]}` : `Последний прогон ${BY_CRITERIA[run.check]}`,
+    note: later && <p className="mt-1 text-small text-fg-3">{later}</p>,
     problem: top && {
       title: top.r.title,
       failed: top.r.sim.failed,
@@ -321,7 +352,10 @@ export function OverviewPage() {
   // ?report=tone|code opens that check's report; an older ?report=1 the check that has a result.
   const asked = params.get("report");
   useEffect(() => {
-    if (asked && state) setReport(asked === "tone" || asked === "code" ? asked : checkOfOld(state));
+    if (!asked || !state) return;
+    const check = asked === "tone" || asked === "code" ? asked : checkOfOld(state);
+    // A check hidden in this release (app/product) has no report to open.
+    setReport(CHECKS.includes(check) ? check : null);
   }, [asked, state]);
   const closeReport = () => {
     setReport(null);

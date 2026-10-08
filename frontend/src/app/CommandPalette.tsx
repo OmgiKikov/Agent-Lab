@@ -90,7 +90,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         id: "s-overview",
         group: "Разделы",
         label: "Обзор",
-        sub: "Итоги проверок и последнего прогона",
+        sub: SIMULATIONS ? "Итоги проверок и последнего прогона" : "Итоги проверок и что делать дальше",
         icon: LayoutDashboard,
         run: go(SECTIONS.overview),
       },
@@ -138,14 +138,19 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           icon: ListChecks,
           run: go(criterionLink(c)),
         },
-        {
-          id: `s-${c}-rules`,
-          group: "Разделы",
-          label: `${CHECK_NAME[c]} · Правила`,
-          sub: "Наборы правил и их версии, новый набор",
-          icon: BookOpen,
-          run: go(criterionLink(c, null, { rules: "1" })),
-        },
+        // Tone of voice keeps its rules on «Критерии» itself (sections/criteria/ToneCriteria): no entry of its own.
+        ...(c === "tone"
+          ? []
+          : [
+              {
+                id: `s-${c}-rules`,
+                group: "Разделы",
+                label: `${CHECK_NAME[c]} · Правила`,
+                sub: "Наборы правил и их версии, новый набор",
+                icon: BookOpen,
+                run: go(criterionLink(c, null, { rules: "1" })),
+              },
+            ]),
         {
           id: `s-${c}-history`,
           group: "Разделы",

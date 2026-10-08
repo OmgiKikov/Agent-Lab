@@ -108,11 +108,12 @@ export function CriteriaPage({ check }: { check: Check }) {
     const i = ordered.findIndex((c) => c.r.id === chosen?.r.id);
     select(ordered[Math.max(0, Math.min(ordered.length - 1, (i < 0 ? -1 : i) + d))].r.id);
   };
+  // The list of Точность walks with J and K; the cards of tone of voice open one by one (ToneCriteria).
   useKeys({
-    KeyJ: () => step(1),
-    KeyK: () => step(-1),
+    KeyJ: () => !tone && step(1),
+    KeyK: () => !tone && step(-1),
     Escape: () => {
-      if (!wide && asked) set((n) => n.delete("c"), false);
+      if (!tone && !wide && asked) set((n) => n.delete("c"), false);
     },
   });
 

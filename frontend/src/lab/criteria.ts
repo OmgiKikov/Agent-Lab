@@ -41,8 +41,16 @@ export function duty(text: string) {
   return text.replace(/^#{1,6}[ \t].*(?:\n|$)/gm, "").trim() || text;
 }
 
-/** Numbers every criterion once, for all screens: the ones for every conversation first, then by topic. */
-export function numberCriteria(rules: RuleEntry[], reference?: string[]): { list: Criterion[]; topics: Topic[] } {
+/** The criteria in force, in the order of the person's draft: their ids and the words of the rules they quote. */
+export type Reference = { id: string; quote: string }[];
+
+/**
+ * Numbers every criterion once, for all screens: the ones for every conversation first, then by topic. With the
+ * criteria in force (reference), a criterion takes its place among them: by the words it quotes when only one of them
+ * quotes those, else by its id (the one its verdicts carry); a criterion added or edited by hand quotes nothing. Two
+ * never share a number: one without a place, or whose place is taken, gets the next free one.
+ */
+export function numberCriteria(rules: RuleEntry[], reference?: Reference): { list: Criterion[]; topics: Topic[] } {
   const titles = [...new Set(rules.flatMap((r) => r.topics))];
   const topics = titles.map((t, i) => ({ topic: t, short: shortTopic(t), hue: HUES[i % HUES.length] }));
   const byTitle = new Map(topics.map((t) => [t.topic, t]));
@@ -59,10 +67,20 @@ export function numberCriteria(rules: RuleEntry[], reference?: string[]): { list
       titles.indexOf(x.r.topics[0] ?? "") - titles.indexOf(y.r.topics[0] ?? "") ||
       x.r.rule.text.localeCompare(y.r.rule.text),
   );
-  const positions = new Map(reference?.map((quote, i) => [quote, i + 1]));
+  const byId = new Map(reference?.map((c, i) => [c.id, i + 1]));
+  // A quote two criteria share places neither of them.
+  const byQuote = new Map<string, number | null>();
+  reference?.forEach((c, i) => c.quote && byQuote.set(c.quote, byQuote.has(c.quote) ? null : i + 1));
+  const taken = new Set<number>();
   let next = (reference?.length ?? 0) + 1;
   list.forEach((c, i) => {
-    c.n = reference ? (positions.get(c.r.rule.quote) ?? next++) : i + 1;
+    // The words it quotes first (criteria collected again keep them, not their places); else the criterion's own id,
+    // which its verdicts carry (log.ruleIds): a criterion added or edited by hand quotes nothing.
+    const place =
+      (c.r.rule.quote ? byQuote.get(c.r.rule.quote) : null) ??
+      [c.r.id, ...c.r.log.ruleIds].map((id) => byId.get(id)).find(Boolean);
+    c.n = !reference ? i + 1 : place && !taken.has(place) ? place : next++;
+    taken.add(c.n);
   });
   if (reference) list.sort((a, b) => a.n - b.n);
   return { list, topics };
@@ -103,7 +121,7 @@ export function useCriteria(
   const missing = [...(check ? [baseQuery] : []), ...(runId ? [runQuery] : [])].filter((q) => q.data === undefined);
   const failed = missing.find((q) => q.error && !q.isFetching);
   const criteria = useMemo(() => {
-    const reference = draft?.criteria.map((c) => c.quote);
+    const reference = draft?.criteria.map((c) => ({ id: c.id, quote: c.quote }));
     const numbered = numberCriteria(base?.rules ?? [], reference);
     const data = runId ? withRun : base;
     const unnamed = (base?.rules ?? []).filter((r) => !r.rule.name).length;
@@ -113,9 +131,12 @@ export function useCriteria(
       (data?.rules ?? []).filter((r) => !byId.has(r.id)),
       reference,
     ).list;
-    let next = Math.max(reference?.length ?? 0, ...numbered.list.map((c) => c.n), 0) + 1;
+    // A criterion only the run has keeps its place among the criteria in force while no other holds it.
+    const taken = new Set(numbered.list.map((c) => c.n));
+    let next = Math.max(reference?.length ?? 0, ...taken, 0) + 1;
     extra.forEach((c) => {
-      if (!reference?.includes(c.r.rule.quote)) c.n = next++;
+      if (taken.has(c.n) || c.n > (reference?.length ?? 0)) c.n = next++;
+      taken.add(c.n);
     });
     const list = (data?.rules ?? [])
       .map((r) => {

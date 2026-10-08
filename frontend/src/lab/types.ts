@@ -204,7 +204,15 @@ export type Job = {
   /** Starting the same work again continues the task with what it kept (backend/lab/api/work.py, continuable). */
   continuable?: boolean;
   /** What the task was started with: a check of tone of voice, its criteria and how many conversations. */
-  input?: { check?: Check; ruleIds?: string[]; count?: number; revision?: string; propose?: boolean };
+  input?: {
+    check?: Check;
+    ruleIds?: string[];
+    count?: number;
+    revision?: string;
+    propose?: boolean;
+    /** Of a launch: the ways it checks («Ответы в датасете», «Вопросы живому агенту», the simulations). */
+    modes?: string[];
+  };
 };
 /**
  * A check's result with people's answers taken in, counted by the service from the result's rows with the answers on

@@ -33,6 +33,7 @@ export function Trust({
   serious,
   problem,
   lead,
+  disputed = 0,
   className,
 }: {
   result: ResultBrief;
@@ -42,6 +43,8 @@ export function Trust({
   problem?: ReactNode;
   /** The steps lead the page: the answers, while they are to do, are its one black button. */
   lead?: boolean;
+  /** The verdicts a second model gave otherwise (LAB_SECOND_MODEL): the queue asks about them first. */
+  disputed?: number;
   className?: string;
 }) {
   const answers = answersOf(result);
@@ -84,19 +87,41 @@ export function Trust({
               )
             }
           />
+        ) : answers.errors > 0 ? (
+          <Step
+            state="todo"
+            title="Проверьте оценки модели"
+            text={`Ошибки нашла модель. Ответьте «да» или «нет» ${answers.errors <= 10 ? "на каждую" : "хотя бы на 10 из них"}, и станет понятно, можно ли верить итогу.`}
+            action={action("Начать")}
+          />
         ) : (
-          answers.errors > 0 && (
+          // No error found: the misses are what a person looks for, in the cases «без ошибки» the queue gives.
+          answers.measured > 0 && (
             <Step
               state="todo"
-              title="Проверьте оценки модели"
-              text={`Ошибки нашла модель. Ответьте «да» или «нет» ${answers.errors <= 10 ? "на каждую" : "хотя бы на 10 из них"}, и станет понятно, можно ли верить итогу.`}
-              action={action("Начать")}
+              title="Проверьте несколько оценок вручную"
+              text="Модель не нашла ошибок. Посмотрите несколько разговоров «без ошибки»: если ошибка там всё же есть, итог неточный."
+              action={
+                <Link to={queue} className={lead ? STEP_NEXT : STEP_ACTION}>
+                  Начать
+                </Link>
+              }
             />
           )
         )}
         {serious}
         {problem}
       </Steps>
+      {disputed > 0 && (
+        <p className="mt-2 text-small text-fg-3">
+          Вторая модель оценила иначе {disputed}
+          {"\u00a0"}
+          {plural(disputed, "случай", "случая", "случаев")}.{" "}
+          <Link to={reviewLink(check, { queue: "disputed" })} className="font-medium text-run hover:underline">
+            Разобрать спорные
+          </Link>
+        </p>
+      )}
       {answers.measured > 0 && answers.measured < FEW && (
         <p className="mt-2 text-small text-fg-3">{`Проверено меньше ${FEW}\u00a0разговоров, поэтому вывод предварительный.`}</p>
       )}

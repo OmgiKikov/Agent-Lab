@@ -44,7 +44,7 @@ const link = "font-medium text-run hover:underline";
  * «Стало лучше?» beside the number itself, as Braintrust sets a run beside its baseline: an arrow and the previous share,
  * «↑ было 42% · 3 октября», opening that check, then what may be read into the difference. Red when the errors grew
  * beyond chance, green when they fell; grey when the difference may be chance, the conversations are few, or the same
- * ones were judged again. The serious comparison is in its tooltip. Nothing when there is nothing to compare with; when
+ * ones were judged again. The serious comparison follows on a line of its own. Nothing when there is nothing to compare with; when
  * the service did not answer, a quiet «Повторить».
  */
 export function CompareDelta({
@@ -76,17 +76,21 @@ export function CompareDelta({
   if (!compare?.previous || !parts || !overall?.before.measured) return null;
   const grave = serious ? seriousCompareText(compare, serious) : null;
   return (
-    <Delta
-      to={historyLink(check, compare.previous.id)}
-      at={compare.previous.finishedAt}
-      before={overall.before}
-      direction={overall.direction}
-      verdict={overall.verdict}
-      again={compare.kind === "same-data"}
-      label={parts.value}
-      title={[parts.value, brief && parts.note, grave].filter(Boolean).join("\n")}
-      brief={brief}
-    />
+    <>
+      <Delta
+        to={historyLink(check, compare.previous.id)}
+        at={compare.previous.finishedAt}
+        before={overall.before}
+        direction={overall.direction}
+        verdict={overall.verdict}
+        again={compare.kind === "same-data"}
+        label={parts.value}
+        title={[parts.value, brief && parts.note, grave].filter(Boolean).join("\n")}
+        brief={brief}
+      />
+      {/* The serious errors beside the number in words, on a touch screen too: a tooltip alone is never read there. */}
+      {grave && !brief && <span className="basis-full whitespace-pre-line">{grave}</span>}
+    </>
   );
 }
 

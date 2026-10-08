@@ -237,8 +237,10 @@ export function Dialog({
         ]
           .filter(Boolean)
           .join(" · ");
-  // The check's result this conversation comes from; the service takes an answer only on it.
-  const finishedAt = row.source === "log" && row.check ? state?.checks[row.check]?.finishedAt : null;
+  // The check's result this conversation comes from, the one on screen; the service takes an answer only on it, so an
+  // answer given while a newer result came is refused, never put on a verdict the person did not see.
+  const finishedAt =
+    row.source === "log" && row.check ? (row.finishedAt ?? state?.checks[row.check]?.finishedAt ?? null) : null;
   const keyOf = (e: Example) => `${finishedAt ?? ""}|${e.ruleId}|${e.status}`;
   const shownOf = (r: Rule): Example => {
     const e = exampleFor(row, r);
@@ -291,6 +293,9 @@ export function Dialog({
             </Button>
           </div>
         </div>
+        {row.error && row.status !== "PASS" && row.status !== "FAIL" && (
+          <p className="mt-3 text-body text-fg-3">Почему не удалось проверить: {row.error}</p>
+        )}
         <KnowledgeEvidence articles={row.knowledge} error={row.contextError} />
         <div className="mt-5">
           <Facts

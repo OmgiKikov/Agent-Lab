@@ -149,7 +149,7 @@ export function problemMarkdown(
     `Агент должен: ${inlineText(duty(p.rule.text))}`,
     "",
     p.rule.quote
-      ? `${sourceLabel(p.rule.kind)}${p.rule.origin ? ` (${inlineText(p.rule.origin)})` : ""}: «${inlineText(p.rule.quote)}»`
+      ? `${sourceLabel(p.rule.kind)}${p.rule.origin ? ` (${inlineText(p.rule.origin)})` : ""}: «${inlineText(duty(p.rule.quote))}»`
       : "Цитата не сохранилась.",
   ];
   if (e)

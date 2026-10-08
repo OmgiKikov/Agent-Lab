@@ -200,7 +200,14 @@ export type Answer = {
  */
 export function answersWait(state: LabState | null, example: Pick<Example, "source" | "check">): string | null {
   if (example.source !== "log" || !state?.job.running) return null;
-  const running = (Object.keys(JOB_OF) as Check[]).find((c) => JOB_OF[c] === state.job.kind);
+  const job = state.job;
+  // A launch that checks the recorded answers writes its check's result as a check of its own does.
+  const running =
+    job.kind === "launch"
+      ? job.input?.modes?.includes("dataset")
+        ? job.input.check
+        : undefined
+      : (Object.keys(JOB_OF) as Check[]).find((c) => JOB_OF[c] === job.kind);
   return running && (example.check ?? running) === running
     ? "Идёт проверка разговоров. Ответить можно после неё."
     : null;

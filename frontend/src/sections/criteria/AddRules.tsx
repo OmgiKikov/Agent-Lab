@@ -138,6 +138,11 @@ export function AddRules({ replacing, onDone }: { replacing?: boolean; onDone?: 
       setOpen(true);
     });
   const write = () => {
+    // Other rules in text: the current ones to start from, to be corrected and collected again.
+    if (replacing && source.data && !edited.current) {
+      setText(source.data.content);
+      setName(source.data.origin);
+    }
     setOpen(true);
     setError(null);
     setTimeout(() => area.current?.focus(), 0);
@@ -172,6 +177,10 @@ export function AddRules({ replacing, onDone }: { replacing?: boolean; onDone?: 
   const replaces =
     replacing &&
     `Новые правила заменят текущие.${result ? " Итог Tone of voice по прежним правилам уйдёт в историю." : ""}${deck && SIMULATIONS ? " Сценарии из него сбросятся." : ""} Уточнения останутся там, где цитата из правил не изменилась.`;
+  // The same text collected again: the rules stay, the result by the criteria before stays until the next check.
+  const keeps = result
+    ? "Правила те же: итог останется посчитанным по прежним критериям, пока не пройдёт новая проверка."
+    : null;
   const noDataset = !dialogues && (
     <p className="mt-4 max-w-[62ch] text-body text-fg-2">
       Критерии собираются по разговорам, поэтому сначала нужен датасет.{" "}
@@ -230,6 +239,9 @@ export function AddRules({ replacing, onDone }: { replacing?: boolean; onDone?: 
               ? `${count(text.trim().length, "знак", "знака", "знаков")}. Модель соберёт из них критерии, их можно будет поправить.`
               : "Нужно хотя бы несколько предложений правил."}
           </p>
+          {replacing && text.trim().length >= 20 && (
+            <p className="mt-2 max-w-[62ch] text-small text-fg-2">{same ? keeps : replaces}</p>
+          )}
           {noDataset}
           {failed}
           <Button
@@ -369,6 +381,11 @@ export function AddRules({ replacing, onDone }: { replacing?: boolean; onDone?: 
             Отмена
           </button>
         </div>
+      )}
+      {replacing && hasSource && keeps && (
+        <p className="mt-2 max-w-[62ch] text-small text-fg-3">
+          Собрать заново: {keeps.charAt(0).toLowerCase() + keeps.slice(1)}
+        </p>
       )}
     </div>
   );

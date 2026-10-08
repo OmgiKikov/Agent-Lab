@@ -5,7 +5,15 @@ import { ArrowRight, RotateCcw, Square } from "lucide-react";
 import { Header } from "../../app/Header";
 import { historyLink, launchLink, runLink } from "../../app/links";
 import { api } from "../../lab/api";
-import { MODE_NAME, useLaunch, useQuestions, type Mode, type Pair } from "../../lab/launches";
+import {
+  MODE_NAME,
+  useLaunch,
+  useQuestion,
+  useQuestions,
+  type Mode,
+  type Pair,
+  type PairLine,
+} from "../../lab/launches";
 import { count, longDay, time } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { Conversation } from "../../product/Conversation";
@@ -18,7 +26,7 @@ import { StageResult } from "../../product/StageResult";
 import { CheckHeader } from "../checks/CheckHeader";
 import { SIMULATIONS } from "../../app/product";
 
-function pairLabel(item: Pair): string {
+function pairLabel(item: PairLine): string {
   if (item.comparable && item.baseline?.status === "FAIL" && item.status === "PASS") return "Исправлено";
   if (item.comparable && item.baseline?.status === "PASS" && item.status === "FAIL") return "Стало хуже";
   return (
@@ -28,13 +36,13 @@ function pairLabel(item: Pair): string {
 }
 
 /** «3 вопроса клиента»: how much of the conversation was asked again, instead of its id. */
-const questionsOf = (item: Pair) =>
-  count(item.original.filter((m) => m.role === "user").length, "вопрос клиента", "вопроса клиента", "вопросов клиента");
+const questionsOf = (item: PairLine) => count(item.asked, "вопрос клиента", "вопроса клиента", "вопросов клиента");
 
 function Pairs({ id }: { id: string }) {
   const q = useQuestions(id);
   const [chosenId, setChosenId] = useState<string | null>(null);
-  const chosen = q.data?.items.find((item) => item.dialogueId === chosenId);
+  const line = q.data?.items.find((item) => item.dialogueId === chosenId);
+  const whole = useQuestion(id, chosenId);
   if (q.isError) return <LoadFailed title="Ответы не загрузились" error={q.error} onRetry={() => q.refetch()} />;
   if (!q.data) return <Skeleton className="h-40" />;
   return (
@@ -65,66 +73,78 @@ function Pairs({ id }: { id: string }) {
           </li>
         ))}
       </ul>
-      {chosen && (
-        <Sheet open width="lg" onClose={() => setChosenId(null)} title={chosen.name} sub={questionsOf(chosen)}>
-          <div className="p-5">
-            <div className="grid gap-7 md:grid-cols-2">
-              <section>
-                <h3 className="mb-5 text-read font-semibold text-fg">В датасете</h3>
-                {chosen.baseline && (
-                  <p className="mb-3 text-small text-fg-3">
-                    Автооценка:{" "}
-                    {chosen.baseline.status === "FAIL"
-                      ? "с ошибками"
-                      : chosen.baseline.status === "PASS"
-                        ? "без ошибок"
-                        : "нет оценки"}
-                  </p>
-                )}
-                <Conversation
-                  turns={chosen.original.map((m) => ({
-                    role: m.role === "user" ? "customer" : "agent",
-                    text: m.content,
-                  }))}
-                />
-              </section>
-              <section>
-                <h3 className="mb-5 text-read font-semibold text-fg">Агент на стенде</h3>
-                <Conversation turns={chosen.conversation} />
-                <KnowledgeEvidence articles={chosen.knowledge} error={chosen.contextError} />
-                {chosen.error && (
-                  <p role="alert" className="mt-4 text-body text-bad">
-                    {chosen.error}
-                  </p>
-                )}
-              </section>
-            </div>
-            <section className="mt-8 border-t border-line pt-5">
-              <h3 className="text-read font-semibold text-fg">Оценка новых ответов</h3>
-              {chosen.baseline && (
-                <p className="mt-2 text-small text-fg-3">
-                  {chosen.comparable
-                    ? "Исходный и новый ответы оценены тем же судьёй по тем же критериям."
-                    : "Условия оценки различаются. Показываем ответы без вывода об улучшении."}
-                </p>
-              )}
-              {chosen.rules.map((rule) => (
-                <div key={rule.ruleId} className="mt-4 text-body">
-                  <p className="font-medium text-fg">
-                    {rule.rule} ·{" "}
-                    {rule.status === "FAIL" ? "Нарушено" : rule.status === "PASS" ? "Выполнено" : "Нет оценки"}
-                  </p>
-                  <p className="mt-1 text-fg-3">{rule.reason}</p>
-                  {rule.agentQuote && (
-                    <blockquote className="mt-2 border-l-2 border-mark pl-3 text-fg-2">{rule.agentQuote}</blockquote>
-                  )}
-                </div>
-              ))}
-            </section>
-          </div>
+      {line && (
+        <Sheet open width="lg" onClose={() => setChosenId(null)} title={line.name} sub={questionsOf(line)}>
+          {whole.isError ? (
+            <LoadFailed title="Разговор не загрузился" error={whole.error} onRetry={() => whole.refetch()} />
+          ) : !whole.data || whole.data.dialogueId !== line.dialogueId ? (
+            <Skeleton className="m-5 h-60" />
+          ) : (
+            <Question chosen={whole.data} />
+          )}
         </Sheet>
       )}
     </section>
+  );
+}
+
+/** One recorded conversation asked again: both sides, then the verdicts on the new answers. */
+function Question({ chosen }: { chosen: Pair }) {
+  return (
+    <div className="p-5">
+      <div className="grid gap-7 md:grid-cols-2">
+        <section>
+          <h3 className="mb-5 text-read font-semibold text-fg">В датасете</h3>
+          {chosen.baseline && (
+            <p className="mb-3 text-small text-fg-3">
+              Автооценка:{" "}
+              {chosen.baseline.status === "FAIL"
+                ? "с ошибками"
+                : chosen.baseline.status === "PASS"
+                  ? "без ошибок"
+                  : "нет оценки"}
+            </p>
+          )}
+          <Conversation
+            turns={chosen.original.map((m) => ({
+              role: m.role === "user" ? "customer" : "agent",
+              text: m.content,
+            }))}
+          />
+        </section>
+        <section>
+          <h3 className="mb-5 text-read font-semibold text-fg">Агент на стенде</h3>
+          <Conversation turns={chosen.conversation} />
+          <KnowledgeEvidence articles={chosen.knowledge} error={chosen.contextError} />
+          {chosen.error && (
+            <p role="alert" className="mt-4 text-body text-bad">
+              {chosen.error}
+            </p>
+          )}
+        </section>
+      </div>
+      <section className="mt-8 border-t border-line pt-5">
+        <h3 className="text-read font-semibold text-fg">Оценка новых ответов</h3>
+        {chosen.baseline && (
+          <p className="mt-2 text-small text-fg-3">
+            {chosen.comparable
+              ? "Исходный и новый ответы оценены тем же судьёй по тем же критериям."
+              : "Условия оценки различаются. Показываем ответы без вывода об улучшении."}
+          </p>
+        )}
+        {chosen.rules.map((rule) => (
+          <div key={rule.ruleId} className="mt-4 text-body">
+            <p className="font-medium text-fg">
+              {rule.rule} · {rule.status === "FAIL" ? "Нарушено" : rule.status === "PASS" ? "Выполнено" : "Нет оценки"}
+            </p>
+            <p className="mt-1 text-fg-3">{rule.reason}</p>
+            {rule.agentQuote && (
+              <blockquote className="mt-2 border-l-2 border-mark pl-3 text-fg-2">{rule.agentQuote}</blockquote>
+            )}
+          </div>
+        ))}
+      </section>
+    </div>
   );
 }
 export function LaunchReport() {
@@ -180,9 +200,12 @@ export function LaunchReport() {
   if (pathname !== launchLink(record.check, record.id))
     return <Navigate to={launchLink(record.check, record.id)} replace />;
   const questions = record.modes.questions?.questionsId;
-  // The service continues only the launch it stopped last, with what that one kept (api/work.py, paused); any other
-  // launch is started again from the beginning, and the button says so.
-  const continues = state?.paused?.launch?.id === record.id;
+  // The service continues a stopped launch with what it kept while it is the latest of its kind of work and nothing it
+  // was made of changed (api/work.py, continuable); any other launch is started again from the beginning, and the
+  // button says so. One made of another dataset or other rules than the ones in force is not started again here: that
+  // would put them back in force (api/launches.py, retry); «Новая проверка» goes by the current ones.
+  const continues = record.continuable ?? state?.paused?.launch?.id === record.id;
+  const again = record.current !== false;
   return (
     <div>
       <CheckHeader
@@ -198,19 +221,21 @@ export function LaunchReport() {
               Остановить
             </Button>
           ) : (
-            <Button
-              icon={RotateCcw}
-              loading={busy}
-              disabled={!!state?.job.running}
-              onClick={retry}
-              title={
-                continues
-                  ? "Продолжить с того места, где проверка остановилась: уже проверенное не проверяется снова"
-                  : "Новая проверка с теми же датасетом, правилами и режимами"
-              }
-            >
-              {continues ? "Продолжить" : "Запустить ещё раз"}
-            </Button>
+            again && (
+              <Button
+                icon={RotateCcw}
+                loading={busy}
+                disabled={!!state?.job.running}
+                onClick={retry}
+                title={
+                  continues
+                    ? "Продолжить с того места, где проверка остановилась: уже проверенное не проверяется снова"
+                    : "Новая проверка с теми же датасетом, правилами и режимами"
+                }
+              >
+                {continues ? "Продолжить" : "Запустить ещё раз"}
+              </Button>
+            )
           )
         }
       />
@@ -232,6 +257,11 @@ export function LaunchReport() {
                 : ""}
               {record.agentVersion ? ` · ${record.agentVersion}` : ""}
             </p>
+            {!again && record.status !== "running" && (
+              <p className="mt-1 text-body text-fg-3">
+                После этого запуска сменились правила или датасет. Новая проверка пойдёт по текущим.
+              </p>
+            )}
           </div>
           <span role="status">
             <LaunchStatus status={record.status} />

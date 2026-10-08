@@ -293,9 +293,27 @@ export function ConnectionForm({
             Адрес не нужен: агент уже запущен на этом компьютере{target?.where ? ` (${target.where})` : ""}.
           </p>
         )}
-        {/* The simulations and Точность are hidden in the first release (app/product): their fields with them. */}
-        {SIMULATIONS && (
-          <Field label="Клиенты для симуляций" hint="ЕПК через пробел. Если пусто, пишет тестовый клиент.">
+        {/* With Точность hidden (app/product), the agent's code is still where «Запуск из кода» runs it from. */}
+        {way === "local-code" && !ACCURACY && (
+          <Field label="Папка с кодом агента" hint="Из неё агент запускается на время проверки.">
+            <Input
+              name="repo"
+              autoComplete="off"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              placeholder="~/Desktop/agent"
+              className={INPUT}
+              spellCheck={false}
+              aria-invalid={scpForm(code.trim()) || undefined}
+            />
+          </Field>
+        )}
+        {/* The customers the stand is asked as: by «Вопросы живому агенту» and by the simulations. */}
+        {(way === "prod" || SIMULATIONS) && (
+          <Field
+            label={SIMULATIONS ? "Клиенты на стенде" : "Клиенты для вопросов на стенде"}
+            hint="ЕПК через пробел: от их имени агенту задаются вопросы. Если пусто, пишет тестовый клиент."
+          >
             <Input
               name="epk"
               autoComplete="off"

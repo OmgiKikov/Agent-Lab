@@ -7,6 +7,7 @@ import { useCriteria, type Criterion } from "../../lab/criteria";
 import { longDay, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { summarySentence } from "../../lab/problemReport";
+import { toneJudgedByOther } from "../../lab/tone";
 import { seriousOf } from "../../lab/severity";
 import { Step, STEP_ACTION, STEP_NEXT } from "../../product/Checklist";
 import { seriousStep, SeverityStatus } from "../../product/Severity";
@@ -15,6 +16,7 @@ import { answersPending, Trust } from "../../product/Trust";
 import { Button } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
+import { queueOf as queueOfVerdicts } from "../../lab/verdicts";
 import { checked, queueOf } from "../problems/model";
 import { ProblemList } from "../problems/ProblemList";
 import { CheckHeader } from "./CheckHeader";
@@ -134,6 +136,14 @@ export function ResultPage({ check }: { check: Check }) {
           {state.logs.file ? `«${state.logs.file}» · ` : ""}проверено {longDay(log.finishedAt)}
         </span>
       </div>
+      {check === "tone" && toneJudgedByOther(state) && (
+        <p className="mt-2 max-w-[68ch] text-body text-fg-2">
+          Критерии изменились после этой проверки: итог посчитан по прежним.{" "}
+          <Link to={launchLink(check)} className="font-medium text-run hover:underline">
+            Проверить по новым
+          </Link>
+        </p>
+      )}
       <StageResult
         className="mt-4"
         failed={log.withViolations}
@@ -150,6 +160,7 @@ export function ResultPage({ check }: { check: Check }) {
           lead
           serious={<SeverityStatus data={data} check={check} next={!answering} />}
           problem={top && <MainProblem check={check} c={top} next={!answering && seriousStep(data) !== "todo"} />}
+          disputed={queueOfVerdicts(data, "disputed", null, "log").length}
           className="mt-5"
         />
       )}

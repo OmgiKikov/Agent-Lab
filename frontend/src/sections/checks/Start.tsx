@@ -107,10 +107,12 @@ export function ToneStart() {
   const job = state?.job;
   // A launch of this check is a check under way too: its report shows how far it got.
   const launch = job?.running && job.kind === "launch" && job.input?.check === "tone" ? job.progress.launch : null;
+  // A launch that only asks the agent again makes no «Итог»: its answers are on its own page.
+  const asking = !!launch && !job?.input?.modes?.includes("dataset");
   if (job?.running && (job.kind === "tone-check" || launch))
     return (
       <Empty
-        title="Проверяем разговоры"
+        title={asking ? "Задаём агенту вопросы клиентов" : "Проверяем разговоры"}
         action={
           <Link to={launch ? launchLink("tone", launch) : SECTIONS.tone} className={primary}>
             Открыть проверку
@@ -118,7 +120,9 @@ export function ToneStart() {
           </Link>
         }
       >
-        Итог появится здесь, когда модель проверит разговоры. Страницу можно закрыть, итог сохранится.
+        {asking
+          ? "Новые ответы агента и их оценка будут на странице запуска. Итог проверки разговоров здесь не изменится."
+          : "Итог появится здесь, когда модель проверит разговоры. Страницу можно закрыть, итог сохранится."}
       </Empty>
     );
   if (previous?.newExport)

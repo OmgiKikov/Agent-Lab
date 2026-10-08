@@ -116,7 +116,12 @@ def current_markdown(kind: str) -> str:
     value = storage.judges.active(kind)
     if value:
         return markdown(value['id'])
-    record = storage.documents.load(checks.result(kind)) or storage.documents.load(checks.CODE_CRITERIA) or {}
+    # Of Точность, the criteria read from the code wait in their own record until the first check; never tone's.
+    record = (
+        storage.documents.load(checks.result(kind))
+        or (storage.documents.load(checks.CODE_CRITERIA) if kind == checks.CODE else None)
+        or {}
+    )
     criteria = [rule for topic in record.get('topics', []) for rule in topic['rules']]
     if not criteria:
         raise ValueError('Сначала выберите набор или сформируйте критерии.')
