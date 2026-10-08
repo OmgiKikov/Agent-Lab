@@ -1,10 +1,11 @@
-"""Select one immutable dataset as the working export; keep each dataset's compatible results and scenarios."""
+"""Select one immutable dataset as the working export; keep each dataset's compatible results and scenarios, and its
+catalog of business scenarios with them."""
 
 from .. import storage
-from ..domain import accuracy, checks, export
+from ..domain import accuracy, catalog, checks, export
 from . import agent_context, same_work
 
-CONTEXT = (*checks.RESULTS.values(), checks.DECK)
+CONTEXT = (*checks.RESULTS.values(), checks.DECK, checks.CATALOG)
 
 
 def _signatures() -> dict[str, str]:
@@ -75,7 +76,20 @@ def _activate(dataset_id: str) -> dict:
     # A deck built without a check (None) carries no criteria: nothing in it can go stale, it comes back as it was.
     kept = deck and 'check' in deck and (deck['check'] is None or deck['check'] in valid)
     storage.documents.save(checks.DECK, deck if kept else None)
+    # The catalog comes back with its dataset: its readings and counts are of that export. A dataset that never had
+    # one keeps the scenarios in use, without another export's readings: its conversations are placed in the same ones.
+    if checks.CATALOG in documents:
+        storage.documents.save(checks.CATALOG, documents[checks.CATALOG])
+    else:
+        storage.documents.save(checks.CATALOG, _scenarios_only(storage.documents.load(checks.CATALOG)))
     return item
+
+
+def _scenarios_only(found: dict | None) -> dict | None:
+    """A catalog's scenarios without the readings, counts and examples of the export it was built from."""
+    if not found or not found.get('categories'):
+        return None
+    return {'revision': found['revision'], 'model': found.get('model'), 'categories': catalog.bare(found['categories'])}
 
 
 def select(dataset_id: str) -> dict:

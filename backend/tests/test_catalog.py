@@ -8,6 +8,7 @@ import support
 from lab import models, storage
 from lab.domain import catalog, checks
 from lab.flows import catalog as catalog_flow
+from lab.flows import datasets
 from lab.flows import scenarios as deck_flow
 from lab.roles import Answer
 from lab.roles import catalog as catalog_role
@@ -98,6 +99,26 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
                 {'task': 'узнать ставку', 'object': 'тариф', 'count': 1},
             ],
         )
+
+    def test_the_catalog_comes_back_with_its_dataset_and_a_new_one_keeps_only_its_scenarios(self):
+        """Readings and counts are of one export: going back to a dataset brings back its own catalog; a dataset that
+        never had one is placed in the scenarios in use, with none of another export's readings."""
+        first = datasets.add([talk('a')], 'one.json')
+        built = {
+            'revision': catalog.revision(catalog.taxonomy(PROPOSED)),
+            'model': 'm',
+            'categories': catalog.taxonomy(PROPOSED),
+            'episodes': {'a': {'inDomain': True, 'start': 1, 'task': 'починить QR', 'scenarioId': 'c1s1'}},
+            'totals': {'dialogues': 1},
+        }
+        storage.documents.save(checks.CATALOG, built)
+        datasets.add([talk('b')], 'two.json')
+        kept = storage.documents.load(checks.CATALOG)
+        self.assertEqual((kept['revision'], kept['categories']), (built['revision'], catalog.bare(built['categories'])))
+        self.assertNotIn('episodes', kept)
+        self.assertNotIn('totals', kept)
+        datasets.select(first['id'])
+        self.assertEqual(storage.documents.load(checks.CATALOG), built)
 
     def test_the_catalog_counts_its_scenarios_and_shows_real_first_messages(self):
         categories = catalog.taxonomy(PROPOSED)

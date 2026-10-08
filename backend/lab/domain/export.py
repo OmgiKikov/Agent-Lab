@@ -93,9 +93,15 @@ def preview(dialogue: dict) -> dict:
 
 
 def turns(text: str) -> list[dict]:
-    """A conversation's text read as written, where no order column can settle its repeats (a .csv export): the likelier
-    of its layouts."""
-    return layouts(text)[0][1]
+    """A conversation's text read as written, where no order column can settle its repeats (a .csv export)."""
+    return _as_written(layouts(text))[1]
+
+
+def _as_written(found: list[tuple[str, list[dict]]]) -> tuple[str, list[dict]]:
+    """The layout a text is read in when no order column settles it: the likelier one that holds both sides of the
+    conversation, else the likelier. Inline exchanges on lines of their own («CLIENT … AGENT …» per line) read on lines
+    would put the agent's words into the customer's messages."""
+    return next((f for f in found if {turn['role'] for turn in f[1]} == {'user', 'assistant'}), found[0])
 
 
 def _split(text: str, marks: list[re.Match]) -> list[dict]:
@@ -141,7 +147,7 @@ def _read_turns(text: str, order: object) -> tuple[str, list[dict], list[dict], 
                 reason = reason or error
                 continue
             return layout, turns, messages, kept, None
-    layout, turns = found[0]
+    layout, turns = _as_written(found)
     return layout, turns, turns, list(range(len(turns))), str(reason or 'в тексте нет реплик')
 
 

@@ -182,6 +182,21 @@ class LogImportTests(unittest.TestCase):
         self.assertEqual(dialogues[0]['messages'][0]['content'], 'Терминал пишет HOST AGENT NOT FOUND')
         self.assertEqual(dialogues[0]['meta']['import']['layout'], 'lines')
 
+    def test_without_an_order_column_a_text_is_read_in_the_layout_that_holds_both_sides(self):
+        # A .csv has no order column: inline exchanges on lines of their own are still four messages, not two.
+        text = 'CLIENT Привет AGENT Здравствуйте\nCLIENT Какой тариф AGENT 1 процент'
+        self.assertEqual(
+            [(m['role'], m['content']) for m in logs.turns(text)],
+            [('user', 'Привет'), ('assistant', 'Здравствуйте'), ('user', 'Какой тариф'), ('assistant', '1 процент')],
+        )
+        # Turns on lines of their own stay so: a marker word inside a message is the customer's.
+        text = 'CLIENT Терминал пишет HOST AGENT NOT FOUND\nAGENT Перезагрузите'
+        self.assertEqual(logs.turns(text)[0]['content'], 'Терминал пишет HOST AGENT NOT FOUND')
+        # An order column that cannot settle the text: read as written by the same rule, never one-sided.
+        text = 'CLIENT Привет AGENT Здравствуйте\nCLIENT Какой тариф AGENT 1 процент'
+        dialogues = logs.prepare('export.xlsx', excel(text, 'нет'))
+        self.assertEqual([m['role'] for m in dialogues[0]['messages']], ['user', 'assistant', 'user', 'assistant'])
+
     def test_zero_is_a_real_id_and_final_customer_turn_is_preserved(self):
         text = PAIR + 'CLIENT Ещё один вопрос'
         dialogues = logs.prepare('export.xlsx', excel(text, '[1, 2, 3]', dialogue_id=0))
