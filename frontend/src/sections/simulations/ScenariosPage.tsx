@@ -11,7 +11,6 @@ import { useLabState } from "../../lab/LabProvider";
 import { personaName } from "../../lab/look";
 import { useCatalog } from "../../lab/catalog";
 import { CatalogTable, ScenarioTree, TreeHead, treeOf } from "./Catalog";
-import { DeckCheckLine } from "./Profile";
 import {
   namedCriteria,
   failedTypes,
@@ -238,8 +237,8 @@ export function ScenariosPage() {
                 "Сценариев пока нет"
               )}
             </p>
-            {cards.length > 0 && deck?.checks && <DeckCheckLine checks={deck.checks} />}
-            {cards.length > 0 && tests && (
+            {/* The filters by the last results say something only once a card was played. */}
+            {cards.length > 0 && tests && counts.unplayed < cards.length && (
               <div role="radiogroup" aria-label="Итог в последнем прогоне" className="flex flex-wrap gap-1.5">
                 {FILTERS.filter((f) => f.value !== "none" || counts.none > 0).map((f) => {
                   const on = f.value === filter;
@@ -297,6 +296,7 @@ export function ScenariosPage() {
           <div className="min-h-0 flex-1 overflow-auto px-2 pb-4">
             {shown.length > 0 && (
               <TreeHead
+                counted={!!catalog}
                 action={
                   <button
                     type="button"

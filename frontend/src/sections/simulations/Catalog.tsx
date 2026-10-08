@@ -80,23 +80,22 @@ export function treeOf(cards: Card[], catalog: Catalog | null, whole: boolean): 
 const percent = (share: number | null) =>
   share === null ? "" : `${(share * 100).toLocaleString("ru-RU", { maximumFractionDigits: share < 0.1 ? 1 : 0 })}%`;
 
-/** The numbers of a row: its conversations with their share, and its cards; aligned in two columns. */
+/** Every conversation is a card: the cards are named apart only where some are missing (the model failed them). */
+const short = (dialogues: number | null, cards: number) => dialogues !== null && cards < dialogues;
+
+/** The number of a row: its conversations with their share (its cards without the catalog), and a warning where
+ * fewer cards were built than it has conversations. */
 function Numbers({ dialogues, share, cards }: { dialogues: number | null; share: number | null; cards: number }) {
   return (
-    <>
-      <span className="w-[72px] flex-shrink-0 text-right text-small tabular-nums text-fg-2">
-        {dialogues ?? "—"}
-        {share !== null && <span className="text-fg-4"> · {percent(share)}</span>}
-      </span>
-      <span
-        className={cn(
-          "w-[52px] flex-shrink-0 text-right text-small tabular-nums",
-          cards ? "font-medium text-fg" : "text-fg-4",
-        )}
-      >
-        {cards}
-      </span>
-    </>
+    <span className="w-[88px] flex-shrink-0 text-right text-small tabular-nums text-fg-2">
+      {dialogues ?? cards}
+      {share !== null && <span className="text-fg-4"> · {percent(share)}</span>}
+      {short(dialogues, cards) && (
+        <span className="block text-meta text-warn" title="Не для всех разговоров собрана карточка">
+          карточек {cards}
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -206,13 +205,12 @@ export function ScenarioTree({
   );
 }
 
-/** The columns of the tree, over it: what its two numbers are. */
-export function TreeHead({ action }: { action?: ReactNode }) {
+/** The column of the tree, over it: what its number is. */
+export function TreeHead({ action, counted }: { action?: ReactNode; counted: boolean }) {
   return (
     <div className="flex items-end gap-1.5 border-b border-line px-3 pb-1.5 pl-2 text-meta text-fg-3">
       <span className="min-w-0 flex-1">{action}</span>
-      <span className="w-[72px] text-right">Диалогов</span>
-      <span className="w-[52px] text-right">Карточек</span>
+      <span className="w-[88px] text-right">{counted ? "Диалогов" : "Карточек"}</span>
     </div>
   );
 }
@@ -234,6 +232,7 @@ export function CatalogTable({
   const cards = tree.reduce((n, c) => n + c.cards, 0);
   const totals = catalog?.totals;
   const base = totals ? totals.placed : null;
+  const missing = base !== null && cards < base;
   return (
     <div className="min-h-0 overflow-auto">
       <div className="max-w-5xl px-4 pb-16 pt-5 lg:px-10 lg:pt-7">
@@ -243,7 +242,9 @@ export function CatalogTable({
             {count(tree.length, "кластер", "кластера", "кластеров")} и{" "}
             {count(scenarios, "сценарий", "сценария", "сценариев")}
           </span>
-          , для них {count(cards, "карточка клиента", "карточки клиентов", "карточек клиентов")}.
+          {missing
+            ? `, для них ${count(cards, "карточка клиента", "карточки клиентов", "карточек клиентов")}.`
+            : ", карточка клиента на каждый разговор."}
           {totals && base !== null
             ? ` Доли считаются от ${count(base, "разговора", "разговоров", "разговоров")} по теме агента из ${totals.dialogues} в выгрузке.`
             : " Каталог, по которому собраны карточки, уже заменён: числа разговоров не показаны."}
@@ -252,9 +253,8 @@ export function CatalogTable({
           <thead>
             <tr className="border-b border-line-strong text-small text-fg-3">
               <th className="py-2 pr-4 font-medium">Кластер</th>
-              <th className="py-2 pr-4 text-right font-medium">Диалогов</th>
-              <th className="py-2 pr-4 text-right font-medium">Карточек</th>
-              <th className="py-2 font-medium">Сценарии · диалогов / карточек</th>
+              <th className="py-2 pr-4 text-right font-medium">{catalog ? "Диалогов" : "Карточек"}</th>
+              <th className="py-2 font-medium">Сценарии</th>
             </tr>
           </thead>
           <tbody>
@@ -262,12 +262,14 @@ export function CatalogTable({
               <tr key={cluster.id} className="border-b border-line align-top">
                 <td className="w-[200px] py-3 pr-4 text-body font-medium text-fg">{cluster.title}</td>
                 <td className="whitespace-nowrap py-3 pr-4 text-right text-body tabular-nums text-fg">
-                  {cluster.dialogues ?? "—"}
+                  {cluster.dialogues ?? cluster.cards}
                   {cluster.share !== null && (
                     <span className="block text-small text-fg-3">{percent(cluster.share)}</span>
                   )}
+                  {short(cluster.dialogues, cluster.cards) && (
+                    <span className="block text-small text-warn">карточек {cluster.cards}</span>
+                  )}
                 </td>
-                <td className="py-3 pr-4 text-right text-body tabular-nums text-fg">{cluster.cards}</td>
                 <td className="py-2.5">
                   <ul className="flex flex-wrap gap-1.5">
                     {cluster.scenarios.map((s) => (
@@ -276,12 +278,15 @@ export function CatalogTable({
                           type="button"
                           disabled={!s.cards.length}
                           onClick={() => onScenario(s)}
-                          title={s.cards.length ? "Открыть карточку" : "Карточки для этого сценария нет"}
+                          title={s.cards.length ? "Открыть первую карточку" : "Карточки для этого сценария нет"}
                           className="inline-flex items-baseline gap-1.5 rounded-control border border-line px-2 py-1 text-left text-small text-fg-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60 enabled:hover:border-line-strong enabled:hover:bg-hover enabled:hover:text-fg disabled:opacity-60"
                         >
                           {s.title}
                           <span className="whitespace-nowrap tabular-nums text-fg-3">
-                            {s.dialogues ?? "—"} / {s.cards.length}
+                            {s.dialogues ?? s.cards.length}
+                            {short(s.dialogues, s.cards.length) && (
+                              <span className="text-warn"> · карточек {s.cards.length}</span>
+                            )}
                           </span>
                         </button>
                       </li>
@@ -294,7 +299,6 @@ export function CatalogTable({
               <tr className="border-b border-line align-top text-fg-3">
                 <td className="py-3 pr-4 text-body">Не про агента</td>
                 <td className="py-3 pr-4 text-right text-body tabular-nums">{totals.outOfDomain}</td>
-                <td className="py-3 pr-4 text-right text-body">—</td>
                 <td className="py-3 text-small">Разговоры без задачи из домена агента: в каталог не входят.</td>
               </tr>
             )}
@@ -302,7 +306,6 @@ export function CatalogTable({
               <tr className="border-b border-line align-top text-fg-3">
                 <td className="py-3 pr-4 text-body">Не попали в каталог</td>
                 <td className="py-3 pr-4 text-right text-body tabular-nums">{totals.unplaced + totals.unread}</td>
-                <td className="py-3 pr-4 text-right text-body">—</td>
                 <td className="py-3 text-small">Модель не прочитала или не разложила их по сценариям.</td>
               </tr>
             )}
@@ -312,7 +315,6 @@ export function CatalogTable({
                 <td className="py-3 pr-4 text-right text-body font-semibold tabular-nums text-fg">
                   {totals.dialogues}
                 </td>
-                <td className="py-3 pr-4 text-right text-body font-semibold tabular-nums text-fg">{cards}</td>
                 <td />
               </tr>
             )}

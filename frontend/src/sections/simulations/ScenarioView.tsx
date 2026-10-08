@@ -17,7 +17,7 @@ import { Skeleton } from "../../ui/EmptyState";
 import { Label } from "../../ui/Label";
 import { Tag } from "../../ui/Tag";
 import { Dot, dotOf } from "./parts";
-import { Fold, Profile, summaryClass, TaskHead } from "./Profile";
+import { Brief, Fold, Profile, summaryClass, TaskHead } from "./Profile";
 
 /** How the scenario's record stands: still loading, failed to load, or here (possibly empty). */
 export type RecordState = "loading" | "error" | "ready";
@@ -231,7 +231,7 @@ export function ScenarioView({
             Как это играет синтетический клиент
             <Fold />
           </summary>
-          <p className="mt-2 max-w-[66ch] whitespace-pre-line text-read text-fg-2">{card.situation}</p>
+          <Brief text={card.situation} />
         </details>
       )}
       {card.sourceDialogueId && <Source id={card.sourceDialogueId} />}

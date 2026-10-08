@@ -146,8 +146,6 @@ export type Reaction = {
   n: number;
   quote: string;
 };
-/** What the code found in the text the simulator reads (cards.audit): empty lists are clean. */
-export type Audit = { agentWords: string[]; criteriaWords: string[]; goalAhead: string[] };
 export type Card = {
   id: string;
   topic: string;
@@ -158,7 +156,6 @@ export type Card = {
   notEstablished?: string[];
   observations?: Observation[];
   reactions?: Reaction[];
-  checks?: { audit?: Audit };
   opening: string;
   criteria: Criterion[];
   origin: string;
@@ -282,24 +279,11 @@ export type Discover = {
   };
 };
 /** The scenarios, built from the errors of one check and remembering it. */
-/**
- * The deck's checks in counts (backend/lab/domain/scenarios.py, checked): cards whose text for the customer copies the
- * agent's words or the criteria, or names in the goal what the customer said later; and how customers answered when
- * the agent asked for an identifier, by action.
- */
-export type DeckChecks = {
-  cards: number;
-  agentWords: number;
-  criteriaWords: number;
-  goalAhead: number;
-  identifierAnswers: Record<string, number>;
-};
 /** check: null when the deck was built before any check: its cards carry no criteria. */
 export type Deck = {
   check: Check | null;
   cards: Card[];
   createdAt?: string;
-  checks?: DeckChecks;
   /** The revision of the catalog the cards were placed by: its counts belong to these cards only while it matches. */
   catalogRevision?: string | null;
 };
