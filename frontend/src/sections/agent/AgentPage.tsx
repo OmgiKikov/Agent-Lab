@@ -21,6 +21,7 @@ import { useToast } from "../../ui/toast";
 import { nameOf } from "../criteria/model";
 import type { AgentContext } from "./ContextFields";
 import { ConnectionForm } from "./Connection";
+import { ACCURACY } from "../../app/product";
 
 /** The characters of prompts the criteria planner takes (backend/lab/agents/sources.py, MAX_TOTAL). */
 const BUDGET = "60\u00a0000";
@@ -64,16 +65,19 @@ export function AgentPage() {
               К запуску
             </Link>
           )}
-          <Button
-            variant="primary"
-            icon={RotateCcw}
-            loading={reading}
-            disabled={busy || !codeAt}
-            onClick={readCode}
-            title={codeAt ? `Код агента: ${codeAt}` : "Сначала укажите, где код агента"}
-          >
-            {codeSources(state).length ? "Прочитать код заново" : "Прочитать код"}
-          </Button>
+          {/* The agent's code gives the criteria of Точность, hidden in the first release (app/product). */}
+          {ACCURACY && (
+            <Button
+              variant="primary"
+              icon={RotateCcw}
+              loading={reading}
+              disabled={busy || !codeAt}
+              onClick={readCode}
+              title={codeAt ? `Код агента: ${codeAt}` : "Сначала укажите, где код агента"}
+            >
+              {codeSources(state).length ? "Прочитать код заново" : "Прочитать код"}
+            </Button>
+          )}
         </>
       }
       below={<SectionJob kinds={["sources"]} />}
@@ -102,12 +106,18 @@ export function AgentPage() {
     <div className="flex h-full flex-col">
       {header}
       <div className="min-h-0 flex-1 overflow-auto">
-        <div className="grid max-w-6xl gap-x-12 gap-y-10 px-4 pb-16 pt-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] lg:px-10 lg:pt-8">
+        <div
+          className={cn(
+            "grid gap-x-12 gap-y-10 px-4 pb-16 pt-6 lg:px-10 lg:pt-8",
+            ACCURACY ? "max-w-6xl lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]" : "max-w-2xl",
+          )}
+        >
           <div>
             <h2 className="text-title font-semibold text-fg">Карточка агента</h2>
             <p className="mb-5 mt-1 text-small text-fg-3">
-              Кто этот агент, как с ним связаться, где его код и что о нём должен знать судья. Для проверки записанных
-              разговоров нужно только имя.
+              {ACCURACY
+                ? "Кто этот агент, как с ним связаться, где его код и что о нём должен знать судья. Для проверки записанных разговоров нужно только имя."
+                : "Кто этот агент и как с ним связаться. Для проверки записанных разговоров нужно только имя, подключение — для вопросов живому агенту."}
             </p>
             {context.isError ? (
               <LoadFailed
@@ -128,104 +138,106 @@ export function AgentPage() {
               <Skeleton className="h-[420px]" />
             )}
           </div>
-          <section aria-label="Код агента">
-            <h2 className="text-title font-semibold text-fg">Код агента</h2>
-            <p className={cn("mt-1 text-small text-fg-3", sources.length && over.length ? "mb-3" : "mb-5")}>
-              {sources.length ? (
-                <>
-                  {plural(sources.length, "Прочитан", "Прочитано", "Прочитано")}{" "}
-                  {count(sources.length, "источник", "источника", "источников")}
-                  {read ? ` ${day(read.readAt)}` : ""}
-                  {read?.repo ? (
-                    <>
-                      {" "}
-                      из <span className="font-mono">{read.repo}</span>
-                    </>
-                  ) : null}
-                  . {plural(sources.length, "Из него", "Из них", "Из них")} дословно берутся критерии точности.
-                </>
-              ) : (
-                "Код ещё не прочитан. Укажите в карточке, где код агента — папку или ссылку на репозиторий, — сохраните и нажмите «Прочитать код»."
-              )}
-            </p>
-            {sources.length > 0 && over.length > 0 && (
-              <div className="mb-5 text-small">
-                <p className="text-warn">
-                  {count(over.length, "инструкция", "инструкции", "инструкций")}{" "}
-                  {plural(over.length, "не вошла", "не вошли", "не вошли")} в лимит {BUDGET}
-                  {"\u00a0"}знаков. Критерии из {plural(over.length, "неё", "них", "них")} не собраны.
-                </p>
-                <ul className="mt-1 space-y-0.5">
-                  {(allOver ? over : over.slice(0, 5)).map((origin) => (
-                    <li key={origin} className="break-all font-mono text-meta text-fg-3">
-                      {origin}
-                    </li>
-                  ))}
-                </ul>
-                {over.length > 5 && (
-                  <button
-                    type="button"
-                    onClick={() => setAllOver((v) => !v)}
-                    className="mt-1 rounded-sm font-medium text-run hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
-                  >
-                    {allOver ? "Свернуть" : `Показать все ${over.length}`}
-                  </button>
+          {ACCURACY && (
+            <section aria-label="Код агента">
+              <h2 className="text-title font-semibold text-fg">Код агента</h2>
+              <p className={cn("mt-1 text-small text-fg-3", sources.length && over.length ? "mb-3" : "mb-5")}>
+                {sources.length ? (
+                  <>
+                    {plural(sources.length, "Прочитан", "Прочитано", "Прочитано")}{" "}
+                    {count(sources.length, "источник", "источника", "источников")}
+                    {read ? ` ${day(read.readAt)}` : ""}
+                    {read?.repo ? (
+                      <>
+                        {" "}
+                        из <span className="font-mono">{read.repo}</span>
+                      </>
+                    ) : null}
+                    . {plural(sources.length, "Из него", "Из них", "Из них")} дословно берутся критерии точности.
+                  </>
+                ) : (
+                  "Код ещё не прочитан. Укажите в карточке, где код агента — папку или ссылку на репозиторий, — сохраните и нажмите «Прочитать код»."
                 )}
-              </div>
-            )}
-            {sources.length > 0 && (
-              <>
-                <Label>Инструкции и инструменты</Label>
-                {/* How many criteria each file gave comes from the record of the check: said only once it came. */}
-                {criteria.error && (
-                  <LoadFailed title="Не удалось загрузить критерии" error={criteria.error} onRetry={criteria.retry} />
-                )}
-                <ul className="mt-2 divide-y divide-line">
-                  {sources.map((s) => {
-                    const mine = list.filter((c) => c.r.rule.sourceId === s.id);
-                    const broken = mine.filter((c) => c.r.log.failed > 0).length;
-                    const { file, dir } = nameOf(s);
-                    const Icon = s.kind === "tools" ? Database : FileText;
-                    return (
-                      <li key={s.id}>
-                        <Link
-                          to={criterionLink("code", null, { f: s.id, view: "code" })}
-                          className="-mx-3 grid grid-cols-[20px_minmax(0,1fr)_auto_16px] items-center gap-3 rounded-control px-3 py-3 transition-colors hover:bg-hover"
-                        >
-                          <Icon aria-hidden className="size-4 text-fg-3" />
-                          <span className="min-w-0">
-                            <span className="block truncate font-mono text-small text-fg">{file}</span>
-                            <span className="block truncate font-mono text-meta text-fg-3">
-                              {dir} · {thousands(s.chars)}
-                            </span>
-                          </span>
-                          <div className="text-right text-small text-fg-3">
-                            {criteria.loading ? (
-                              <Skeleton className="ml-auto h-4 w-20" />
-                            ) : criteria.error ? null : mine.length ? (
-                              <>
-                                {mine.length} {plural(mine.length, "критерий", "критерия", "критериев")}
-                                {broken ? (
-                                  <>
-                                    , <span className="text-bad">{broken} с ошибкой</span>
-                                  </>
-                                ) : (
-                                  ""
-                                )}
-                              </>
-                            ) : (
-                              "критериев нет"
-                            )}
-                          </div>
-                          <ArrowRight aria-hidden className="size-3.5 text-fg-4" />
-                        </Link>
+              </p>
+              {sources.length > 0 && over.length > 0 && (
+                <div className="mb-5 text-small">
+                  <p className="text-warn">
+                    {count(over.length, "инструкция", "инструкции", "инструкций")}{" "}
+                    {plural(over.length, "не вошла", "не вошли", "не вошли")} в лимит {BUDGET}
+                    {"\u00a0"}знаков. Критерии из {plural(over.length, "неё", "них", "них")} не собраны.
+                  </p>
+                  <ul className="mt-1 space-y-0.5">
+                    {(allOver ? over : over.slice(0, 5)).map((origin) => (
+                      <li key={origin} className="break-all font-mono text-meta text-fg-3">
+                        {origin}
                       </li>
-                    );
-                  })}
-                </ul>
-              </>
-            )}
-          </section>
+                    ))}
+                  </ul>
+                  {over.length > 5 && (
+                    <button
+                      type="button"
+                      onClick={() => setAllOver((v) => !v)}
+                      className="mt-1 rounded-sm font-medium text-run hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
+                    >
+                      {allOver ? "Свернуть" : `Показать все ${over.length}`}
+                    </button>
+                  )}
+                </div>
+              )}
+              {sources.length > 0 && (
+                <>
+                  <Label>Инструкции и инструменты</Label>
+                  {/* How many criteria each file gave comes from the record of the check: said only once it came. */}
+                  {criteria.error && (
+                    <LoadFailed title="Не удалось загрузить критерии" error={criteria.error} onRetry={criteria.retry} />
+                  )}
+                  <ul className="mt-2 divide-y divide-line">
+                    {sources.map((s) => {
+                      const mine = list.filter((c) => c.r.rule.sourceId === s.id);
+                      const broken = mine.filter((c) => c.r.log.failed > 0).length;
+                      const { file, dir } = nameOf(s);
+                      const Icon = s.kind === "tools" ? Database : FileText;
+                      return (
+                        <li key={s.id}>
+                          <Link
+                            to={criterionLink("code", null, { f: s.id, view: "code" })}
+                            className="-mx-3 grid grid-cols-[20px_minmax(0,1fr)_auto_16px] items-center gap-3 rounded-control px-3 py-3 transition-colors hover:bg-hover"
+                          >
+                            <Icon aria-hidden className="size-4 text-fg-3" />
+                            <span className="min-w-0">
+                              <span className="block truncate font-mono text-small text-fg">{file}</span>
+                              <span className="block truncate font-mono text-meta text-fg-3">
+                                {dir} · {thousands(s.chars)}
+                              </span>
+                            </span>
+                            <div className="text-right text-small text-fg-3">
+                              {criteria.loading ? (
+                                <Skeleton className="ml-auto h-4 w-20" />
+                              ) : criteria.error ? null : mine.length ? (
+                                <>
+                                  {mine.length} {plural(mine.length, "критерий", "критерия", "критериев")}
+                                  {broken ? (
+                                    <>
+                                      , <span className="text-bad">{broken} с ошибкой</span>
+                                    </>
+                                  ) : (
+                                    ""
+                                  )}
+                                </>
+                              ) : (
+                                "критериев нет"
+                              )}
+                            </div>
+                            <ArrowRight aria-hidden className="size-3.5 text-fg-4" />
+                          </Link>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </>
+              )}
+            </section>
+          )}
         </div>
       </div>
     </div>

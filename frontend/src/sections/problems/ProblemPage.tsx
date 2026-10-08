@@ -46,6 +46,7 @@ import { Handoff } from "./Handoff";
 import { Reproduce } from "./Reproduce";
 import { checked, violationsOf } from "./model";
 import { shareBase } from "../../app/agent";
+import { SIMULATIONS } from "../../app/product";
 
 /**
  * One problem, read top to bottom: what the agent does wrong, what it must do instead, whether its errors are serious
@@ -301,7 +302,8 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
                   <ArrowRight aria-hidden className="size-4" />
                 </Link>
               )
-            : r.sim.failed > 0 &&
+            : SIMULATIONS &&
+              r.sim.failed > 0 &&
               data.sim && (
                 <Link
                   to={problemLink(r.id, "sim", data.sim.runId)}
@@ -386,7 +388,7 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
             </div>
           </section>
 
-          {stage !== "sim" && (
+          {stage !== "sim" && SIMULATIONS && (
             <div className="mt-12 border-t border-line pt-8">
               <Reproduce r={r} check={stage} />
             </div>

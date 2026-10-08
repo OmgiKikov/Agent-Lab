@@ -1,4 +1,5 @@
-import { createBrowserRouter, Navigate, useLocation, useParams } from "react-router-dom";
+import { createBrowserRouter, Navigate, useLocation, useParams, type RouteObject } from "react-router-dom";
+import { ACCURACY, SIMULATIONS } from "./app/product";
 import {
   criterionLink,
   historyLink,
@@ -162,6 +163,12 @@ function OldStart() {
   return <Navigate to={history ? historyLink("tone", history) : SECTIONS.overview} replace />;
 }
 
+/** Точность and the simulations are hidden in the first release (app/product): their addresses lead to «Обзор». */
+const shown = (route: RouteObject): RouteObject =>
+  (!ACCURACY && route.path?.startsWith("accuracy")) || (!SIMULATIONS && route.path?.startsWith("simulations"))
+    ? { path: route.path, element: <Navigate to="/overview" replace /> }
+    : route;
+
 /** The product inside one agent; «basename» (/a/<id>) keeps every link of it inside that agent. */
 export const productRouter = (basename: string) => createBrowserRouter(productRoutes, { basename });
 
@@ -172,91 +179,93 @@ const productRoutes = [
     path: "/",
     element: <Shell />,
     errorElement: <ScreenError />,
-    children: [
-      { index: true, element: <Navigate to="/overview" replace /> },
-      { path: "launches", element: <Navigate to="/tone/history" replace /> },
-      { path: "launches/:id", element: <LaunchReport /> },
-      { path: "tone/launches/:id", element: <LaunchReport /> },
-      { path: "accuracy/launches/:id", element: <LaunchReport /> },
-      { path: "tone/launch", element: <LaunchPage key="tone" check="tone" /> },
-      { path: "accuracy/launch", element: <LaunchPage key="code" check="code" /> },
-      { path: "overview", element: <OverviewPage /> },
-      { path: "data", element: <DataPage /> },
-      { path: "data/:datasetId", element: <DataPage /> },
-      // One page of the agent for someone who does not use the product: numbers, answers, the ticked problems.
-      { path: "summary", element: <SummaryPage /> },
-      // Tone of voice: the customers' real conversations checked against a person's rules of communication.
-      { path: "tone", element: <ResultPage key="tone" check="tone" /> },
-      // The step-by-step check of tone of voice became the one path: its rules step opens the rules from a document,
-      // its criteria step the new check, its result the result.
-      { path: "tone/check", element: <OldToneCheck /> },
-      { path: "tone/conversations", element: <DialogsPage key="tone" stage="tone" /> },
-      { path: "tone/review", element: <ReviewPage key="tone" stage="tone" /> },
-      // The rules of the next checks open over the criteria (?rules=1); this address was their own page.
-      { path: "tone/judges", element: <To to="/tone/criteria?rules=1" /> },
-      { path: "tone/criteria", element: <CriteriaPage key="tone" check="tone" /> },
-      { path: "tone/history", element: <HistoryPage key="tone" check="tone" /> },
-      // A past check of the history on its own page, read as «Итог»; the latest one leads to «Итог».
-      { path: "tone/history/:id", element: <RunPage key="tone" check="tone" /> },
-      { path: "tone/problems/:id", element: <ProblemPage key="tone" stage="tone" /> },
-      // Accuracy: the same conversations checked against the criteria read from the agent's code.
-      { path: "accuracy", element: <ResultPage key="code" check="code" /> },
-      { path: "accuracy/conversations", element: <DialogsPage key="code" stage="code" /> },
-      { path: "accuracy/review", element: <ReviewPage key="code" stage="code" /> },
-      { path: "accuracy/judges", element: <To to="/accuracy/criteria?rules=1" /> },
-      { path: "accuracy/criteria", element: <CriteriaPage key="code" check="code" /> },
-      { path: "accuracy/history", element: <HistoryPage key="code" check="code" /> },
-      { path: "accuracy/history/:id", element: <RunPage key="code" check="code" /> },
-      { path: "accuracy/problems/:id", element: <ProblemPage key="code" stage="code" /> },
-      // The simulations: synthetic customers play scenarios built from one check's errors; its criteria judge them.
-      { path: "simulations", element: <SimResultPage /> },
-      { path: "simulations/runs", element: <RunListPage /> },
-      { path: "simulations/scenarios", element: <ScenariosPage /> },
-      { path: "simulations/problems/:id", element: <ProblemPage key="sim" stage="sim" /> },
-      { path: "simulations/conversations", element: <DialogsPage key="sim" stage="sim" /> },
-      { path: "simulations/review", element: <ReviewPage key="sim" stage="sim" /> },
-      { path: "simulations/runs/:runId", element: <To to="/simulations" from={(p) => ({ run: p.runId ?? "" })} /> },
-      {
-        path: "simulations/scenarios/:scenarioId",
-        element: <To to="/simulations/scenarios" from={(p) => ({ s: p.scenarioId ?? "" })} />,
-      },
-      { path: "agent", element: <AgentPage /> },
-      { path: "settings", element: <SettingsPage /> },
-      // The addresses of the time when one result lived in «Диалоги» and the start chose what it was.
-      { path: "start", element: <OldStart /> },
-      { path: "check", element: <OldToneCheck /> },
-      { path: "logs", element: <OldLogs /> },
-      { path: "logs/conversations", element: <IntoCheck path="/conversations" /> },
-      { path: "logs/review", element: <IntoCheck path="/review" /> },
-      { path: "logs/problems/:id", element: <IntoCheck path="/problems/:id" /> },
-      { path: "logs/*", element: <IntoCheck /> },
-      { path: "criteria", element: <IntoCheck path="/criteria" /> },
-      { path: "agent/criteria", element: <IntoCheck path="/criteria" /> },
-      // The addresses of the time when both stages lived in one place.
-      { path: "problems", element: <ByStage path="" /> },
-      { path: "problems/:id", element: <ByStage path="/problems/:id" /> },
-      { path: "dialogs", element: <ByStage path="/conversations" traces="/overview" /> },
-      { path: "dialogs/:dialogKey", element: <DialogRedirect /> },
-      { path: "review", element: <ByStage path="/review" /> },
-      { path: "violations", element: <OldViolations /> },
-      { path: "results", element: <OldResults /> },
-      { path: "scenarios", element: <To to="/simulations/scenarios" /> },
-      { path: "rules", element: <IntoCheck path="/criteria" /> },
-      { path: "rules/:ruleId", element: <IntoCheck path="/criteria" from={(p) => ({ c: p.ruleId ?? "" })} /> },
-      { path: "lab", element: <Navigate to="/overview" replace /> },
-      { path: "lab/dialogs/*", element: <Navigate to="/simulations/conversations" replace /> },
-      { path: "lab/logs/*", element: <IntoCheck path="/conversations" /> },
-      { path: "lab/criteria/*", element: <IntoCheck path="/criteria" /> },
-      { path: "lab/judge/check", element: <IntoCheck path="/review" /> },
-      { path: "lab/judge/*", element: <IntoCheck path="/criteria" /> },
-      { path: "lab/checks/*", element: <Navigate to="/simulations/scenarios" replace /> },
-      { path: "lab/agent/*", element: <Navigate to="/agent" replace /> },
-      { path: "lab/*", element: <Navigate to="/overview" replace /> },
-      // Workshop's traces are no longer part of the product: their addresses lead to the overview.
-      { path: "runs/*", element: <Navigate to="/overview" replace /> },
-      { path: "search/*", element: <Navigate to="/overview" replace /> },
-      { path: "saved/*", element: <Navigate to="/overview" replace /> },
-      { path: "*", element: <Navigate to="/overview" replace /> },
-    ],
+    children: (
+      [
+        { index: true, element: <Navigate to="/overview" replace /> },
+        { path: "launches", element: <Navigate to="/tone/history" replace /> },
+        { path: "launches/:id", element: <LaunchReport /> },
+        { path: "tone/launches/:id", element: <LaunchReport /> },
+        { path: "accuracy/launches/:id", element: <LaunchReport /> },
+        { path: "tone/launch", element: <LaunchPage key="tone" check="tone" /> },
+        { path: "accuracy/launch", element: <LaunchPage key="code" check="code" /> },
+        { path: "overview", element: <OverviewPage /> },
+        { path: "data", element: <DataPage /> },
+        { path: "data/:datasetId", element: <DataPage /> },
+        // One page of the agent for someone who does not use the product: numbers, answers, the ticked problems.
+        { path: "summary", element: <SummaryPage /> },
+        // Tone of voice: the customers' real conversations checked against a person's rules of communication.
+        { path: "tone", element: <ResultPage key="tone" check="tone" /> },
+        // The step-by-step check of tone of voice became the one path: its rules step opens the rules from a document,
+        // its criteria step the new check, its result the result.
+        { path: "tone/check", element: <OldToneCheck /> },
+        { path: "tone/conversations", element: <DialogsPage key="tone" stage="tone" /> },
+        { path: "tone/review", element: <ReviewPage key="tone" stage="tone" /> },
+        // The rules of the next checks open over the criteria (?rules=1); this address was their own page.
+        { path: "tone/judges", element: <To to="/tone/criteria?rules=1" /> },
+        { path: "tone/criteria", element: <CriteriaPage key="tone" check="tone" /> },
+        { path: "tone/history", element: <HistoryPage key="tone" check="tone" /> },
+        // A past check of the history on its own page, read as «Итог»; the latest one leads to «Итог».
+        { path: "tone/history/:id", element: <RunPage key="tone" check="tone" /> },
+        { path: "tone/problems/:id", element: <ProblemPage key="tone" stage="tone" /> },
+        // Accuracy: the same conversations checked against the criteria read from the agent's code.
+        { path: "accuracy", element: <ResultPage key="code" check="code" /> },
+        { path: "accuracy/conversations", element: <DialogsPage key="code" stage="code" /> },
+        { path: "accuracy/review", element: <ReviewPage key="code" stage="code" /> },
+        { path: "accuracy/judges", element: <To to="/accuracy/criteria?rules=1" /> },
+        { path: "accuracy/criteria", element: <CriteriaPage key="code" check="code" /> },
+        { path: "accuracy/history", element: <HistoryPage key="code" check="code" /> },
+        { path: "accuracy/history/:id", element: <RunPage key="code" check="code" /> },
+        { path: "accuracy/problems/:id", element: <ProblemPage key="code" stage="code" /> },
+        // The simulations: synthetic customers play scenarios built from one check's errors; its criteria judge them.
+        { path: "simulations", element: <SimResultPage /> },
+        { path: "simulations/runs", element: <RunListPage /> },
+        { path: "simulations/scenarios", element: <ScenariosPage /> },
+        { path: "simulations/problems/:id", element: <ProblemPage key="sim" stage="sim" /> },
+        { path: "simulations/conversations", element: <DialogsPage key="sim" stage="sim" /> },
+        { path: "simulations/review", element: <ReviewPage key="sim" stage="sim" /> },
+        { path: "simulations/runs/:runId", element: <To to="/simulations" from={(p) => ({ run: p.runId ?? "" })} /> },
+        {
+          path: "simulations/scenarios/:scenarioId",
+          element: <To to="/simulations/scenarios" from={(p) => ({ s: p.scenarioId ?? "" })} />,
+        },
+        { path: "agent", element: <AgentPage /> },
+        { path: "settings", element: <SettingsPage /> },
+        // The addresses of the time when one result lived in «Диалоги» and the start chose what it was.
+        { path: "start", element: <OldStart /> },
+        { path: "check", element: <OldToneCheck /> },
+        { path: "logs", element: <OldLogs /> },
+        { path: "logs/conversations", element: <IntoCheck path="/conversations" /> },
+        { path: "logs/review", element: <IntoCheck path="/review" /> },
+        { path: "logs/problems/:id", element: <IntoCheck path="/problems/:id" /> },
+        { path: "logs/*", element: <IntoCheck /> },
+        { path: "criteria", element: <IntoCheck path="/criteria" /> },
+        { path: "agent/criteria", element: <IntoCheck path="/criteria" /> },
+        // The addresses of the time when both stages lived in one place.
+        { path: "problems", element: <ByStage path="" /> },
+        { path: "problems/:id", element: <ByStage path="/problems/:id" /> },
+        { path: "dialogs", element: <ByStage path="/conversations" traces="/overview" /> },
+        { path: "dialogs/:dialogKey", element: <DialogRedirect /> },
+        { path: "review", element: <ByStage path="/review" /> },
+        { path: "violations", element: <OldViolations /> },
+        { path: "results", element: <OldResults /> },
+        { path: "scenarios", element: <To to="/simulations/scenarios" /> },
+        { path: "rules", element: <IntoCheck path="/criteria" /> },
+        { path: "rules/:ruleId", element: <IntoCheck path="/criteria" from={(p) => ({ c: p.ruleId ?? "" })} /> },
+        { path: "lab", element: <Navigate to="/overview" replace /> },
+        { path: "lab/dialogs/*", element: <Navigate to="/simulations/conversations" replace /> },
+        { path: "lab/logs/*", element: <IntoCheck path="/conversations" /> },
+        { path: "lab/criteria/*", element: <IntoCheck path="/criteria" /> },
+        { path: "lab/judge/check", element: <IntoCheck path="/review" /> },
+        { path: "lab/judge/*", element: <IntoCheck path="/criteria" /> },
+        { path: "lab/checks/*", element: <Navigate to="/simulations/scenarios" replace /> },
+        { path: "lab/agent/*", element: <Navigate to="/agent" replace /> },
+        { path: "lab/*", element: <Navigate to="/overview" replace /> },
+        // Workshop's traces are no longer part of the product: their addresses lead to the overview.
+        { path: "runs/*", element: <Navigate to="/overview" replace /> },
+        { path: "search/*", element: <Navigate to="/overview" replace /> },
+        { path: "saved/*", element: <Navigate to="/overview" replace /> },
+        { path: "*", element: <Navigate to="/overview" replace /> },
+      ] as RouteObject[]
+    ).map(shown),
   },
 ];

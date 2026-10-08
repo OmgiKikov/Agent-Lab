@@ -41,6 +41,7 @@ import { CompareDelta, PreviousCheck } from "../checks/Compare";
 import { shownName } from "../data/DatasetInfo";
 import { checked, queueOf } from "../problems/model";
 import { useSimRuns } from "../simulations/stage";
+import { ACCURACY, SIMULATIONS } from "../../app/product";
 
 /**
  * The person connected their agent: they set its address on the test stand, or its folder can start it from its code.
@@ -375,20 +376,24 @@ export function OverviewPage() {
   // A check with saved checks is past its first visit, even when a new export has no result yet.
   const blank = !CHECKS.some((c) => resultOf(state, c)) && !state.runs.length;
   const saved = CHECKS.some((c) => compares[c].data?.previous || compares[c].data?.current);
-  const first = blank && !saved;
-  // The first step not done, in the order of the work; without conversations, loading them is that step.
-  const main = !state.logs.total ? -1 : [tone, code, sim].findIndex((m) => m.step.todo);
+  const fresh = blank && !saved;
+  // The first step not done, in the order of the work; without conversations, loading them is that step. Точность and
+  // the simulations hidden in this release (app/product) have no step on the screen.
+  const order = [tone, ...(ACCURACY ? [code] : []), ...(SIMULATIONS ? [sim] : [])];
+  const first = !state.logs.total ? null : (order.find((m) => m.step.todo) ?? null);
   return (
     <div className="flex h-full flex-col">
       {header}
       <div className="min-h-0 flex-1 overflow-auto">
         <div className="max-w-[1180px] px-4 pb-24 pt-8 lg:px-10 lg:pt-12">
           <p className="text-read text-fg-3">{[agent?.name, agent?.description].filter(Boolean).join(" · ")}</p>
-          <h2 className="mt-1 text-page font-semibold text-fg">{first ? "С чего начать" : "Как работает агент"}</h2>
+          <h2 className="mt-1 text-page font-semibold text-fg">{fresh ? "С чего начать" : "Как работает агент"}</h2>
           <p className="mt-3 max-w-[66ch] text-lead text-fg-2">
-            {first
+            {fresh
               ? "Загрузите разговоры и задайте правила: покажем, где агент ошибается и что исправить."
-              : "У каждой проверки и у симуляций свой счёт: их числа не складываются, и каждая сравнивает себя только со своей прошлой."}
+              : ACCURACY || SIMULATIONS
+                ? "У каждой проверки и у симуляций свой счёт: их числа не складываются, и каждая сравнивает себя только со своей прошлой."
+                : "Как агент соблюдает правила общения банка в настоящих разговорах и что исправить первым."}
           </p>
           <DatasetLine />
           <section aria-labelledby="overview-checks" className="mt-12">
@@ -399,29 +404,33 @@ export function OverviewPage() {
                 to={stageRoot("tone")}
                 picture={<TonePicture />}
                 model={tone}
-                main={main === 0}
+                main={first === tone}
               />
-              <Card
-                name={CHECK_NAME.code}
-                to={stageRoot("code")}
-                picture={<AccuracyPicture />}
-                model={code}
-                main={main === 1}
-              />
+              {ACCURACY && (
+                <Card
+                  name={CHECK_NAME.code}
+                  to={stageRoot("code")}
+                  picture={<AccuracyPicture />}
+                  model={code}
+                  main={first === code}
+                />
+              )}
             </div>
           </section>
-          <section aria-labelledby="overview-trials" className="mt-10">
-            <Label id="overview-trials">Испытания</Label>
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
-              <Card
-                name="Симуляции"
-                to={SECTIONS.simulations}
-                picture={<SimulationPicture />}
-                model={sim}
-                main={main === 2}
-              />
-            </div>
-          </section>
+          {SIMULATIONS && (
+            <section aria-labelledby="overview-trials" className="mt-10">
+              <Label id="overview-trials">Испытания</Label>
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <Card
+                  name="Симуляции"
+                  to={SECTIONS.simulations}
+                  picture={<SimulationPicture />}
+                  model={sim}
+                  main={first === sim}
+                />
+              </div>
+            </section>
+          )}
         </div>
       </div>
       {report && <CheckReport check={report} open onClose={closeReport} />}

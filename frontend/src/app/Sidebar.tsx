@@ -17,6 +17,7 @@ import { AgentSwitch } from "./AgentSwitch";
 import { useShell } from "./ShellContext";
 import { TaskCard } from "./TaskCard";
 import { SECTIONS } from "./links";
+import { ACCURACY, SIMULATIONS } from "./product";
 
 export type NavItem = { to: string; label: string; mobileLabel?: string; icon: LucideIcon };
 
@@ -36,10 +37,13 @@ export const GROUPS: { label?: string; items: NavItem[] }[] = [
     label: "Проверки разговоров",
     items: [
       { to: SECTIONS.tone, label: CHECK_NAME.tone, mobileLabel: "Tone", icon: MessageSquareQuote },
-      { to: SECTIONS.accuracy, label: CHECK_NAME.code, icon: Target },
+      // Hidden in the first release (app/product), not removed.
+      ...(ACCURACY ? [{ to: SECTIONS.accuracy, label: CHECK_NAME.code, icon: Target }] : []),
     ],
   },
-  { label: "Испытания", items: [{ to: SECTIONS.simulations, label: "Симуляции", icon: FlaskConical }] },
+  ...(SIMULATIONS
+    ? [{ label: "Испытания", items: [{ to: SECTIONS.simulations, label: "Симуляции", icon: FlaskConical }] }]
+    : []),
 ];
 
 /** The places of the work in one row, as the bottom of a phone shows them. */

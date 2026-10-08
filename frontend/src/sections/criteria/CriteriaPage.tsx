@@ -26,6 +26,7 @@ import { CriteriaTable } from "./CriteriaTable";
 import { CriterionPanel, type Shown } from "./CriterionPanel";
 import { Files } from "./Files";
 import { nameOf, type SideKey } from "./model";
+import { SIMULATIONS } from "../../app/product";
 
 type View = "code" | "list";
 
@@ -59,8 +60,11 @@ export function CriteriaPage({ check }: { check: Check }) {
       { replace },
     );
 
+  // The simulations are hidden in the first release (app/product): their side of a criterion is not offered.
   const side: SideKey =
-    params.get("s") === "sim" || (params.get("s") !== "log" && !data?.log && !!data?.sim) ? "sim" : "log";
+    SIMULATIONS && (params.get("s") === "sim" || (params.get("s") !== "log" && !data?.log && !!data?.sim))
+      ? "sim"
+      : "log";
   const view: View =
     params.get("view") === "list" || params.get("view") === "code" ? (params.get("view") as View) : "list";
   const ordered = useMemo(() => byFrequency(list, side), [list, side]);
@@ -116,7 +120,7 @@ export function CriteriaPage({ check }: { check: Check }) {
       ["log", "Диалоги"],
       ["sim", "Симуляции"],
     ] as const
-  ).filter(([k]) => (k === "log" ? !!data?.log : !!data?.sim));
+  ).filter(([k]) => (k === "log" ? !!data?.log : SIMULATIONS && !!data?.sim));
   const header = (
     <>
       <CheckHeader
@@ -396,7 +400,7 @@ export function CriteriaPage({ check }: { check: Check }) {
             sources={sources}
             selected={chosen?.r.id ?? null}
             onSelect={select}
-            hasSim={!!data.sim}
+            hasSim={SIMULATIONS && !!data.sim}
             hasSecond={twice("log")}
           />
         )}

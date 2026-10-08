@@ -11,6 +11,7 @@ import { Label } from "../../ui/Label";
 import { useToast } from "../../ui/toast";
 import { agentKey } from "../../app/agent";
 import { KnowledgeField, ToolsField, type AgentContext } from "./ContextFields";
+import { ACCURACY, SIMULATIONS } from "../../app/product";
 
 type Answer = Probe & { question?: string };
 /** The last answer of the agent: on which way and where (`where`, since this change), what it said and when. */
@@ -273,7 +274,7 @@ export function ConnectionForm({
         {way === "prod" && (
           <Field
             label="Адрес агента на тестовом стенде"
-            hint="Нужен, чтобы задавать агенту вопросы на стенде и запускать симуляции. Открывается с рабочего компьютера."
+            hint={`Нужен, чтобы задавать агенту вопросы на стенде${SIMULATIONS ? " и запускать симуляции" : ""}. Открывается с рабочего компьютера.`}
           >
             <Input
               name="prod-url"
@@ -292,49 +293,56 @@ export function ConnectionForm({
             Адрес не нужен: агент уже запущен на этом компьютере{target?.where ? ` (${target.where})` : ""}.
           </p>
         )}
-        <Field label="Клиенты для симуляций" hint="ЕПК через пробел. Если пусто, пишет тестовый клиент.">
-          <Input
-            name="epk"
-            autoComplete="off"
-            inputMode="numeric"
-            value={epk}
-            onChange={(e) => setEpk(e.target.value)}
-            placeholder="Например: 1234567890 2345678901"
-            className={INPUT}
-            spellCheck={false}
-          />
-        </Field>
+        {/* The simulations and Точность are hidden in the first release (app/product): their fields with them. */}
+        {SIMULATIONS && (
+          <Field label="Клиенты для симуляций" hint="ЕПК через пробел. Если пусто, пишет тестовый клиент.">
+            <Input
+              name="epk"
+              autoComplete="off"
+              inputMode="numeric"
+              value={epk}
+              onChange={(e) => setEpk(e.target.value)}
+              placeholder="Например: 1234567890 2345678901"
+              className={INPUT}
+              spellCheck={false}
+            />
+          </Field>
+        )}
       </div>
-      <h3 className="mt-8 text-read font-semibold text-fg">Код и знания</h3>
-      <div className="mt-4 space-y-5">
-        <Field
-          label="Код агента"
-          hint={
-            scpForm(code.trim())
-              ? "Для SSH укажите адрес так: ssh://git@host/team/agent.git"
-              : link
-                ? "Репозиторий скачается кнопкой «Прочитать код», с доступом к Git, настроенным на этом компьютере."
-                : "Папка на этом компьютере или ссылка на Git-репозиторий. Из кода берутся критерии точности."
-          }
-        >
-          <Input
-            name="repo"
-            autoComplete="off"
-            value={code}
-            onChange={(e) => setCode(e.target.value)}
-            placeholder="~/Desktop/agent или https://git…/agent.git"
-            className={INPUT}
-            spellCheck={false}
-            aria-invalid={scpForm(code.trim()) || undefined}
-          />
-        </Field>
-        <ToolsField tools={known.tools} onChange={(tools) => setKnown((v) => ({ ...v, tools }))} />
-        <KnowledgeField
-          value={known}
-          saved={!contextDirty}
-          onChange={(key, text) => setKnown((v) => ({ ...v, [key]: text }))}
-        />
-      </div>
+      {ACCURACY && (
+        <>
+          <h3 className="mt-8 text-read font-semibold text-fg">Код и знания</h3>
+          <div className="mt-4 space-y-5">
+            <Field
+              label="Код агента"
+              hint={
+                scpForm(code.trim())
+                  ? "Для SSH укажите адрес так: ssh://git@host/team/agent.git"
+                  : link
+                    ? "Репозиторий скачается кнопкой «Прочитать код», с доступом к Git, настроенным на этом компьютере."
+                    : "Папка на этом компьютере или ссылка на Git-репозиторий. Из кода берутся критерии точности."
+              }
+            >
+              <Input
+                name="repo"
+                autoComplete="off"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                placeholder="~/Desktop/agent или https://git…/agent.git"
+                className={INPUT}
+                spellCheck={false}
+                aria-invalid={scpForm(code.trim()) || undefined}
+              />
+            </Field>
+            <ToolsField tools={known.tools} onChange={(tools) => setKnown((v) => ({ ...v, tools }))} />
+            <KnowledgeField
+              value={known}
+              saved={!contextDirty}
+              onChange={(key, text) => setKnown((v) => ({ ...v, [key]: text }))}
+            />
+          </div>
+        </>
+      )}
       {dirty && <p className="mt-5 text-small text-warn">Есть несохранённые изменения</p>}
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <Button

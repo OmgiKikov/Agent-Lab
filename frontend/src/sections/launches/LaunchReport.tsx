@@ -16,6 +16,7 @@ import { Sheet } from "../../ui/Sheet";
 import { LaunchStatus } from "./LaunchStatus";
 import { StageResult } from "../../product/StageResult";
 import { CheckHeader } from "../checks/CheckHeader";
+import { SIMULATIONS } from "../../app/product";
 
 function pairLabel(item: Pair): string {
   if (item.comparable && item.baseline?.status === "FAIL" && item.status === "PASS") return "Исправлено";
@@ -242,64 +243,67 @@ export function LaunchReport() {
           </p>
         )}
         <div className="mt-7 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {Object.entries(record.modes).map(([mode, result]) => {
-            const m = result.metric;
-            const href = result.checkId
-              ? historyLink(record.check, result.checkId)
-              : result.runId
-                ? runLink(result.runId)
-                : result.questionsId
-                  ? "#answers"
-                  : null;
-            return (
-              <section key={mode} className="flex flex-col rounded-block border border-line p-5">
-                <h3 className="text-read font-semibold text-fg">{MODE_NAME[mode as Mode]}</h3>
-                {/* A finished mode needs no tag: its number says it. */}
-                {result.status !== "done" && (
-                  <div className="mt-2">
-                    <LaunchStatus status={result.status} />
-                  </div>
-                )}
-                {m ? (
-                  <StageResult
-                    size="display"
-                    className="mt-5"
-                    failed={m.failed}
-                    checked={m.measured}
-                    unchecked={m.unmeasured}
-                  />
-                ) : (
-                  <p className="mt-5 text-body text-fg-3">
-                    {result.status === "pending"
-                      ? "Начнётся после предыдущего режима."
-                      : result.status === "running"
-                        ? "Собираем диалоги и оценки…"
-                        : "Результат ещё не получен."}
-                  </p>
-                )}
-                {result.error && (
-                  <p role="alert" className="mt-4 text-small text-bad">
-                    {result.error}
-                  </p>
-                )}
-                {href && (
-                  <div className="mt-auto pt-5">
-                    {href.startsWith("#") ? (
-                      <a href={href} className={buttonClass({ variant: "outline" })}>
-                        Посмотреть ответы
-                        <ArrowRight className="size-3.5" />
-                      </a>
-                    ) : (
-                      <Link to={href} className={buttonClass({ variant: "outline" })}>
-                        Разобрать результат
-                        <ArrowRight className="size-3.5" />
-                      </Link>
-                    )}
-                  </div>
-                )}
-              </section>
-            );
-          })}
+          {/* The simulations are hidden in the first release (app/product): an older launch's run is not offered. */}
+          {Object.entries(record.modes)
+            .filter(([mode]) => mode !== "simulations" || SIMULATIONS)
+            .map(([mode, result]) => {
+              const m = result.metric;
+              const href = result.checkId
+                ? historyLink(record.check, result.checkId)
+                : result.runId
+                  ? runLink(result.runId)
+                  : result.questionsId
+                    ? "#answers"
+                    : null;
+              return (
+                <section key={mode} className="flex flex-col rounded-block border border-line p-5">
+                  <h3 className="text-read font-semibold text-fg">{MODE_NAME[mode as Mode]}</h3>
+                  {/* A finished mode needs no tag: its number says it. */}
+                  {result.status !== "done" && (
+                    <div className="mt-2">
+                      <LaunchStatus status={result.status} />
+                    </div>
+                  )}
+                  {m ? (
+                    <StageResult
+                      size="display"
+                      className="mt-5"
+                      failed={m.failed}
+                      checked={m.measured}
+                      unchecked={m.unmeasured}
+                    />
+                  ) : (
+                    <p className="mt-5 text-body text-fg-3">
+                      {result.status === "pending"
+                        ? "Начнётся после предыдущего режима."
+                        : result.status === "running"
+                          ? "Собираем диалоги и оценки…"
+                          : "Результат ещё не получен."}
+                    </p>
+                  )}
+                  {result.error && (
+                    <p role="alert" className="mt-4 text-small text-bad">
+                      {result.error}
+                    </p>
+                  )}
+                  {href && (
+                    <div className="mt-auto pt-5">
+                      {href.startsWith("#") ? (
+                        <a href={href} className={buttonClass({ variant: "outline" })}>
+                          Посмотреть ответы
+                          <ArrowRight className="size-3.5" />
+                        </a>
+                      ) : (
+                        <Link to={href} className={buttonClass({ variant: "outline" })}>
+                          Разобрать результат
+                          <ArrowRight className="size-3.5" />
+                        </Link>
+                      )}
+                    </div>
+                  )}
+                </section>
+              );
+            })}
         </div>
         <p className="mt-4 text-small text-fg-3">
           У каждого режима свои разговоры и свой итог: их числа не складываются.

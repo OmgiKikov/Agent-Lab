@@ -29,6 +29,7 @@ import type { Check } from "../../lab/types";
 import { Button, buttonClass } from "../../ui/Button";
 import { MarkNo } from "../../product/MarkNo";
 import { PAPER, SimulationPicture } from "../../product/Pictures";
+import { SIMULATIONS } from "../../app/product";
 import { UploadButton } from "../../product/UploadLogs";
 import { shownName } from "../data/DatasetInfo";
 import { useConnectionMemory } from "../agent/Connection";
@@ -38,7 +39,8 @@ import { Menu } from "../../ui/Menu";
 import { Sheet } from "../../ui/Sheet";
 
 const MAX = 300; // conversations one launch takes at most (api/launches.py, LaunchCommand)
-const OPTIONS: { id: Mode; icon: typeof Database; description: string; live: boolean }[] = [
+type Option = { id: Mode; icon: typeof Database; description: string; live: boolean };
+const WAYS: Option[] = [
   {
     id: "dataset",
     icon: MessageSquareQuote,
@@ -58,9 +60,10 @@ const OPTIONS: { id: Mode; icon: typeof Database; description: string; live: boo
     live: true,
   },
 ];
+// The simulations are hidden in the first release (app/product).
+const OPTIONS = WAYS.filter((option) => option.id !== "simulations" || SIMULATIONS);
 
 const bar = "block h-1.5 rounded-full bg-fg/10";
-/** The grid paper the pictures of the ways lie on, as the checks of a dataset show theirs. */
 
 /** What checking the recorded answers gives: the agent's reply with the quote the check found marked. */
 function RecordedPicture() {

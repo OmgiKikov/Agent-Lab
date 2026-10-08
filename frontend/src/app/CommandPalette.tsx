@@ -46,6 +46,7 @@ import {
   stageRoot,
   launchLink,
 } from "./links";
+import { ACCURACY, SIMULATIONS } from "./product";
 
 type Entry = { id: string; group: string; label: string; sub?: string; icon: LucideIcon; run: () => void };
 
@@ -97,7 +98,9 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         id: "s-data",
         group: "Разделы",
         label: "Датасеты",
-        sub: "Загрузить и просмотреть разговоры для обеих проверок",
+        sub: ACCURACY
+          ? "Загрузить и просмотреть разговоры для обеих проверок"
+          : "Загрузить и просмотреть разговоры для проверки",
         icon: FileText,
         run: go(SECTIONS.data),
       },
@@ -180,7 +183,9 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         id: "s-agent",
         group: "Разделы",
         label: "Агент",
-        sub: "Карточка агента: подключение, код, инструменты, база знаний",
+        sub: ACCURACY
+          ? "Карточка агента: подключение, код, инструменты, база знаний"
+          : "Карточка агента: имя и подключение",
         icon: Bot,
         run: go(SECTIONS.agent),
       },
@@ -230,7 +235,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         id: "a-upload",
         group: "Действия",
         label: "Добавить датасет",
-        sub: "Выгрузка чата, общая для обеих проверок",
+        sub: ACCURACY ? "Выгрузка чата, общая для обеих проверок" : "Выгрузка чата для проверки",
         icon: Upload,
         run: go(SECTIONS.data),
       },
@@ -293,7 +298,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         });
     };
     ofCheck("tone", tone);
-    ofCheck("code", code);
+    if (ACCURACY) ofCheck("code", code);
     const runs = [...(state?.runs ?? [])].sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
     for (const r of runs) {
       const m = r.metric;
@@ -322,7 +327,14 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         run: go(scenariosLink(c.id)),
       });
     }
-    return out;
+    // Точность and the simulations are hidden in the first release (app/product): nothing here leads into them.
+    const hidden = (id: string) =>
+      (!SIMULATIONS &&
+        (["s-simulations", "s-runs", "s-scenarios", "a-cards", "a-play"].includes(id) ||
+          id.startsWith("r-") ||
+          id.startsWith("sc-"))) ||
+      (!ACCURACY && ["a-code", "a-read"].includes(id));
+    return out.filter((e) => !hidden(e.id));
   }, [tone, code, state, navigate]);
 
   const q = query.trim().toLowerCase();
