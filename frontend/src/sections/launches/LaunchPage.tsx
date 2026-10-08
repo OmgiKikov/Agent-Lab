@@ -32,7 +32,7 @@ import { PAPER, SimulationPicture } from "../../product/Pictures";
 import { SIMULATIONS } from "../../app/product";
 import { UploadButton } from "../../product/UploadLogs";
 import { shownName } from "../data/DatasetInfo";
-import { useConnectionMemory } from "../agent/Connection";
+import { useConnectionMemory, waysOf } from "../agent/Connection";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
 import { Menu } from "../../ui/Menu";
@@ -303,10 +303,11 @@ export function LaunchPage({ check }: { check: Check }) {
   const most = Math.min(MAX, total);
   const wanted = Number.parseInt(size, 10);
   const conversations = total && wanted > 0 ? Math.min(wanted, most) : 0;
-  // A way the agent can be asked on: set up, and for «На этом компьютере» (whose address is there by default) only when
-  // the person chose it in «Агент» — otherwise a launch would ask an address nobody may answer on.
+  // A way the agent can be asked on: offered (the test stand alone in the first release), set up, and for «На этом
+  // компьютере» (whose address is there by default) only when the person chose it in «Агент» — otherwise a launch
+  // would ask an address nobody may answer on.
   const chosenWay = useConnectionMemory().way;
-  const reachable = state?.targets.filter((t) => t.ready && (t.id !== "local-http" || chosenWay === t.id)) ?? [];
+  const reachable = state ? waysOf(state).filter((t) => t.ready && (t.id !== "local-http" || chosenWay === t.id)) : [];
   const chosen = modes.filter((m) => MODES.includes(m) && (m === "dataset" || reachable.length > 0));
   const live = chosen.some((m) => m !== "dataset");
   const way = reachable.find((t) => t.id === target) ?? reachable.find((t) => t.id === chosenWay) ?? reachable[0];
