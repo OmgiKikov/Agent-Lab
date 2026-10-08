@@ -44,6 +44,8 @@ export function AgentPage() {
   const codeAt = context.data?.repositoryUrl || state?.settings.repo;
   const { list } = criteria;
   const [reading, setReading] = useState(false);
+  // The instructions left out of the planner's budget: a few in view, the rest on a press (99 of them filled the page).
+  const [allOver, setAllOver] = useState(false);
   const busy = !!state?.job.running || reading;
   const readCode = () => {
     setReading(true);
@@ -154,12 +156,21 @@ export function AgentPage() {
                   {"\u00a0"}знаков. Критерии из {plural(over.length, "неё", "них", "них")} не собраны.
                 </p>
                 <ul className="mt-1 space-y-0.5">
-                  {over.map((origin) => (
+                  {(allOver ? over : over.slice(0, 5)).map((origin) => (
                     <li key={origin} className="break-all font-mono text-meta text-fg-3">
                       {origin}
                     </li>
                   ))}
                 </ul>
+                {over.length > 5 && (
+                  <button
+                    type="button"
+                    onClick={() => setAllOver((v) => !v)}
+                    className="mt-1 rounded-sm font-medium text-run hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
+                  >
+                    {allOver ? "Свернуть" : `Показать все ${over.length}`}
+                  </button>
+                )}
               </div>
             )}
             {sources.length > 0 && (

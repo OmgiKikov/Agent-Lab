@@ -122,7 +122,8 @@ export function CriteriaPage({ check }: { check: Check }) {
       <CheckHeader
         check={check}
         actions={
-          !tone && !customAccuracy(state) ? (
+          // Read anew only once criteria were read: before the first check they come from the code anyway.
+          !tone && !customAccuracy(state) && list.length > 0 ? (
             <Link
               to={`${launchLink("code")}?replan=1`}
               title="Новая проверка, в которой модель прочитает код агента заново и извлечёт критерии дословно"
