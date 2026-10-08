@@ -16,7 +16,7 @@ from collections.abc import Collection
 from .. import storage
 from ..agents import sources as agent_sources
 from ..domain import accuracy, checks, export, tone
-from . import connection
+from . import agent_context, connection, datasets
 
 SOURCES = 'sources.json'  # the agent's prompts and tools, and the rules of communication beside them
 # When the agent's code was read last, from which folder (the setting as the person wrote it) and which prompts were
@@ -29,6 +29,18 @@ TONE_DRAFT = 'tone-of-voice-criteria.json'  # the criteria of tone of voice, col
 def sources() -> list[dict]:
     """The sources read last: the agent's prompts and tools, and the rules of communication."""
     return storage.documents.load(SOURCES, []) or []
+
+
+def export_page(offset: int, limit: int) -> dict:
+    """The current export before judging: short previews, its size and upload identity from one snapshot."""
+    with storage.transaction():
+        dialogues = storage.dialogues.page(offset, limit)
+        return {
+            **storage.dialogues.meta(),
+            'total': storage.dialogues.count(),
+            'offset': offset,
+            'items': [export.preview(item) for item in dialogues],
+        }
 
 
 def drop_deck(changed: Collection[str]) -> None:
@@ -52,11 +64,12 @@ def replace_export(dialogues: list[dict], name: str | None = None) -> int:
     return len(dialogues)
 
 
-async def upload_export(name: str, data: bytes) -> dict:
+async def upload_export(name: str, data: bytes, title: str | None = None) -> dict:
     """An uploaded export read in a worker thread and committed whole: how many conversations it has, and how many it
     had that a check cannot read (the agent wrote first, or never answered), which are left out."""
     dialogues, skipped = await asyncio.to_thread(export.read_export, name, data)
-    return {'total': replace_export(dialogues, name), 'skipped': skipped}
+    item = datasets.add(dialogues, name, title, len(data), skipped)
+    return {'total': item['total'], 'skipped': skipped}
 
 
 def replace_sources(items: list[dict], read: dict | None = None) -> None:
@@ -72,15 +85,17 @@ def replace_sources(items: list[dict], read: dict | None = None) -> None:
             storage.documents.save(SOURCES_READ, read)
         if checks.TONE in changed:
             storage.documents.save(TONE_DRAFT, None)
+            storage.judges.select(checks.TONE, None)
         _clear(changed)
 
 
 async def read_code() -> list[dict]:
     """The agent's prompts and tools read again from its folder (in a worker thread). The rules of communication are a
     person's document, not the agent's code: reading the code keeps them."""
-    folder = connection.settings()['repo']
+    await agent_context.checkout()
+    folder = agent_context.current()['repositoryUrl'] or connection.settings()['repo']
     collected, over_budget = await asyncio.to_thread(agent_sources.collect, connection.repo())
-    policy = [source for source in sources() if source['kind'] == tone.KIND]
+    policy = [source for source in sources() if source['kind'] in (tone.KIND, 'accuracy-judge')]
     replace_sources([*collected, *policy], {'readAt': storage.now(), 'repo': folder, 'overBudget': over_budget})
     return collected
 

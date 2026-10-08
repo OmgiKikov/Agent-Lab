@@ -2,6 +2,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
+  BookOpen,
   Bot,
   ClipboardCheck,
   LayoutDashboard,
@@ -14,6 +15,7 @@ import {
   MessageSquareQuote,
   MessagesSquare,
   Play,
+  Plus,
   Presentation,
   Route,
   Search,
@@ -24,7 +26,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { BY_CRITERIA, CHECK_NAME, CHECKS, checkOfOld, resultOf } from "../lab/checks";
+import { BY_CRITERIA, CHECK_NAME, CHECKS, resultOf } from "../lab/checks";
 import { duty } from "../lab/criteria";
 import { count, day } from "../lab/format";
 import { useLabState } from "../lab/LabProvider";
@@ -42,8 +44,9 @@ import {
   scenariosLink,
   SECTIONS,
   stageRoot,
-  toneCheckLink,
+  launchLink,
 } from "./links";
+import { ACCURACY, SIMULATIONS } from "./product";
 
 type Entry = { id: string; group: string; label: string; sub?: string; icon: LucideIcon; run: () => void };
 
@@ -92,6 +95,16 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         run: go(SECTIONS.overview),
       },
       {
+        id: "s-data",
+        group: "Разделы",
+        label: "Датасеты",
+        sub: ACCURACY
+          ? "Загрузить и просмотреть разговоры для обеих проверок"
+          : "Загрузить и просмотреть разговоры для проверки",
+        icon: FileText,
+        run: go(SECTIONS.data),
+      },
+      {
         id: "s-summary",
         group: "Разделы",
         label: "Сводка для руководителя",
@@ -112,7 +125,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         {
           id: `s-${c}-review`,
           group: "Разделы",
-          label: `${CHECK_NAME[c]} · Проверка`,
+          label: `${CHECK_NAME[c]} · Ответы людей`,
           sub: "Это действительно ошибка? Случаи по одному",
           icon: ClipboardCheck,
           run: go(reviewLink(c)),
@@ -124,6 +137,14 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           sub: c === "tone" ? "Что агент обязан делать по правилам общения" : "Что агент обязан делать по своему коду",
           icon: ListChecks,
           run: go(criterionLink(c)),
+        },
+        {
+          id: `s-${c}-rules`,
+          group: "Разделы",
+          label: `${CHECK_NAME[c]} · Правила`,
+          sub: "Наборы правил и их версии, новый набор",
+          icon: BookOpen,
+          run: go(criterionLink(c, null, { rules: "1" })),
         },
         {
           id: `s-${c}-history`,
@@ -162,7 +183,9 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         id: "s-agent",
         group: "Разделы",
         label: "Агент",
-        sub: "Подключение и прочитанный код",
+        sub: ACCURACY
+          ? "Карточка агента: подключение, код, инструменты, база знаний"
+          : "Карточка агента: имя и подключение",
         icon: Bot,
         run: go(SECTIONS.agent),
       },
@@ -178,17 +201,17 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         id: "a-tone",
         group: "Действия",
         label: "Проверить tone of voice",
-        sub: "По шагам: материалы, критерии, проверка, итог",
+        sub: "Датасет, правила и режимы проверки",
         icon: Play,
-        run: go(toneCheckLink()),
+        run: go(launchLink("tone")),
       },
       {
         id: "a-code",
         group: "Действия",
         label: "Проверить точность",
-        sub: "Разговоры по критериям из кода агента",
+        sub: "Критерии из кода или выбранного набора правил",
         icon: Play,
-        run: go(`${SECTIONS.accuracy}?assess=1`),
+        run: go(launchLink("code")),
       },
       ...results.flatMap((c): Entry[] => [
         {
@@ -211,10 +234,18 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
       {
         id: "a-upload",
         group: "Действия",
-        label: "Загрузить диалоги",
-        sub: "Выгрузка чата, общая для обеих проверок",
+        label: "Добавить датасет",
+        sub: ACCURACY ? "Выгрузка чата, общая для обеих проверок" : "Выгрузка чата для проверки",
         icon: Upload,
-        run: go(conversationsLink(checkOfOld(state))),
+        run: go(SECTIONS.data),
+      },
+      {
+        id: "a-agent",
+        group: "Действия",
+        label: "Новый агент",
+        sub: "Свои разговоры, правила и итоги — отдельно от этого агента",
+        icon: Plus,
+        run: () => window.location.assign("/agents?new=1"),
       },
       {
         id: "a-cards",
@@ -267,7 +298,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         });
     };
     ofCheck("tone", tone);
-    ofCheck("code", code);
+    if (ACCURACY) ofCheck("code", code);
     const runs = [...(state?.runs ?? [])].sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1));
     for (const r of runs) {
       const m = r.metric;
@@ -296,7 +327,14 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         run: go(scenariosLink(c.id)),
       });
     }
-    return out;
+    // Точность and the simulations are hidden in the first release (app/product): nothing here leads into them.
+    const hidden = (id: string) =>
+      (!SIMULATIONS &&
+        (["s-simulations", "s-runs", "s-scenarios", "a-cards", "a-play"].includes(id) ||
+          id.startsWith("r-") ||
+          id.startsWith("sc-"))) ||
+      (!ACCURACY && ["a-code", "a-read"].includes(id));
+    return out.filter((e) => !hidden(e.id));
   }, [tone, code, state, navigate]);
 
   const q = query.trim().toLowerCase();

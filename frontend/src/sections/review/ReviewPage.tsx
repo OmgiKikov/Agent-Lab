@@ -7,6 +7,7 @@ import { Header } from "../../app/Header";
 import { useKeys } from "../../app/keys";
 import { side, stageLink, type Stage } from "../../app/links";
 import { yesNoText } from "../../lab/answers";
+import { nameFromText } from "../../lab/criteria";
 import { count } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { answersWait, useProblems, useReview, type Decision } from "../../lab/problems";
@@ -144,11 +145,7 @@ export function ReviewPage({ stage }: { stage: Stage }) {
   const twice = [...byKey.values()].some((v) => !!v.example.second);
 
   const header =
-    stage === "sim" ? (
-      <Header title="Симуляции" tabs={<SimTabs state={state} runId={runId ?? data?.sim?.runId ?? null} />} />
-    ) : (
-      <CheckHeader check={stage} />
-    );
+    stage === "sim" ? <Header title="Симуляции" tabs={<SimTabs state={state} />} /> : <CheckHeader check={stage} />;
   if (offline && !data)
     return (
       <div className="flex h-full flex-col">
@@ -322,7 +319,12 @@ export function ReviewPage({ stage }: { stage: Stage }) {
                 dir > 0 ? "slide-in-from-right-4" : "slide-in-from-left-4",
               )}
             >
-              <h2 className="mt-8 text-balance text-page font-semibold text-fg">{current.rule.title}</h2>
+              {/* A problem is named by its error; a case «без ошибки» by its criterion, as the conversation names it. */}
+              <h2 className="mt-8 text-balance text-page font-semibold text-fg">
+                {current.example.status === "PASS"
+                  ? current.rule.rule.name?.trim() || nameFromText(current.rule.rule.text)
+                  : current.rule.title}
+              </h2>
               <Duty
                 key={current.rule.id}
                 text={current.rule.rule.text}

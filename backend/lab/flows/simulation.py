@@ -23,7 +23,7 @@ from ..domain import checks, personas
 from ..domain import world as scenario_world
 from ..domain.transcript import for_judge, tool_calls, with_buttons
 from ..roles import customer, judge
-from . import Progress, connection, error_text, same_work, scenarios
+from . import Progress, agent_context, connection, error_text, provenance, same_work, scenarios
 
 MAX_AGENT_TURNS = 3
 PENDING_VERSION = '…'  # a run's agent version until the agent is reached
@@ -280,6 +280,7 @@ def begun(
     record['items'] = [new_item(card, persona, attempt) for card, persona, attempt in plan]
     # The run is measured by the criteria of the check its deck was built from, and remembers it.
     record['check'] = scenarios.check() or checks.of_run(record)
+    record.update(provenance.snapshot(record['check']))
     storage.runs.create(record)
     return record, chosen
 
@@ -418,7 +419,14 @@ async def evidence(card: dict, conversation: list[dict]) -> judge.Evidence:
     agent_text = '\n'.join(line for reply in replies for line in (reply['text'], *(reply.get('options') or [])))
     calls = '\n'.join(call for reply in replies for call in tool_calls(reply))
     retrieved = await asyncio.to_thread(knowledge.retrieved, connection.repo(), conversation)
+    if agent_context.current()['idpIndex']:
+        fetched, warning = await agent_context.knowledge(conversation[0]['text'] if conversation else '')
+        retrieved = [*retrieved, *fetched]
+    else:
+        warning = None
     payload = {
+        'availableTools': agent_context.current()['tools'],
+        'contextWarning': warning,
         'expectations': card['criteria'],
         'conversation': shown,
         'toolCallsObserved': bool(calls),
@@ -435,6 +443,8 @@ async def run_verdict(card: dict, conversation: list[dict], model: models.Endpoi
 async def evaluate(card: dict, item: dict) -> None:
     """Judge a run's conversation in place: rows, verdict and the second judge's verdict."""
     prepared = await evidence(card, item['conversation'])
+    if agent_context.current()['idpIndex']:
+        item.update(knowledge=prepared.payload['knowledge'], contextError=prepared.payload['contextWarning'])
     try:
         async with asyncio.TaskGroup() as tasks:
             primary = tasks.create_task(judge.run_verdict(prepared))

@@ -7,6 +7,7 @@ import { useLabState } from "../../lab/LabProvider";
 import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
 import { Group, Row } from "./parts";
+import { SIMULATIONS } from "../../app/product";
 
 /** Where the conversations go without the bank's gateway and an endpoint of one's own (backend/lab/models/__init__.py, _via). */
 const OPENROUTER = "OpenRouter";
@@ -101,7 +102,7 @@ function Models({ state }: { state: LabState }) {
     {
       role: "main" as const,
       name: "Основная модель",
-      use: "Проверяет разговоры и играет клиента в симуляциях.",
+      use: SIMULATIONS ? "Проверяет разговоры и играет клиента в симуляциях." : "Проверяет разговоры.",
       model: state.models.main,
     },
     // With one model there is no second check: asking the same model twice is not a second opinion.

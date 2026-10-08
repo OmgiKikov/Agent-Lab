@@ -40,6 +40,12 @@ function ended(before: Job | null, job: Job): boolean {
 }
 
 /**
+ * Quick saves whose screen says how they went — the upload, the datasets, the rules, the agent's card: neither a toast
+ * nor this card repeats their failure beside the screen's own message.
+ */
+const SAID_ON_SCREEN = new Set(["logs", "datasets", "judge-rules", "agent-context"]);
+
+/**
  * When the service's task ends: one notice with the way to its result, or the reason it failed. Mounted once for the
  * whole product (the task card is drawn twice: the side of a wide window, the bar of a narrow one). A person already
  * looking at the result's section gets no notice: the screen itself changes. Each task is told once, by its start,
@@ -66,6 +72,7 @@ export function JobNotices() {
     const info = jobOf(job);
     const label = info?.label ?? "Задача";
     if (job.error !== STOPPED) markTab(job.error ? "Не удалось" : "Готово");
+    if (SAID_ON_SCREEN.has(job.kind ?? "")) return;
     if (job.error === STOPPED)
       toast.notify(
         job.continuable
@@ -187,7 +194,7 @@ export function TaskCard({ bar }: { bar?: boolean }) {
   }
   // Hidden is this failure of this task: the same failure of a task started later shows again.
   const key = `${job.kind}:${job.startedAt ?? ""}:${job.error}`;
-  if (!job.error || job.error === STOPPED || hidden === key) return null;
+  if (!job.error || job.error === STOPPED || hidden === key || SAID_ON_SCREEN.has(job.kind)) return null;
   return (
     <div
       role="alert"

@@ -34,12 +34,18 @@ export async function api<T>(path: string, body?: unknown, agent: string | null 
   return read<T>(await fetch(API + path, init));
 }
 
-export async function upload<T>(path: string, file: File): Promise<T> {
+export async function upload<T>(path: string, file: File, parameters: Record<string, string> = {}): Promise<T> {
   return read<T>(
-    await fetch(`${API}${path}?name=${encodeURIComponent(file.name)}`, {
+    await fetch(`${API}${path}?${new URLSearchParams({ name: file.name, ...parameters })}`, {
       method: "POST",
       body: file,
       headers: AGENT_HEADER,
     }),
   );
+}
+
+export async function textFile(path: string): Promise<string> {
+  const response = await fetch(API + path, { headers: AGENT_HEADER });
+  if (!response.ok) return read<never>(response);
+  return response.text();
 }

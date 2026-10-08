@@ -1,3 +1,4 @@
+export type KnowledgePassage = { article: string; title: string; text: string };
 /**
  * The two checks of the real conversations of the export: tone of voice by a person's rules of
  * communication, accuracy by the criteria read from the agent's code. Each has its own criteria, result and answers.
@@ -39,6 +40,8 @@ export type Message = {
   events?: ToolEvent[];
 };
 export type Item = {
+  knowledge?: KnowledgePassage[];
+  contextError?: string | null;
   cardId: string;
   name: string;
   topic: string;
@@ -109,6 +112,8 @@ export type Card = {
   openings?: Record<string, string>;
 };
 export type LogResult = {
+  knowledge?: KnowledgePassage[];
+  contextError?: string | null;
   error?: string | null;
   dialogueId: string;
   topicId: string;
@@ -175,11 +180,21 @@ export type Discover = {
 /** The scenarios, built from the errors of one check and remembering it. */
 export type Deck = { check: Check; cards: Card[]; createdAt?: string };
 export type Job = {
+  /** The task's own id: a launch is the task that runs it, so a paused launch is told by it (backend/lab/jobs.py). */
+  id?: string;
   kind: string | null;
   running: boolean;
   error: string | null;
   /** `check`: the check a proposal of which errors are serious is for (task `severity`, lab/severity). */
-  progress: { message?: string; done?: number; total?: number; run?: string; check?: Check };
+  progress: {
+    launch?: string;
+    mode?: string;
+    message?: string;
+    done?: number;
+    total?: number;
+    run?: string;
+    check?: Check;
+  };
   /** When the task started: tells one task from the next of the same kind. Older services have no such field. */
   startedAt?: string | null;
   /** How many times a restart of the Lab took the task up again where it was (backend/lab/jobs.py). */
@@ -189,7 +204,7 @@ export type Job = {
   /** Starting the same work again continues the task with what it kept (backend/lab/api/work.py, continuable). */
   continuable?: boolean;
   /** What the task was started with: a check of tone of voice, its criteria and how many conversations. */
-  input?: { ruleIds?: string[]; count?: number; revision?: string; propose?: boolean };
+  input?: { check?: Check; ruleIds?: string[]; count?: number; revision?: string; propose?: boolean };
 };
 /**
  * A check's result with people's answers taken in, counted by the service from the result's rows with the answers on
@@ -241,7 +256,7 @@ export type LabState = {
    * (sources.MAX_TOTAL); older records have no such field.
    */
   sourcesRead?: { readAt: string; repo: string; overBudget?: string[] } | null;
-  logs: { total: number; file?: string | null; updatedAt?: string | null };
+  logs: { total: number; file?: string | null; updatedAt?: string | null; datasetId?: string | null; name?: string };
   /** The result of each check in brief, or null: tone of voice and accuracy never replace each other. */
   checks: Record<Check, ResultBrief | null>;
   /**

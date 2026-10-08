@@ -150,6 +150,20 @@ def create(name: str, description: str = '', agent_id: str | None = None) -> dic
     return get(chosen) or {}
 
 
+def update(agent_id: str, name: str, description: str) -> dict:
+    """Change the displayed identity without moving its database or breaking links."""
+    name, description = name.strip(), description.strip()
+    if not name or len(name) > 80 or len(description) > 200:
+        raise ValueError('Укажите имя до 80 символов и описание до 200 символов.')
+    with _connection() as connection:
+        changed = connection.execute(
+            'UPDATE agents SET name=?, description=? WHERE id=?', (name, description, agent_id)
+        )
+        if not changed.rowcount:
+            raise LookupError('Агент не найден.')
+    return get(agent_id)
+
+
 def remove(agent_id: str) -> Path | None:
     """The agent out of the registry, then its folder moved to data/deleted/<id>-<time>/: never erased, a person can
     bring it back by hand. A start in between finds the folder and registers the agent again (recover_lost), so nothing

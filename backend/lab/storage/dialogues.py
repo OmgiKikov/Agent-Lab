@@ -61,6 +61,13 @@ def count() -> int:
         return connection.execute('SELECT count(*) FROM dialogues').fetchone()[0]
 
 
+def page(offset: int, limit: int) -> list[dict]:
+    """A bounded page in export order; browsing never loads the entire export."""
+    with db.connect() as connection:
+        rows = connection.execute('SELECT value FROM dialogues ORDER BY position LIMIT ? OFFSET ?', (limit, offset))
+        return [json.loads(value) for (value,) in rows]
+
+
 def meta() -> dict:
     """The export the conversations came from: its file name and when it was uploaded, when that is known."""
     return documents.load(META) or {'file': None, 'updatedAt': None}

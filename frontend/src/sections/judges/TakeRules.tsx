@@ -33,30 +33,22 @@ function whatGoes(state: LabState, from: RulesSource) {
 }
 
 /**
- * «Взять у другого агента»: in a bank the rules of communication are usually common to all support agents. Another
- * agent's rules and their criteria, with the clarifications people confirmed, become this agent's own as a copy;
- * after that each agent keeps its own. Shown only when another agent has rules. Rules or a result this agent has are
- * replaced only after the person agrees. `onTaken` gets whether criteria are ready to check.
+ * Taking another agent's rules (backend: tone.take), for a menu or a list of cards: in a bank the rules of
+ * communication are usually common to all support agents. Another agent's rules and their criteria, with the
+ * clarifications people confirmed, become this agent's own as a copy; after that each agent keeps its own. Rules or a
+ * result this agent has are replaced only after the person agrees: `choose` asks then, and `confirm` is the question to
+ * render. `onTaken` gets whether criteria are ready to check.
  */
-export function TakeRules({
-  state,
-  disabled,
-  onTaken,
-}: {
-  state: LabState;
-  disabled: boolean;
-  onTaken: (criteria: boolean) => void;
-}) {
+export function useTakeRules(state: LabState, onTaken: (criteria: boolean) => void) {
   const sources = useRulesSources();
   const { refresh } = useLabState();
   const client = useQueryClient();
   const toast = useToast();
   const [asked, setAsked] = useState<RulesSource | null>(null);
-  const [busy, setBusy] = useState(false);
-  if (!sources.length) return null;
+  const [busy, setBusy] = useState<string | null>(null);
   const take = async (from: RulesSource) => {
     setAsked(null);
-    setBusy(true);
+    setBusy(from.id);
     try {
       const { unchanged } = await takeRules(from.id);
       await refresh();
@@ -73,16 +65,51 @@ export function TakeRules({
     } catch (e) {
       toast.error(e);
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
   // Rules or a result of this agent are replaced only after the person agrees; an agent without them just takes.
   const choose = (from: RulesSource) =>
     state.sources.some((s) => s.id === TONE_ID) || toneResult(state) ? setAsked(from) : void take(from);
+  const confirm = (
+    <Modal
+      open={!!asked}
+      onClose={() => setAsked(null)}
+      title={asked ? `Взять правила агента «${asked.name}»?` : ""}
+      footer={
+        <>
+          <Button variant="ghost" onClick={() => setAsked(null)}>
+            Отмена
+          </Button>
+          <Button variant="primary" onClick={() => asked && void take(asked)}>
+            Взять правила
+          </Button>
+        </>
+      }
+    >
+      <p className="text-read text-fg-2">{asked && whatGoes(state, asked)}</p>
+      <p className="mt-3 text-body text-fg-3">Это копия. Дальше у каждого агента свои правила и критерии.</p>
+    </Modal>
+  );
+  return { sources, busy, choose, confirm };
+}
+
+/** «Взять у другого агента» as a menu of the agents with rules; nothing when no other agent has them. */
+export function TakeRules({
+  state,
+  disabled,
+  onTaken,
+}: {
+  state: LabState;
+  disabled: boolean;
+  onTaken: (criteria: boolean) => void;
+}) {
+  const { sources, busy, choose, confirm } = useTakeRules(state, onTaken);
+  if (!sources.length) return null;
   return (
     <>
       <Menu
-        disabled={disabled || busy}
+        disabled={disabled || !!busy}
         items={sources.map((a) => ({ key: a.id, label: a.name, sub: rulesLine(a.rules), run: () => choose(a) }))}
         trigger={
           <span className={buttonClass({ variant: "ghost" })}>
@@ -96,24 +123,7 @@ export function TakeRules({
           </span>
         }
       />
-      <Modal
-        open={!!asked}
-        onClose={() => setAsked(null)}
-        title={asked ? `Взять правила агента «${asked.name}»?` : ""}
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => setAsked(null)}>
-              Отмена
-            </Button>
-            <Button variant="primary" onClick={() => asked && void take(asked)}>
-              Взять правила
-            </Button>
-          </>
-        }
-      >
-        <p className="text-read text-fg-2">{asked && whatGoes(state, asked)}</p>
-        <p className="mt-3 text-body text-fg-3">Это копия. Дальше у каждого агента свои правила и критерии.</p>
-      </Modal>
+      {confirm}
     </>
   );
 }

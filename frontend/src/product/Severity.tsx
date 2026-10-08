@@ -24,7 +24,7 @@ import {
 import type { Check } from "../lab/types";
 import { Switch } from "../ui/Switch";
 import { Tag } from "../ui/Tag";
-import { Step, STEP_ACTION } from "./Checklist";
+import { Step, STEP_ACTION, STEP_NEXT } from "./Checklist";
 
 /** A quiet action inside a line of text, as «Проверить ещё» under a check's number. */
 const ACTION =
@@ -246,6 +246,20 @@ export function SeverityHint({
 }
 
 /**
+ * Where the step of serious errors stands: done once nothing waits for a proposal and a person decided — on every
+ * serious criterion, or, with none serious, on every criterion; else to do. Null while there is no step: no result, or
+ * its serious criteria not counted yet.
+ */
+export function seriousStep(data: Problems | null | undefined): "todo" | "done" | null {
+  const st = standingOf(data);
+  if (!st || !data?.log?.assessed) return null;
+  const serious = seriousOf(data);
+  // Serious criteria the service has not counted yet: the row comes with their count a moment later.
+  if (st.serious && !serious) return null;
+  return !pendingOf(st) && (serious ? st.yours : !st.proposed) ? "done" : "todo";
+}
+
+/**
  * The step about serious errors under a check's number (product/Checklist) — «Итог» of both checks, «Обзор», the
  * step-by-step result of tone of voice. Nothing marked: «Отметьте серьёзные ошибки», what that gives, «Отметить
  * автоматически»; failed: why, «Отметить снова». Marked: «Серьёзные ошибки — 6 из 53 (11%)», opening those
@@ -253,29 +267,35 @@ export function SeverityHint({
  * model's proposals wait for a person. «Серьёзных ошибок нет» with whose decision that is. Done once a person decided
  * every serious criterion. It never stands in for the number above and is never added to it.
  */
-export function SeverityStatus({ data, check }: { data: Problems | null | undefined; check: Check }) {
+export function SeverityStatus({
+  data,
+  check,
+  next,
+}: {
+  data: Problems | null | undefined;
+  check: Check;
+  /** The step to take next on the page: its button is the black one. */
+  next?: boolean;
+}) {
+  const state = seriousStep(data);
   const st = standingOf(data);
-  if (!st || !data?.log?.assessed) return null;
+  if (!state || !st) return null;
   const serious = seriousOf(data);
-  // Serious criteria the service has not counted yet: the row comes with their count a moment later.
-  if (st.serious && !serious) return null;
   const pending = pendingOf(st);
+  const act = next && state === "todo" ? STEP_NEXT : STEP_ACTION;
   const propose = pending && (
     <Propose
       check={check}
       again={pending.again}
       why={serious && st.error && `Прошлая попытка не удалась. ${st.error}`}
-      className={STEP_ACTION}
+      className={act}
     />
   );
   const review = st.proposed > 0 && (
-    <Link to={criterionLink(check)} className={STEP_ACTION}>
+    <Link to={criterionLink(check)} className={act}>
       Проверить отметки
     </Link>
   );
-  // Done once nothing waits for a proposal and a person decided: on every serious criterion, or, with none serious,
-  // on every criterion.
-  const state = !pending && (serious ? st.yours : !st.proposed) ? "done" : "todo";
   // While the model's proposals wait for a person, the step asks to confirm them; done, it says what came of it.
   const ask = pending ? "Отметьте серьёзные ошибки" : "Подтвердите серьёзные ошибки";
   if (serious) {

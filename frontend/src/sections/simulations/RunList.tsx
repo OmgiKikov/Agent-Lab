@@ -19,7 +19,7 @@ import { SimHeader, useSimRuns } from "./stage";
 export function RunListPage() {
   const { state, offline } = useLabState();
   const { runs } = useSimRuns(state, null);
-  const header = <SimHeader runId={null} />;
+  const header = <SimHeader />;
   if (offline && !state)
     return (
       <div className="flex h-full flex-col">

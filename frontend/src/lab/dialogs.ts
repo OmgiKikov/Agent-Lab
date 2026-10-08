@@ -2,11 +2,13 @@ import { conversationsLink } from "../app/links";
 import { CHECK_NAME } from "./checks";
 import { inlineText, quoteText } from "./problemReport";
 import type { Decision, Example } from "./problems";
-import type { Check, Criterion, Discover, LabRun, Rule, Status } from "./types";
+import type { Check, Criterion, Discover, KnowledgePassage, LabRun, Rule, Status } from "./types";
 
 /** One row of a stage's conversations: a logged conversation or a simulated one. */
 export type Source = "log" | "sim";
 export type DialogRow = {
+  knowledge?: KnowledgePassage[];
+  contextError?: string | null;
   key: string;
   source: Source;
   /** The check whose result judged it; of a simulated one, the check of its run. */
@@ -66,6 +68,8 @@ export function logRows(d: Discover | null | undefined, check: Check): DialogRow
   const topics = new Map(d.topics.map((t) => [t.id, t.title]));
   return d.results.map((r) => ({
     key: logKey(String(r.dialogueId)),
+    knowledge: r.knowledge,
+    contextError: r.contextError,
     source: "log" as const,
     check,
     title: r.opening,
@@ -84,6 +88,8 @@ export function simRows(run: LabRun | null | undefined): DialogRow[] {
   if (!run?.items) return [];
   return run.items.map((item, index) => ({
     key: simKey(run.id, index),
+    knowledge: item.knowledge,
+    contextError: item.contextError,
     source: "sim" as const,
     check: run.check,
     title: item.conversation[0]?.text ?? item.name,

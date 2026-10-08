@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { KnowledgeEvidence } from "../../product/KnowledgeEvidence";
+import { useState, type ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
-import { ArrowLeft, Download } from "lucide-react";
+import { ArrowLeft, ChevronDown, Download } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Criterion } from "../../lab/criteria";
 import { exampleFor, transcript, twoChecks, type DialogRow } from "../../lab/dialogs";
@@ -8,7 +9,8 @@ import { longDay, plural } from "../../lab/format";
 import { personaName } from "../../lab/look";
 import { download, secondLine } from "../../lab/problemReport";
 import { useReview, useTurns, type Decision, type Example } from "../../lab/problems";
-import type { Rule } from "../../lab/types";
+import type { Rule, Turn } from "../../lab/types";
+import { saysError } from "../../lab/verdicts";
 import { Conversation, type Mark } from "../../product/Conversation";
 import { Facts } from "../../product/Facts";
 import { MarkNo } from "../../product/MarkNo";
@@ -29,7 +31,46 @@ const WORD: Record<string, [string, string]> = {
   NOT_APPLICABLE: ["не относится к разговору", "text-fg-3"],
 };
 
-/** Every criterion the checks looked at in this conversation: errors first with their quote's number, then kept, then undecided. */
+/** The verdicts of one kind folded under a line, «Без ошибки 11», opened on a press. */
+function Fold({
+  title,
+  n,
+  open,
+  onToggle,
+  children,
+}: {
+  title: string;
+  n: number;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className="border-t border-line">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={onToggle}
+        className="-mx-3 flex w-[calc(100%+1.5rem)] items-center gap-1.5 rounded-control px-3 py-3.5 text-left text-body font-medium text-fg-2 transition-colors hover:bg-hover hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
+      >
+        {title}
+        <span className="font-normal tabular-nums text-fg-3">{n}</span>
+        <ChevronDown
+          aria-hidden
+          className={cn("ml-auto size-4 text-fg-3 transition-transform duration-200", open && "rotate-180")}
+        />
+      </button>
+      {open && <ul className="divide-y divide-line border-t border-line">{children}</ul>}
+    </div>
+  );
+}
+
+/**
+ * Every criterion the checks looked at in this conversation. The errors come open, each with its quote's number and the
+ * question whether it is one; the criteria kept and the ones not judged fold under a line each, opened on a press (the
+ * kept ones open when the conversation has no error). A person answers where they read, as in Langfuse or LangSmith:
+ * the same answer as in the queue, which only goes through a sample in a row.
+ */
 function Verdicts({
   rules,
   find,
@@ -45,56 +86,80 @@ function Verdicts({
   shownOf: (r: Rule) => Example;
   lit: number | null;
   onLit: (n: number | null) => void;
-  onDecide: (e: Example, d: Decision) => void;
+  /** Without it the verdicts are of a past check: the answers given on them are said, not asked. */
+  onDecide?: (e: Example, d: Decision) => void;
 }) {
+  const errors = rules.filter((r) => r.status === "FAIL");
+  const kept = rules.filter((r) => r.status === "PASS");
+  const rest = rules.filter((r) => r.status !== "FAIL" && r.status !== "PASS");
+  const [keptOpen, setKeptOpen] = useState(!errors.length);
+  const [restOpen, setRestOpen] = useState(false);
+  const row = (r: Rule) => {
+    // A criterion that applied nowhere in a run is not among the problems: its frozen name and number stand in.
+    const c = find(r.ruleId) ?? named?.get(r.ruleId);
+    const shown = shownOf(r);
+    // With one model there is no second check to speak of: the line is empty, and so is the place.
+    const second = r.status === "FAIL" ? secondLine(shown, null) : "";
+    const [word, tone] = WORD[r.status] ?? [r.status, "text-fg-3"];
+    const n = c?.n;
+    return (
+      <li
+        key={r.ruleId}
+        onMouseEnter={() => n && r.status === "FAIL" && onLit(n)}
+        onMouseLeave={() => onLit(null)}
+        className={cn(
+          "-mx-3 grid grid-cols-[24px_minmax(0,1fr)] gap-x-2 rounded-control px-3 py-4 transition-colors",
+          n && lit === n && "bg-hover",
+        )}
+      >
+        <span className="pt-0.5">
+          {r.status === "FAIL" && r.agentQuote && n ? (
+            <MarkNo n={n} on={lit === n} />
+          ) : (
+            <span className="text-small tabular-nums text-fg-4">{n ?? "·"}</span>
+          )}
+        </span>
+        <div className="min-w-0">
+          <p className="text-body text-fg">
+            <span className="font-medium">{c?.name ?? r.title ?? r.rule}</span>{" "}
+            <span className={cn("text-small", tone)}>· {word}</span>
+          </p>
+          <p className="mt-1 text-read text-fg-2">{r.reason}</p>
+          {second && <p className="mt-1 text-small text-fg-3">{second}</p>}
+          {(r.status === "FAIL" || r.status === "PASS") &&
+            (onDecide ? (
+              <div className="mt-3">
+                <ReviewButtons size="sm" example={shown} onDecide={(d) => onDecide(shown, d)} />
+              </div>
+            ) : (
+              shown.review && (
+                <p className="mt-2 text-small text-fg-2">
+                  Ваш ответ: {saysError(shown.status, shown.review) ? "ошибка есть" : "ошибки нет"}
+                </p>
+              )
+            ))}
+        </div>
+      </li>
+    );
+  };
   return (
     <section className="mt-10" aria-label="Проверка по критериям">
       <h3 className="text-lead font-semibold text-fg">
         Проверка по критериям <span className="font-normal tabular-nums text-fg-3">{rules.length}</span>
       </h3>
-      <ul className="mt-3 divide-y divide-line">
-        {rules.map((r) => {
-          // A criterion that applied nowhere in a run is not among the problems: its frozen name and number stand in.
-          const c = find(r.ruleId) ?? named?.get(r.ruleId);
-          const shown = shownOf(r);
-          // With one model there is no second check to speak of: the line is empty, and so is the place.
-          const second = r.status === "FAIL" ? secondLine(shown, null) : "";
-          const [word, tone] = WORD[r.status] ?? [r.status, "text-fg-3"];
-          const n = c?.n;
-          return (
-            <li
-              key={r.ruleId}
-              onMouseEnter={() => n && r.status === "FAIL" && onLit(n)}
-              onMouseLeave={() => onLit(null)}
-              className={cn(
-                "-mx-3 grid grid-cols-[24px_minmax(0,1fr)] gap-x-2 rounded-control px-3 py-4 transition-colors",
-                n && lit === n && "bg-hover",
-              )}
-            >
-              <span className="pt-0.5">
-                {r.status === "FAIL" && r.agentQuote && n ? (
-                  <MarkNo n={n} on={lit === n} />
-                ) : (
-                  <span className="text-small tabular-nums text-fg-4">{n ?? "·"}</span>
-                )}
-              </span>
-              <div className="min-w-0">
-                <p className="text-body text-fg">
-                  <span className="font-medium">{c?.name ?? r.title ?? r.rule}</span>{" "}
-                  <span className={cn("text-small", tone)}>· {word}</span>
-                </p>
-                <p className="mt-1 text-read text-fg-2">{r.reason}</p>
-                {second && <p className="mt-1 text-small text-fg-3">{second}</p>}
-                {(r.status === "FAIL" || r.status === "PASS") && (
-                  <div className="mt-3">
-                    <ReviewButtons size="sm" example={shown} onDecide={(d) => onDecide(shown, d)} />
-                  </div>
-                )}
-              </div>
-            </li>
-          );
-        })}
-      </ul>
+      {errors.length > 0 && <ul className="mt-3 divide-y divide-line">{errors.map(row)}</ul>}
+      <div className={errors.length ? "mt-1" : "mt-3"}>
+        {kept.length > 0 && (
+          <Fold title="Без ошибки" n={kept.length} open={keptOpen} onToggle={() => setKeptOpen((o) => !o)}>
+            {kept.map(row)}
+          </Fold>
+        )}
+        {rest.length > 0 && (
+          <Fold title="Не оценены" n={rest.length} open={restOpen} onToggle={() => setRestOpen((o) => !o)}>
+            {rest.map(row)}
+          </Fold>
+        )}
+      </div>
     </section>
   );
 }
@@ -105,12 +170,18 @@ export function Dialog({
   criteria,
   named,
   onBack,
+  saved,
 }: {
   row: DialogRow;
   criteria: Criterion[];
   /** Names and numbers of a run's criteria that applied nowhere in it (sections/dialogs/model.ts, frozenNames). */
   named?: Named;
   onBack?: () => void;
+  /**
+   * A conversation of a past check (checks/RunPage): its text as the check saved it (null when it was not saved), and
+   * no answers asked — they are given on the latest check.
+   */
+  saved?: { turns: Turn[] | null };
 }) {
   const [params, setParams] = useSearchParams();
   const { state } = useLabState();
@@ -137,7 +208,9 @@ export function Dialog({
     runId: row.runId,
     index: row.index,
   } as Example;
-  const { turns, loading, error } = useTurns(probe);
+  const fetched = useTurns(saved ? undefined : probe);
+  const turns = saved ? (saved.turns ?? undefined) : fetched.turns;
+  const { loading, error } = fetched;
   const byRule = criteriaByRule(criteria);
   const find = (ruleId: string) => byRule(row.source, ruleId);
   const rules = [...row.rules].sort((a, b) => (ORDER[a.status] ?? 9) - (ORDER[b.status] ?? 9));
@@ -218,6 +291,7 @@ export function Dialog({
             </Button>
           </div>
         </div>
+        <KnowledgeEvidence articles={row.knowledge} error={row.contextError} />
         <div className="mt-5">
           <Facts
             facts={[
@@ -283,6 +357,8 @@ export function Dialog({
                 </>
               ) : turns ? (
                 <Conversation turns={turns} marks={marks} lit={lit} onLit={(on, n) => setLit(on && n ? n : null)} />
+              ) : saved ? (
+                <p className="text-body text-fg-3">Текст разговора не сохранился.</p>
               ) : (
                 <p className="text-read text-fg">{row.title}</p>
               )}
@@ -295,7 +371,7 @@ export function Dialog({
                 shownOf={shownOf}
                 lit={lit}
                 onLit={setLit}
-                onDecide={decide}
+                onDecide={saved ? undefined : decide}
               />
             )}
           </>

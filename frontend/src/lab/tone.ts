@@ -2,28 +2,13 @@ import type { LabState } from "./types";
 import { agentKey } from "../app/agent";
 
 export const TONE_ID = "tone-of-voice";
-export type CheckStep = "materials" | "criteria" | "checking" | "result";
-export const CHECK_STEPS: { id: CheckStep; label: string }[] = [
-  { id: "materials", label: "Материалы" },
-  { id: "criteria", label: "Критерии" },
-  { id: "checking", label: "Проверка" },
-  { id: "result", label: "Итог" },
-];
-
 /** The result of the tone-of-voice check, or null. */
 export const toneResult = (state: LabState | null) => state?.checks.tone ?? null;
 
 /** What was read from the agent's code; the rules of communication beside it are a person's own document. */
-export const codeSources = (state: LabState | null) => state?.sources.filter((s) => s.id !== TONE_ID) ?? [];
-
-export function nextStep(state: LabState | null): CheckStep {
-  if (state?.job.running && state.job.kind === "tone-check") return "checking";
-  if (state?.toneOfVoice && state.job.kind === "tone-check" && state.job.error) return "checking";
-  const result = toneResult(state);
-  if (result && result.criteriaRevision === state?.toneOfVoice?.revision) return "result";
-  if (state?.toneOfVoice || (state?.job.running && state.job.kind === "tone-criteria")) return "criteria";
-  return "materials";
-}
+export const accuracySources = (state: LabState | null) => state?.sources.filter((s) => s.id !== TONE_ID) ?? [];
+export const codeSources = (state: LabState | null) => accuracySources(state).filter((s) => s.id !== "accuracy-judge");
+export const customAccuracy = (state: LabState | null) => state?.sources.find((s) => s.id === "accuracy-judge");
 
 const TEXT_KEY = agentKey("tone-of-voice:policy-draft");
 const NAME_KEY = agentKey("tone-of-voice:policy-name");

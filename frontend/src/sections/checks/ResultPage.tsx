@@ -1,36 +1,57 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
-import { FileText, RotateCcw } from "lucide-react";
-import { conversationsLink, toneCheckLink, type Check } from "../../app/links";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { FileText } from "lucide-react";
+import { conversationsLink, launchLink, problemLink, type Check } from "../../app/links";
 import { resultOf } from "../../lab/checks";
-import { useCriteria } from "../../lab/criteria";
-import { longDay } from "../../lab/format";
+import { useCriteria, type Criterion } from "../../lab/criteria";
+import { longDay, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { summarySentence } from "../../lab/problemReport";
 import { seriousOf } from "../../lab/severity";
-import { SeverityStatus } from "../../product/Severity";
+import { Step, STEP_ACTION, STEP_NEXT } from "../../product/Checklist";
+import { seriousStep, SeverityStatus } from "../../product/Severity";
 import { StageResult } from "../../product/StageResult";
-import { Trust } from "../../product/Trust";
-import { UploadButton } from "../../product/UploadLogs";
+import { answersPending, Trust } from "../../product/Trust";
 import { Button } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
+import { checked, queueOf } from "../problems/model";
 import { ProblemList } from "../problems/ProblemList";
-import { AssessSheet } from "./AssessSheet";
 import { CheckHeader } from "./CheckHeader";
-import { CompareLine, NoLongerFound, useComparison, wasOf } from "./Compare";
+import { CompareDelta, NoLongerFound, useComparison, wasOf } from "./Compare";
 import { CheckReport } from "./CheckReport";
 import { AccuracyStart, ToneStart } from "./Start";
 
 const PART = { bad: "fail", ok: "pass", none: "none" } as const;
 
 /**
- * «Итог» of a check: the real conversations of the export as this check judged them — one number, the conversations
- * with a serious error and whose decision that is, and how it stands to the check's previous check; then the
- * problems it is made of, serious first, then most frequent, each beside its previous count, and the criteria whose
- * errors are no longer found. Without a result, how to get one. «Проверить снова», the same words in both checks,
- * repeats tone of voice step by step; accuracy is checked again here (?assess=1), by the same criteria or by criteria
- * read from the code anew.
+ * The step after the model's answers are checked and the serious errors decided: the main problem — serious first,
+ * then the most frequent — opened where its examples are and where it goes to a developer.
+ */
+function MainProblem({ check, c, next }: { check: Check; c: Criterion; next: boolean }) {
+  const s = c.r.log;
+  return (
+    <Step
+      state="todo"
+      title="Разберите главную проблему"
+      text={`${c.r.title.replace(/\.\s*$/, "")}: ${s.failed}\u00a0из\u00a0${checked(s)} ${plural(checked(s), "разговора", "разговоров", "разговоров")}. На странице проблемы — примеры с цитатами и задача для разработчика.`}
+      action={
+        <Link to={problemLink(c.r.id, check)} className={next ? STEP_NEXT : STEP_ACTION}>
+          Открыть
+        </Link>
+      }
+    />
+  );
+}
+
+/**
+ * «Итог» of a check: the real conversations of the export as this check judged them — one number and how it stands to
+ * the check's previous check beside it; the steps after a check in the order they are taken, the next one with the
+ * black button: check the model's answers, decide the serious errors, open the main problem; then the problems it is
+ * made of, serious first, then most frequent, each beside its previous count, and the criteria whose errors are no
+ * longer found. Its conversations open from the parts of the number («Все разговоры»), the person's answers from
+ * «Проверьте оценки модели» (product/Trust): both are of this result, not tabs of their own. A new check is the
+ * header's «Новая проверка», where accuracy can also read its criteria from the agent's code anew.
  */
 export function ResultPage({ check }: { check: Check }) {
   const { state, offline } = useLabState();
@@ -39,12 +60,12 @@ export function ResultPage({ check }: { check: Check }) {
   const { data, list, error, retry } = useCriteria(check);
   const result = resultOf(state, check);
   const compare = useComparison(check);
-  const [assess, setAssess] = useState(false);
   const [report, setReport] = useState(false);
   useEffect(() => {
-    if (params.get("assess") === "1" && check === "code") setAssess(true);
+    // «Проверить снова» of an older address (?assess=1) is the new check now.
+    if (params.get("assess") === "1") navigate(launchLink(check), { replace: true });
     if (params.get("report") === "1") setReport(true);
-  }, [params, check]);
+  }, [params, check, navigate]);
   const drop = (key: string) => {
     if (params.get(key))
       setParams(
@@ -61,30 +82,17 @@ export function ResultPage({ check }: { check: Check }) {
     <CheckHeader
       check={check}
       actions={
-        <>
-          <span className="hidden sm:contents">
-            <UploadButton variant="outline" check={check} />
-          </span>
-          {result && (
-            <Button variant="primary" icon={FileText} aria-label="Отчёт для письма" onClick={() => setReport(true)}>
-              <span className="hidden sm:inline">Отчёт для письма</span>
-            </Button>
-          )}
-        </>
+        // New conversations come through «Датасеты» or «Новая проверка»; the result's own action is its report.
+        result && (
+          <Button variant="outline" icon={FileText} aria-label="Отчёт для письма" onClick={() => setReport(true)}>
+            <span className="hidden sm:inline">Отчёт для письма</span>
+          </Button>
+        )
       }
     />
   );
   const sheets = (
     <>
-      {check === "code" && (
-        <AssessSheet
-          open={assess}
-          onClose={() => {
-            setAssess(false);
-            drop("assess");
-          }}
-        />
-      )}
       {result && (
         <CheckReport
           check={check}
@@ -116,27 +124,15 @@ export function ResultPage({ check }: { check: Check }) {
       </div>,
     );
 
-  const busy = !!state.job.running;
+  // The steps in their order: the answers first while they are to do, then the serious errors, then the main problem.
+  const answering = answersPending(result);
+  const top = queueOf(list, "log")[0];
   return page(
     <div className="max-w-[1040px] px-4 pb-24 pt-8 lg:px-10 lg:pt-12">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-read text-fg-3">
         <span>
           {state.logs.file ? `«${state.logs.file}» · ` : ""}проверено {longDay(log.finishedAt)}
         </span>
-        <button
-          type="button"
-          onClick={() => (check === "tone" ? navigate(toneCheckLink("criteria")) : setAssess(true))}
-          disabled={!state.logs.total || busy}
-          title={
-            check === "tone"
-              ? "Проверить снова по шагам, с теми же или уточнёнными критериями"
-              : "Проверить разговоры выгрузки заново по критериям из кода агента"
-          }
-          className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-small font-medium text-fg-3 transition-colors hover:bg-hover hover:text-fg disabled:pointer-events-none disabled:opacity-40"
-        >
-          <RotateCcw aria-hidden className="size-3.5" />
-          Проверить снова
-        </button>
       </div>
       <StageResult
         className="mt-4"
@@ -144,13 +140,16 @@ export function ResultPage({ check }: { check: Check }) {
         checked={log.assessed}
         unchecked={log.unassessed}
         link={(part) => conversationsLink(check, { v: PART[part] })}
+        all={conversationsLink(check)}
+        delta={<CompareDelta check={check} compare={compare} serious={seriousOf(data)?.marked} />}
       />
       {result && (
         <Trust
           result={result}
           check={check}
-          serious={<SeverityStatus data={data} check={check} />}
-          compare={<CompareLine check={check} compare={compare} serious={seriousOf(data)?.marked} />}
+          lead
+          serious={<SeverityStatus data={data} check={check} next={!answering} />}
+          problem={top && <MainProblem check={check} c={top} next={!answering && seriousStep(data) !== "todo"} />}
           className="mt-5"
         />
       )}

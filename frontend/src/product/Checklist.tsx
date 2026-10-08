@@ -5,6 +5,8 @@ import { buttonClass } from "../ui/Button";
 
 /** The pill of a step's action: the same for a link and a button. */
 export const STEP_ACTION = buttonClass({ size: "sm" });
+/** The action of the step to take next: the page's one black button among the steps. */
+export const STEP_NEXT = buttonClass({ size: "sm", variant: "primary" });
 
 /** A narrow column («Обзор» beside another check): the action goes under the text. */
 const Compact = createContext(false);

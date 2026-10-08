@@ -1,13 +1,17 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Check as CheckIcon, Code2, Globe, Monitor, PlugZap, Save } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "../../lab/api";
 import type { LabState, Probe, Target } from "../../lab/types";
 import { useLabState } from "../../lab/LabProvider";
 import { Button } from "../../ui/Button";
+import { Input } from "../../ui/Field";
 import { Label } from "../../ui/Label";
 import { useToast } from "../../ui/toast";
 import { agentKey } from "../../app/agent";
+import { KnowledgeField, ToolsField, type AgentContext } from "./ContextFields";
+import { ACCURACY, SIMULATIONS } from "../../app/product";
 
 type Answer = Probe & { question?: string };
 /** The last answer of the agent: on which way and where (`where`, since this change), what it said and when. */
@@ -71,8 +75,7 @@ export function wayOf(state: LabState, chosen: string | null) {
   return state.settings.prodUrl ? "prod" : state.settings.repo ? "local-code" : null;
 }
 
-const INPUT =
-  "h-9 w-full rounded-control border border-line-strong bg-transparent px-3 font-mono text-small text-fg outline-none transition-colors placeholder:text-fg-4 focus:border-fg-3";
+const INPUT = "h-9 font-mono text-small";
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
@@ -140,24 +143,54 @@ function Way({ target, on, onPick }: { target: Target; on: boolean; onPick: () =
   );
 }
 
+/** A link to a repository, not a folder: «https://…», «ssh://…». The scp form «git@host:path» is said to be rewritten. */
+const isLink = (text: string) => /^[a-z][a-z0-9+.-]*:\/\//i.test(text);
+const scpForm = (text: string) => /^[^\s/@]+@[^\s/:]+:/.test(text);
+
 /**
- * Подключение: the way to reach the agent, whose clients the simulator writes for, where the code is; save and check.
- * Each check's answer is kept by the connection it asked (targetKey): switching the way while «Проверить связь» is on
- * its way never shows the old connection's answer under the new one.
+ * The agent's card: how to reach it, whose clients the simulator writes for, where its code is (a folder here or a
+ * link to its repository), the tools and the knowledge base the judge is told about; one save for all of it. Each
+ * check's answer is kept by the connection it asked (targetKey): switching the way while «Проверить связь» is on its
+ * way never shows the old connection's answer under the new one.
  */
-export function ConnectionForm({ state }: { state: LabState }) {
+export function ConnectionForm({
+  state,
+  agent,
+  context,
+  onSaved,
+}: {
+  state: LabState;
+  /** Who the agent is: its name and one line about it, as the list of agents shows them. */
+  agent: { id: string; name: string; description: string };
+  context: AgentContext;
+  onSaved: () => Promise<unknown>;
+}) {
   const { refresh } = useLabState();
   const toast = useToast();
+  const cache = useQueryClient();
   const saved = state.settings;
+  const [name, setName] = useState(agent.name);
+  const [description, setDescription] = useState(agent.description);
+  const identityDirty = name.trim() !== agent.name || description.trim() !== agent.description;
   const memory = useConnectionMemory();
   const [way, setWay] = useState(wayOf(state, memory.way) ?? "prod");
   const [prodUrl, setProdUrl] = useState(saved.prodUrl);
   const [epk, setEpk] = useState(saved.epk.join(" "));
-  const [repo, setRepo] = useState(saved.repo);
+  // Where the code is: the repository's link when one is saved, else the folder.
+  const [code, setCode] = useState(context.repositoryUrl || saved.repo);
+  const [known, setKnown] = useState(context);
   const [saving, setSaving] = useState(false);
   const [checks, setChecks] = useState<Record<string, Answer | "pending">>({});
+  const link = isLink(code.trim());
+  const nextContext = { ...known, repositoryUrl: link ? code.trim() : "" };
+  const nextRepo = link ? saved.repo : code.trim();
+  const contextDirty = JSON.stringify(nextContext) !== JSON.stringify(context);
   const dirty =
-    prodUrl.trim() !== saved.prodUrl || repo.trim() !== saved.repo || words(epk).join(" ") !== saved.epk.join(" ");
+    identityDirty ||
+    prodUrl.trim() !== saved.prodUrl ||
+    nextRepo !== saved.repo ||
+    words(epk).join(" ") !== saved.epk.join(" ") ||
+    contextDirty;
   const target = state.targets.find((t) => t.id === way);
   const check = target ? (checks[targetKey(target)] ?? null) : null;
   const last = lastOn(memory.last, target);
@@ -165,10 +198,18 @@ export function ConnectionForm({ state }: { state: LabState }) {
     setWay(id);
     write(WAY, id);
   };
+  // What the service may refuse goes first (the links of the repository and of IDP are checked there), the name last:
+  // a refusal leaves everything as it was saved before, and the form keeps every edit to fix and save again.
   const save = () => {
     setSaving(true);
-    api("/api/settings", { prodUrl: prodUrl.trim(), epk: words(epk), repo: repo.trim() })
-      .then(() => refresh())
+    (contextDirty ? api("/api/agent/context", nextContext) : Promise.resolve())
+      .then(() => api("/api/settings", { prodUrl: prodUrl.trim(), epk: words(epk), repo: nextRepo }))
+      .then(() =>
+        identityDirty
+          ? api("/api/agents/update", { id: agent.id, name: name.trim(), description: description.trim() })
+          : null,
+      )
+      .then(() => Promise.all([refresh(), onSaved(), cache.invalidateQueries({ queryKey: ["agents"] })]))
       .then(() => toast.notify("Сохранено"))
       .catch(toast.error)
       .finally(() => setSaving(false));
@@ -201,7 +242,28 @@ export function ConnectionForm({ state }: { state: LabState }) {
       });
   };
   return (
-    <section aria-label="Подключение">
+    <section aria-label="Карточка агента">
+      <div className="space-y-4">
+        <Field label="Имя">
+          <Input
+            name="agent-name"
+            value={name}
+            maxLength={80}
+            onChange={(e) => setName(e.target.value)}
+            aria-invalid={!name.trim() || undefined}
+          />
+        </Field>
+        <Field label="Описание" hint="Одна строка о том, что это за агент: её видно в списке агентов.">
+          <Input
+            name="agent-description"
+            value={description}
+            maxLength={200}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Например: СберБизнес · чат поддержки"
+          />
+        </Field>
+      </div>
+      <h3 className="mb-3 mt-8 text-read font-semibold text-fg">Подключение</h3>
       <Label>Как подключить агента</Label>
       <div role="radiogroup" aria-label="Способ подключения" className="mt-2 border-t border-line">
         {state.targets.map((t) => (
@@ -210,8 +272,11 @@ export function ConnectionForm({ state }: { state: LabState }) {
       </div>
       <div className="mt-5 space-y-4">
         {way === "prod" && (
-          <Field label="Адрес агента на тестовом стенде" hint="Открывается с рабочего компьютера.">
-            <input
+          <Field
+            label="Адрес агента на тестовом стенде"
+            hint={`Нужен, чтобы задавать агенту вопросы на стенде${SIMULATIONS ? " и запускать симуляции" : ""}. Открывается с рабочего компьютера.`}
+          >
+            <Input
               name="prod-url"
               type="url"
               autoComplete="off"
@@ -223,47 +288,76 @@ export function ConnectionForm({ state }: { state: LabState }) {
             />
           </Field>
         )}
-        {way === "local-code" && (
-          <Field label="Папка с кодом агента" hint="Из неё читаются инструкции и запускается агент.">
-            <input
-              name="repo"
-              autoComplete="off"
-              value={repo}
-              onChange={(e) => setRepo(e.target.value)}
-              placeholder="~/Desktop/aigw-local"
-              className={INPUT}
-              spellCheck={false}
-            />
-          </Field>
-        )}
         {way === "local-http" && (
           <p className="text-small text-fg-3">
             Адрес не нужен: агент уже запущен на этом компьютере{target?.where ? ` (${target.where})` : ""}.
           </p>
         )}
-        <Field label="Клиенты для симуляций" hint="ЕПК через пробел. Если пусто, пишет тестовый клиент.">
-          <input
-            name="epk"
-            autoComplete="off"
-            inputMode="numeric"
-            value={epk}
-            onChange={(e) => setEpk(e.target.value)}
-            placeholder="Например: 1234567890 2345678901"
-            className={INPUT}
-            spellCheck={false}
-          />
-        </Field>
+        {/* The simulations and Точность are hidden in the first release (app/product): their fields with them. */}
+        {SIMULATIONS && (
+          <Field label="Клиенты для симуляций" hint="ЕПК через пробел. Если пусто, пишет тестовый клиент.">
+            <Input
+              name="epk"
+              autoComplete="off"
+              inputMode="numeric"
+              value={epk}
+              onChange={(e) => setEpk(e.target.value)}
+              placeholder="Например: 1234567890 2345678901"
+              className={INPUT}
+              spellCheck={false}
+            />
+          </Field>
+        )}
       </div>
-      {dirty && <p className="mt-4 text-small text-warn">Есть несохранённые изменения</p>}
+      {ACCURACY && (
+        <>
+          <h3 className="mt-8 text-read font-semibold text-fg">Код и знания</h3>
+          <div className="mt-4 space-y-5">
+            <Field
+              label="Код агента"
+              hint={
+                scpForm(code.trim())
+                  ? "Для SSH укажите адрес так: ssh://git@host/team/agent.git"
+                  : link
+                    ? "Репозиторий скачается кнопкой «Прочитать код», с доступом к Git, настроенным на этом компьютере."
+                    : "Папка на этом компьютере или ссылка на Git-репозиторий. Из кода берутся критерии точности."
+              }
+            >
+              <Input
+                name="repo"
+                autoComplete="off"
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                placeholder="~/Desktop/agent или https://git…/agent.git"
+                className={INPUT}
+                spellCheck={false}
+                aria-invalid={scpForm(code.trim()) || undefined}
+              />
+            </Field>
+            <ToolsField tools={known.tools} onChange={(tools) => setKnown((v) => ({ ...v, tools }))} />
+            <KnowledgeField
+              value={known}
+              saved={!contextDirty}
+              onChange={(key, text) => setKnown((v) => ({ ...v, [key]: text }))}
+            />
+          </div>
+        </>
+      )}
+      {dirty && <p className="mt-5 text-small text-warn">Есть несохранённые изменения</p>}
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        <Button icon={Save} loading={saving} disabled={!dirty} onClick={save}>
+        <Button
+          icon={Save}
+          loading={saving}
+          disabled={!dirty || state.job.running || scpForm(code.trim()) || !name.trim()}
+          onClick={save}
+        >
           Сохранить
         </Button>
         {target && target.kind !== "code" && (
           <Button
             icon={PlugZap}
             loading={check === "pending"}
-            disabled={!target.ready || dirty}
+            disabled={!target.ready || dirty || saving || state.job.running}
             onClick={run}
             title={dirty ? "Сначала сохраните изменения" : undefined}
           >

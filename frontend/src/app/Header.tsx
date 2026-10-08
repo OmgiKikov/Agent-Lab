@@ -1,5 +1,6 @@
 import { Fragment, type ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { cn } from "@/lib/utils";
 import { ChevronRight, Search } from "lucide-react";
 import { useShell } from "./ShellContext";
 import { Button } from "../ui/Button";
@@ -16,6 +17,7 @@ export function Header({
   crumbs,
   sub,
   actions,
+  actionsInline,
   tabs,
   below,
 }: {
@@ -23,13 +25,15 @@ export function Header({
   crumbs?: Crumb[];
   sub?: ReactNode;
   actions?: ReactNode;
+  /** The actions are small (an icon on a phone): they stay on the title's row there instead of a row of their own. */
+  actionsInline?: boolean;
   tabs?: ReactNode;
   below?: ReactNode;
 }) {
   const shell = useShell();
   return (
     <header className="flex-shrink-0 border-b border-line bg-canvas/90 backdrop-blur">
-      <div className="flex h-16 items-center gap-2 px-4 lg:px-10">
+      <div className="flex min-h-16 flex-wrap items-center gap-2 px-4 py-3 sm:h-16 sm:flex-nowrap sm:py-0 lg:px-10">
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-1.5">
             {crumbs?.map((c) => (
@@ -55,7 +59,9 @@ export function Header({
           onClick={shell.openPalette}
           className="lg:hidden"
         />
-        {actions}
+        {actions && (
+          <div className={cn("flex flex-wrap items-center gap-2 sm:w-auto", !actionsInline && "w-full")}>{actions}</div>
+        )}
       </div>
       {tabs}
       {below}
