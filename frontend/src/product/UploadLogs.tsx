@@ -100,22 +100,15 @@ function useUpload(check?: Check) {
   const send = async (file: File) => {
     setBusy(true);
     try {
-      const {
-        total,
-        skipped = 0,
-        quarantined = 0,
-      } = await upload<{ total: number; skipped?: number; quarantined?: number }>("/api/logs", file);
+      const { total, skipped = 0 } = await upload<{ total: number; skipped?: number }>("/api/logs", file);
       await refresh();
       const next = check === "code" ? `${SECTIONS.accuracy}?assess=1` : check === "tone" ? toneCheckLink() : null;
       // The conversations a check cannot read are left out by the service: the person learns how many and why.
       const left = skipped
         ? `. Ещё ${count(skipped, "разговор не загружен", "разговора не загружены", "разговоров не загружены")}: ${plural(skipped, "в нём", "в них", "в них")} первым пишет агент или он не отвечает.`
         : "";
-      const unsettled = quarantined
-        ? `${left ? " " : ". "}${count(quarantined, "разговор отложен", "разговора отложены", "разговоров отложены")}: повторы в тексте не сходятся с порядком сообщений.`
-        : "";
       toast.notify(
-        `Загружено ${count(total, "разговор", "разговора", "разговоров")}${left}${unsettled}`,
+        `Загружено ${count(total, "разговор", "разговора", "разговоров")}${left}`,
         next
           ? {
               label: "Проверить",

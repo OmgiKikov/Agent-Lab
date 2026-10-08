@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
 import { resultOf } from "./checks";
 import { longDay, plural } from "./format";
-import { FEW, notComparedText, shareText, shiftText, type Counts, type Summary } from "./history";
+import { FEW, shareText, shiftText, type Counts, type Summary } from "./history";
 import { useLabState } from "./LabProvider";
 import type { Check, ResultHead } from "./types";
 
@@ -109,14 +109,10 @@ const sideText = (counts: Counts) => (counts.measured ? shareText(counts) : "н�
  * The line under a check's number, in two parts: its first words (`head`, the way to the previous check) and the
  * rest. «Прошлая проверка, 3 октября: 22 из 53 (42%) → сейчас 4 из 12 (33%). Мало разговоров, чтобы судить.» The
  * export of the previous check is not in the line: its link says it. A re-evaluation of the same conversations says
- * the difference is the evaluation's; other criteria or models — that the checks are not compared, without numbers.
- * Nothing before the first comparison, nor without a current result.
+ * the difference is the evaluation's. Nothing before the first comparison, without a current result, or when the
+ * checks are not comparable: that they are not compared is nothing to act on, and the history says why.
  */
 export function compareSentence(compare: Compare): { head: string; rest: string } | null {
-  if (compare.kind === "incompatible") {
-    const text = notComparedText(compare.reason);
-    return { head: text.slice(0, text.indexOf(":")), rest: text.slice(text.indexOf(":")) };
-  }
   const { overall, previous } = compare;
   if ((compare.kind !== "new-data" && compare.kind !== "same-data") || !overall || !previous) return null;
   const { before, now, verdict, direction } = overall;
@@ -126,10 +122,31 @@ export function compareSentence(compare: Compare): { head: string; rest: string 
   if (compare.kind === "same-data")
     return {
       head: "Повторная оценка тех же разговоров",
-      rest: `: ${counts}.${both && !same ? " Разница — разброс оценки, а не агента." : ""}`,
+      rest: `: ${counts}.${both && !same ? " Разница показывает только разброс оценки." : ""}`,
     };
   const said = verdict && verdict !== "same" ? ` ${VERDICT[verdict]}` : "";
   return { head: "Прошлая проверка", rest: `, ${longDay(previous.finishedAt)}: ${counts}.${said}` };
+}
+
+/**
+ * The row «Прошлая проверка» under a check's number (checks/Compare, CompareLine): the counts side by side, and under
+ * them when the previous check was and what may be read into the difference. Null when there is nothing to compare
+ * with, checks that are not comparable included.
+ */
+export function compareParts(compare: Compare): { value: string; note: string } | null {
+  const { overall, previous } = compare;
+  if ((compare.kind !== "new-data" && compare.kind !== "same-data") || !overall || !previous) return null;
+  const { before, now, verdict, direction } = overall;
+  const same = direction === "same";
+  const both = !!before.measured && !!now.measured;
+  const value = both ? shiftText(before, now, same, "сейчас") : `${sideText(before)}, сейчас ${sideText(now)}`;
+  if (compare.kind === "same-data")
+    return {
+      value,
+      note: `Повторная оценка тех же разговоров.${both && !same ? " Разница показывает только разброс оценки." : ""}`,
+    };
+  const said = verdict && verdict !== "same" ? ` ${VERDICT[verdict]}` : "";
+  return { value, note: `Проверка ${longDay(previous.finishedAt)}.${said}` };
 }
 
 /**
@@ -149,7 +166,7 @@ export function seriousCompareText(compare: Compare, marked = 2): string | null 
   const both = !!before.measured && !!now.measured;
   const counts = both ? shiftText(before, now, same, "сейчас") : `${sideText(before)}, сейчас ${sideText(now)}`;
   if (compare.kind === "same-data")
-    return `С серьёзными ошибками: ${counts}.${both && !same ? " Разница — разброс оценки, а не агента." : ""}`;
+    return `С серьёзными ошибками: ${counts}.${both && !same ? " Разница показывает только разброс оценки." : ""}`;
   const criteria = marked === 1 ? "Серьёзный критерий" : "Серьёзные критерии";
   const said =
     verdict === "few" && checked && Math.min(checked.before, checked.now) < FEW

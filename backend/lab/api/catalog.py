@@ -5,7 +5,8 @@ from fastapi import APIRouter, Body, HTTPException
 from pydantic import BaseModel
 
 from ..flows import catalog, profile
-from .base import Jobs, start
+from . import work
+from .base import Jobs
 
 router = APIRouter()
 
@@ -18,7 +19,7 @@ class CatalogCommand(BaseModel):
 async def start_catalog(jobs: Jobs, payload: CatalogCommand | None = Body(default=None)) -> dict:
     """The catalog brought up to date: new conversations read and placed; rebuild proposes its scenarios anew."""
     rebuild = bool(payload and payload.rebuild)
-    return start(jobs, 'catalog', lambda progress: catalog.build(progress, rebuild=rebuild))
+    return work.start(jobs, 'catalog', {'rebuild': rebuild})
 
 
 @router.get('/api/catalog')

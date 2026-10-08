@@ -265,6 +265,14 @@ export type Job = {
   progress: { message?: string; done?: number; total?: number; run?: string; check?: Check };
   /** When the task started: tells one task from the next of the same kind. Older services have no such field. */
   startedAt?: string | null;
+  /** How many times a restart of the Lab took the task up again where it was (backend/lab/jobs.py). */
+  resumed?: number;
+  /** How many finished parts the task keeps: a stopped check keeps the conversations it judged. */
+  kept?: number;
+  /** Starting the same work again continues the task with what it kept (backend/lab/api/work.py, continuable). */
+  continuable?: boolean;
+  /** What the task was started with: a check of tone of voice, its criteria and how many conversations. */
+  input?: { ruleIds?: string[]; count?: number; revision?: string; propose?: boolean };
 };
 /**
  * A check's result with people's answers taken in, counted by the service from the result's rows with the answers on
@@ -301,6 +309,11 @@ export type ResultHead = Omit<Discover, "results">;
 export type LabState = {
   toneOfVoice?: ToneDraft | null;
   job: Job;
+  /**
+   * The stopped work of each kind that the same start continues, whatever task ran after it (backend/lab/api/work.py,
+   * paused): «tone-check», «discover».
+   */
+  paused?: Partial<Record<string, Job>>;
   model: string;
   models: Models;
   settings: Settings;

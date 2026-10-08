@@ -57,12 +57,10 @@ def replace_export(dialogues: list[dict], name: str | None = None, report: dict 
 
 
 async def upload_export(name: str, data: bytes) -> dict:
-    """An uploaded export read in a worker thread and committed whole: how many conversations it has, how many it
-    had that a check cannot read (the agent wrote first, or never answered), and how many were quarantined because
-    their text and the order column disagree; both are left out."""
-    dialogues, skipped, quarantined = await asyncio.to_thread(export.read_export, name, data)
-    report = {'skipped': skipped, 'quarantined': quarantined}
-    return {'total': replace_export(dialogues, name, report), 'skipped': skipped, 'quarantined': len(quarantined)}
+    """An uploaded export read in a worker thread and committed whole: how many conversations it has, and how many it
+    had that a check cannot read (the agent wrote first, or never answered), which are left out."""
+    dialogues, skipped = await asyncio.to_thread(export.read_export, name, data)
+    return {'total': replace_export(dialogues, name, {'skipped': skipped}), 'skipped': skipped}
 
 
 def replace_sources(items: list[dict], read: dict | None = None) -> None:

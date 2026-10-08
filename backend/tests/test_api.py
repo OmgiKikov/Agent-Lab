@@ -29,7 +29,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         }
         response = await self.client.post('/api/logs?name=sample.jsonl', content=json.dumps(dialogue))
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {'total': 1, 'skipped': 0, 'quarantined': 0})
+        self.assertEqual(response.json(), {'total': 1, 'skipped': 0})
         response = await self.client.get('/api/logs/dialogue-1')
         self.assertEqual(response.json(), {**dialogue, 'evaluation': None})
         evaluation = {'dialogueId': 'dialogue-1', 'status': 'FAIL'}
@@ -500,18 +500,25 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_task_said_finished_has_its_data_in_the_same_answer(self) -> None:
         """The state is put together in a worker thread while the task runs on: a task that finishes meanwhile is
         still running in this answer, never «done» beside the data it has just replaced."""
-        self.jobs.state.update(kind='sources', running=True)
+        entered = asyncio.Event()
+
+        async def work(progress) -> None:
+            entered.set()
+            await asyncio.Event().wait()
+
+        started = self.jobs.start('sources', work)
+        await entered.wait()
         summary = api.state.source_summary
 
         def finishing(analysis):
             listed = summary(analysis)
-            self.jobs.state.update(running=False)  # the task commits and finishes after the sources were read
+            # The task commits and finishes after the sources were read.
+            storage.tasks.end(started['task'], storage.tasks.DONE)
             return listed
 
         with patch.object(api.state, 'source_summary', finishing):
             job = (await self.client.get('/api/state')).json()['job']
         self.assertTrue(job['running'])
-        self.jobs.state.update(kind=None, running=False)
 
     async def test_a_task_says_when_it_started(self) -> None:
         async def work(progress) -> None:

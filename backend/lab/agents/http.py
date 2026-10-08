@@ -121,13 +121,17 @@ def read_reply(data: object, http_status: int) -> dict:
     return {'text': text, 'status': status, 'ok': status.startswith('200') and bool(text), 'options': options}
 
 
+# What a run records as the agent's version when the stand names none.
+UNKNOWN_VERSION = 'не сообщается'
+
+
 class HttpAgent:
     def __init__(self, connection: dict) -> None:
         self.url = connection.get('url') or ''
         self.profile = connection.get('profile', 'prod')
         self.epk = connection.get('epk') or []
         self.clients = connection.get('clients') or {}
-        self.version = 'не сообщается'
+        self.version = UNKNOWN_VERSION
 
     @property
     def mocked(self) -> bool:

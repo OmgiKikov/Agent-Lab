@@ -49,7 +49,9 @@ export function ProblemList({
   return (
     <>
       {/* «6 из 52» next to «53 проверенных разговоров» read as a slip: what the second number counts is said once. */}
-      <p className="pt-2 text-small text-fg-3">Второе число — в скольких разговорах удалось проверить критерий.</p>
+      <p className="pt-2 text-small text-fg-3">
+        Второе число показывает, в скольких разговорах удалось проверить критерий.
+      </p>
       <ol className="divide-y divide-line">
         {shown.map((c, i) => (
           <li key={c.r.id} className={ENTER} style={stagger(i + 2)}>

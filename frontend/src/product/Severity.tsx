@@ -4,23 +4,27 @@ import { cn } from "@/lib/utils";
 import { conversationsLink, criterionLink } from "../app/links";
 import { JOB_OF } from "../lab/checks";
 import { useLabState } from "../lab/LabProvider";
+import { count, pct, plural } from "../lab/format";
 import type { Problems, RuleEntry } from "../lab/problems";
 import {
   hintOf,
+  pendingOf,
   PROPOSING,
   proposalCheck,
   reasonText,
   seriousOf,
-  severityLines,
   standingOf,
   useConfirmSeverity,
   useProposeSeverity,
   useSeverity,
   useSeverityBusy,
+  whereText,
+  whoseText,
 } from "../lab/severity";
 import type { Check } from "../lab/types";
 import { Switch } from "../ui/Switch";
 import { Tag } from "../ui/Tag";
+import { Step, STEP_ACTION } from "./Checklist";
 
 /** A quiet action inside a line of text, as «Проверить ещё» under a check's number. */
 const ACTION =
@@ -161,7 +165,17 @@ export function SeverityControl({
  * proposal runs — that task, or the end of the check itself — the button turns, and the task is seen where every task
  * is (the task card, the line under a section's head); while another task runs, it waits.
  */
-function Propose({ check, again, why }: { check: Check; again?: boolean; why?: string | null }) {
+function Propose({
+  check,
+  again,
+  why,
+  className = ACTION,
+}: {
+  check: Check;
+  again?: boolean;
+  why?: string | null;
+  className?: string;
+}) {
   const { state } = useLabState();
   const propose = useProposeSeverity();
   const job = state?.job;
@@ -176,7 +190,7 @@ function Propose({ check, again, why }: { check: Check; again?: boolean; why?: s
       onClick={() => propose.mutate(check)}
       disabled={running || other}
       title={other ? "Сейчас идёт другая задача" : running ? PROPOSING : (why ?? undefined)}
-      className={ACTION}
+      className={className}
     >
       {running && <Loader2 aria-hidden className="size-3.5 animate-spin motion-reduce:animate-none" />}
       {again ? "Отметить снова" : "Отметить автоматически"}
@@ -232,57 +246,95 @@ export function SeverityHint({
 }
 
 /**
- * Under a check's number — «Итог» of both checks, «Обзор», the step-by-step result of tone of voice — line by line
- * (lab/severity, severityLines): «С серьёзными ошибками — 6 из 53 (11%)», the count opening its conversations; «Серьёзные
- * критерии — 2 из 8. Их отметила модель, вы проверили 0 из 8. Проверить»; «Эти критерии удалось проверить в 16
- * разговорах из 53.»; «Ещё не решено по 2 критериям. Отметить автоматически». With no serious criterion, whose
- * decision that is; while nothing is marked, that or why it failed, and the way to mark. It never stands in for the
- * number above and is never added to it.
+ * The step about serious errors under a check's number (product/Checklist) — «Итог» of both checks, «Обзор», the
+ * step-by-step result of tone of voice. Nothing marked: «Отметьте серьёзные ошибки», what that gives, «Отметить
+ * автоматически»; failed: why, «Отметить снова». Marked: «Серьёзные ошибки — 6 из 53 (11%)», opening those
+ * conversations, with whose decision it is and where the criteria could be checked, and «Проверить отметки» while the
+ * model's proposals wait for a person. «Серьёзных ошибок нет» with whose decision that is. Done once a person decided
+ * every serious criterion. It never stands in for the number above and is never added to it.
  */
 export function SeverityStatus({ data, check }: { data: Problems | null | undefined; check: Check }) {
   const st = standingOf(data);
   if (!st || !data?.log?.assessed) return null;
   const serious = seriousOf(data);
-  return (
-    <>
-      {severityLines(st, serious).map((line, i) =>
-        line.kind === "count" ? (
-          <p key={i} className="max-w-[72ch]">
-            {line.head} —{" "}
-            <Link
-              to={conversationsLink(check, { v: "serious" })}
-              title="Разговоры с серьёзной ошибкой"
-              className="whitespace-nowrap rounded-sm font-semibold text-fg underline decoration-line-strong underline-offset-4 transition-colors hover:decoration-fg-3"
-            >
-              {line.share}
-            </Link>
-            .
-          </p>
-        ) : (
-          <p key={i} className="max-w-[72ch]">
-            {line.text}
-            {line.action === "check" ? (
-              <>
-                {" "}
-                <Link to={criterionLink(check)} className="font-medium text-run hover:underline">
-                  Проверить
-                </Link>
-              </>
-            ) : (
-              line.action && (
-                <>
-                  {" "}
-                  <Propose
-                    check={check}
-                    again={line.action === "again"}
-                    why={serious && st.error && `Прошлая попытка не удалась. ${st.error}`}
-                  />
-                </>
-              )
-            )}
-          </p>
-        ),
-      )}
-    </>
+  // Serious criteria the service has not counted yet: the row comes with their count a moment later.
+  if (st.serious && !serious) return null;
+  const pending = pendingOf(st);
+  const propose = pending && (
+    <Propose
+      check={check}
+      again={pending.again}
+      why={serious && st.error && `Прошлая попытка не удалась. ${st.error}`}
+      className={STEP_ACTION}
+    />
+  );
+  const review = st.proposed > 0 && (
+    <Link to={criterionLink(check)} className={STEP_ACTION}>
+      Проверить отметки
+    </Link>
+  );
+  // Done once nothing waits for a proposal and a person decided: on every serious criterion, or, with none serious,
+  // on every criterion.
+  const state = !pending && (serious ? st.yours : !st.proposed) ? "done" : "todo";
+  // While the model's proposals wait for a person, the step asks to confirm them; done, it says what came of it.
+  const ask = pending ? "Отметьте серьёзные ошибки" : "Подтвердите серьёзные ошибки";
+  if (serious) {
+    // «Серьёзная ошибка есть в 46 из 295 разговоров (16%)»: the count opens those conversations.
+    const found = (
+      <>
+        Серьёзная ошибка есть в{" "}
+        <Link
+          to={conversationsLink(check, { v: "serious" })}
+          title="Разговоры с серьёзной ошибкой"
+          className="whitespace-nowrap rounded-sm font-semibold underline decoration-line-strong underline-offset-4 transition-colors hover:decoration-fg-3"
+        >
+          {`${serious.failed}\u00a0из\u00a0${serious.measured}`}
+        </Link>{" "}
+        {plural(serious.measured, "разговора", "разговоров", "разговоров")} ({pct(serious.failed, serious.measured)}%)
+      </>
+    );
+    const rest = [
+      whoseText(st),
+      whereText(serious),
+      pending && `Ещё не решено по\u00a0${count(st.pending, "критерию", "критериям", "критериям")}.`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    return state === "done" ? (
+      <Step state="done" title={found} text={rest} />
+    ) : (
+      <Step
+        state="todo"
+        title={ask}
+        text={
+          <>
+            {found}.{"\n"}
+            {rest}
+          </>
+        }
+        action={propose || review}
+      />
+    );
+  }
+  if (pending)
+    return pending.again ? (
+      <Step
+        state="todo"
+        title="Не удалось отметить серьёзные ошибки"
+        text={pending.text.replace(/^Не удалось отметить серьёзные ошибки\.\s*/, "")}
+        action={propose}
+      />
+    ) : (
+      <Step
+        state="todo"
+        title="Отметьте серьёзные ошибки"
+        text="Модель предложит, какие критерии серьёзные, а вы подтвердите. Серьёзные проблемы встанут в начало списка и посчитаются отдельно."
+        action={propose}
+      />
+    );
+  return state === "done" ? (
+    <Step state="done" title="Серьёзных ошибок нет" text={whoseText(st)} />
+  ) : (
+    <Step state="todo" title={ask} text={whoseText(st)} action={review} />
   );
 }

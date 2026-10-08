@@ -12,6 +12,7 @@ from lab import storage
 from lab.domain.answers import counts
 from lab.flows import accuracy, answers
 from lab.flows import checks as results_of
+from lab.storage import schema
 
 # The tables of a database the Lab left before schema 7.
 SCHEMA_6 = """
@@ -267,7 +268,7 @@ class OlderDatabaseTests(unittest.TestCase):
         self.assertNotIn('human', stored)
         old = {'tone_checks', 'code_checks', 'tone_check_reviews', 'code_check_reviews', 'lengths'}
         self.assertEqual(tables & old, set())
-        self.assertEqual(version, 7)
+        self.assertEqual(version, schema.SCHEMA)
 
 
 if __name__ == '__main__':

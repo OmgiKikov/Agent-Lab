@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .code import START, CodeAgent
-from .http import AGENT_PATH, BAD_ADDRESS, AgentError, HttpAgent, address_valid
+from .http import AGENT_PATH, BAD_ADDRESS, UNKNOWN_VERSION, AgentError, HttpAgent, address_valid
 from .session import session
 
 DEFAULT_REPO = '~/Desktop/aigw-local'
@@ -138,6 +138,7 @@ def create(connection: dict) -> HttpAgent:
 
 __all__ = [
     'NAMES',
+    'UNKNOWN_VERSION',
     'AgentError',
     'CodeAgent',
     'HttpAgent',

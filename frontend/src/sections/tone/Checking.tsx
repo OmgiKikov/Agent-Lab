@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { api } from "../../lab/api";
@@ -44,6 +44,22 @@ export function Checking({
   const error = active && !job.running ? job.error : null;
   // A stop is the person's own choice, not a failure: no red, no model settings; the previous result stays.
   const stopped = error === STOPPED;
+  // What a stop or a failure kept: the same start goes on from there (backend/lab/api/work.py, continuable).
+  const input = job.input;
+  const resumable = !!error && !!job.continuable && !!input?.ruleIds && !!input.count;
+  const [resuming, setResuming] = useState(false);
+  const resume = async () => {
+    setResuming(true);
+    try {
+      // The same start as the stopped one, as it was kept: the service continues it only when nothing changed.
+      await api("/api/tone-of-voice/check", input);
+      await refresh();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setResuming(false);
+    }
+  };
   return (
     <section aria-labelledby="checking-title">
       <h2 id="checking-title" className="text-title font-semibold text-fg">
@@ -52,13 +68,20 @@ export function Checking({
       {error ? (
         <div role={stopped ? "status" : "alert"} className="mt-6">
           <p className={cn("text-read", stopped ? "text-fg-2" : "text-bad")}>
-            {stopped
-              ? `Проверка остановлена. ${finished ? "Прежний итог сохранён." : "Диалоги и критерии сохранены."}`
-              : error}
+            {resumable
+              ? `${stopped ? `Проверка остановлена на ${job.kept}\u00a0из\u00a0${input.count}.` : error} Проверенное сохранено: продолжим с этого места.${stopped && finished ? " Прежний итог тоже на месте." : ""}`
+              : stopped
+                ? `Проверка остановлена. ${finished ? "Прежний итог сохранён." : "Диалоги и критерии сохранены."}`
+                : error}
           </p>
           <div className="mt-4 flex flex-wrap gap-3">
+            {resumable && (
+              <Button variant="primary" loading={resuming} onClick={() => void resume()}>
+                Продолжить проверку
+              </Button>
+            )}
             {finished && (
-              <Button variant="primary" onClick={onResult}>
+              <Button variant={resumable ? undefined : "primary"} onClick={onResult}>
                 К прежнему итогу
               </Button>
             )}

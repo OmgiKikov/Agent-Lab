@@ -1,11 +1,12 @@
 """An export of conversations from the chat (a workbook or JSON lines) read into conversations, and the text of a
 conversation as the customer saw it, with the agent's own words in it.
 
-Excel exports contain CLIENT/AGENT turns and the real message count in the order column. Exports repeat
-exchanges: every exchange twice, or only some of them, sometimes with a trailing dot on the copy. A run of
-identical adjacent exchanges is read as one or more real exchanges; the reading is kept only when the message
-count admits exactly one. A customer's actual repeated question survives whenever the count requires it.
-A conversation the count cannot settle is quarantined with its reason; the rest of the file is imported.
+Excel exports contain CLIENT/AGENT turns, on lines of their own or all on one line, and an order column. Exports
+repeat exchanges: every exchange twice, or only some of them, sometimes with a trailing dot on the copy. A run of
+identical adjacent exchanges is read as one or more real exchanges, and the repeats are removed only when the order
+column's count admits exactly one reading; a customer's actual repeated question survives whenever the count requires
+it. Otherwise the text is the conversation: the bank's export often counts other messages than its text holds, and a
+row the count cannot settle is read as written, never refused or cut, with the reason in its meta.
 
 Each conversation keeps the export's service columns (`meta`): the date, channel, entry point, the agents that
 took part, each status code with the agents it names, and the operator flag. Customer identifiers are kept only as a
@@ -45,7 +46,7 @@ MAX_READINGS = 2  # counting stops here: two readings already make a conversatio
 # An export that starts every turn on its own line: «HOST AGENT NOT FOUND» inside a message is the customer's words.
 MARKER = re.compile(r'^[ \t]*(CLIENT|AGENT)\b', re.M)
 # The bank's export writes a whole conversation on one line: «CLIENT … AGENT … CLIENT …». There a marker word inside a
-# message cannot be told from a turn; the order column then disagrees and the conversation is quarantined.
+# message cannot be told from a turn: the order column decides between the layouts, or the text is read as written.
 INLINE = re.compile(r'(?:^|(?<=\s))(CLIENT|AGENT)\b')  # «CLIENT?»: the customer sent a lone «?»
 # A broken workbook: openpyxl names a part the archive does not have (KeyError), zipfile meets a broken stream or a
 # feature it does not read.
@@ -94,40 +95,48 @@ def _split(text: str, marks: list[re.Match]) -> list[dict]:
 def layouts(text: str) -> list[tuple[str, list[dict]]]:
     """The ways the exported text can be read into turns, the likelier first: turns on lines of their own, then turns
     written inline. A text can mix them (inline exchanges with line breaks between them or inside a message), so both
-    are tried and the order column decides (_read_turns)."""
+    are tried and the order column decides (_read_turns). A marker with nothing after it is no message."""
     lines, inline = list(MARKER.finditer(text)), list(INLINE.finditer(text))
     found = [('lines', _split(text, lines))] if len(lines) >= 2 else []
     if len(inline) > len(lines) or not found:
         found.append(('inline', _split(text, inline)))
-    return found
+    return [(layout, [turn for turn in turns if turn['content']]) for layout, turns in found]
 
 
-def _read_turns(text: str, count: int) -> tuple[str, list[dict], list[dict], list[int]]:
+class Unsettled(ValueError):
+    """The order column cannot settle how this text reads; the text is then read as written."""
+
+
+def _read_turns(text: str, order: object) -> tuple[str, list[dict], list[dict], list[int], str | None]:
     """The layout that reads the text into the order column's count of messages: (layout, exported turns, real
-    messages, their positions). Quarantined with the likelier layout's reason when none does."""
-    first: Quarantined | None = None
-    for layout, found in layouts(text):
-        try:
-            messages, kept = _export_messages(found, count)
-        except Quarantined as error:
-            first = first or error
-            continue
-        return layout, found, messages, kept
-    raise first or Quarantined('в тексте нет реплик')
-
-
-class Quarantined(ValueError):
-    """This conversation cannot be read unambiguously; the rest of the file is still usable."""
+    messages, their positions, None). When none does, the likelier layout as written, and why the count did not
+    settle it."""
+    found = layouts(text)
+    reason: Unsettled | None = None
+    try:
+        count = _message_count(order)
+    except Unsettled as error:
+        reason = error
+    else:
+        for layout, turns in found:
+            try:
+                messages, kept = _export_messages(turns, count)
+            except Unsettled as error:
+                reason = reason or error
+                continue
+            return layout, turns, messages, kept, None
+    layout, turns = found[0]
+    return layout, turns, turns, list(range(len(turns))), str(reason or 'в тексте нет реплик')
 
 
 def _message_count(order: object) -> int:
-    """How many messages the order column lists. A refusal is the reason a conversation is quarantined."""
+    """How many messages the order column lists; Unsettled when it lists none or cannot be read."""
     try:
         value = json.loads(str(order))
     except (ValueError, TypeError) as error:
-        raise Quarantined('не читается порядок сообщений') from error
+        raise Unsettled('не читается порядок сообщений') from error
     if not isinstance(value, list) or not value:
-        raise Quarantined('пустой порядок сообщений')
+        raise Unsettled('пустой порядок сообщений')
     return len(value)
 
 
@@ -171,7 +180,7 @@ def _readings(sizes: list[int], repeats: list[int], target: int) -> tuple[int, l
 
 
 def _export_messages(messages: list[dict], count: int) -> tuple[list[dict], list[int]]:
-    """The real messages and their positions in the exported text; Quarantined when the count cannot decide."""
+    """The real messages and their positions in the exported text; Unsettled when the count cannot decide."""
     if len(messages) == count:
         return messages, list(range(len(messages)))
     # Known doubled layout: every exchange followed by its exact copy. It decides even where several runs could trade
@@ -191,9 +200,9 @@ def _export_messages(messages: list[dict], count: int) -> tuple[list[dict], list
             runs.append([group])
     found, reading = _readings([len(run[0]) for run in runs], [len(run) for run in runs], count)
     if not found:
-        raise Quarantined(f'в тексте {len(messages)} сообщений, по «Порядку» {count}: повторы не сводятся к нему')
+        raise Unsettled(f'в тексте {len(messages)} сообщений, по «Порядку» {count}: повторы не сводятся к нему')
     if found > 1:
-        raise Quarantined('повторы обменов допускают несколько прочтений при том же числе сообщений')
+        raise Unsettled('повторы обменов допускают несколько прочтений при том же числе сообщений')
     kept = [i for run, multiplicity in zip(runs, reading, strict=True) for group in run[:multiplicity] for i in group]
     return [messages[index] for index in kept], kept
 
@@ -267,8 +276,8 @@ def _cell(row: tuple, index: int) -> object:
     return row[index] if index < len(row) else None
 
 
-def from_excel(data: bytes) -> tuple[list[dict], list[dict]]:
-    """The conversations of a workbook, and the ones quarantined: {id, row, reason}."""
+def from_excel(data: bytes) -> list[dict]:
+    """The conversations of a workbook, each with the export's service columns and how its text was read."""
     workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     try:
         sheet = workbook[SHEET] if SHEET in workbook.sheetnames else workbook.worksheets[0]
@@ -278,28 +287,22 @@ def from_excel(data: bytes) -> tuple[list[dict], list[dict]]:
         if missing:
             raise ValueError('В выгрузке нет колонок ' + ', '.join(f'«{name}»' for name in missing) + '.')
         column = {name: index for index, name in enumerate(header) if name}
-        dialogues, quarantined = [], []
+        dialogues = []
         for number, row in enumerate(rows, 2):
             if not any(value is not None for value in row):
                 continue
-            dialogue_id = _cell(row, column[ID])
-            try:
-                count = _message_count(_cell(row, column[ORDER]))
-                layout, text_messages, messages, kept = _read_turns(str(_cell(row, column[TEXT]) or ''), count)
-            except Quarantined as error:
-                quarantined.append({'id': str(dialogue_id), 'row': number, 'reason': str(error)})
-                continue
+            layout, text_messages, messages, kept, unsettled = _read_turns(
+                str(_cell(row, column[TEXT]) or ''), _cell(row, column[ORDER])
+            )
             meta = _meta(row, column, number)
-            exact = len(text_messages) == count
-            meta['import'] = {
-                'status': 'exact' if exact else 'collapsed',
-                'textMessages': len(text_messages),
-                'layout': layout,
-            }
-            if not exact:
+            status = 'as_written' if unsettled else 'exact' if len(messages) == len(text_messages) else 'collapsed'
+            meta['import'] = {'status': status, 'textMessages': len(text_messages), 'layout': layout}
+            if status == 'collapsed':
                 meta['import']['kept'] = kept
-            dialogues.append({'id': dialogue_id, 'messages': messages, 'meta': meta})
-        return dialogues, quarantined
+            if unsettled:
+                meta['import']['reason'] = unsettled
+            dialogues.append({'id': _cell(row, column[ID]), 'messages': messages, 'meta': meta})
+        return dialogues
     finally:
         workbook.close()
 
@@ -362,22 +365,18 @@ def prepare(name: str, data: bytes) -> list[dict]:
     return read_export(name, data)[0]
 
 
-def read_export(name: str, data: bytes) -> tuple[list[dict], int, list[dict]]:
-    """The usable conversations of an upload, how many it had that a check cannot read (the agent wrote first, or
-    never answered), and the ones quarantined because their text and the order column disagree ({id, row, reason}):
-    the person is told how many were left out and why."""
-    quarantined: list[dict] = []
+def read_export(name: str, data: bytes) -> tuple[list[dict], int]:
+    """The usable conversations of an upload, and how many it had that a check cannot read (the agent wrote first, or
+    never answered): the person is told how many were left out."""
     if name.lower().endswith('.jsonl'):
         dialogues = from_jsonl(data)
     elif name.lower().endswith('.xlsx'):
         try:
             _check_parts(data)
-            dialogues, quarantined = from_excel(data)
+            dialogues = from_excel(data)
         except UNREADABLE as error:
             raise ValueError('Файл .xlsx повреждён или зашифрован. Сохраните выгрузку заново.') from error
     else:
         raise ValueError('Нужна выгрузка в .xlsx или .jsonl.')
-    if not dialogues and quarantined:
-        raise ValueError(f'Ни один разговор не прочитан: {quarantined[0]["reason"]} (диалог {quarantined[0]["id"]}).')
     usable = _validated(dialogues)
-    return usable, len(dialogues) - len(usable), quarantined
+    return usable, len(dialogues) - len(usable)

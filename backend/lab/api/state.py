@@ -7,7 +7,8 @@ from .. import agents, models, storage
 from ..domain import checks, personas
 from ..flows import checks as results_of
 from ..flows import connection, inputs, scenarios, tone
-from ..jobs import BusyError
+from ..jobs import BusyError, view
+from . import work
 from .base import Jobs
 
 router = APIRouter()
@@ -35,15 +36,19 @@ def source_summary(analysis: dict | None) -> list[dict]:
 
 
 @router.get('/api/state')
-def state(jobs: Jobs) -> dict:
+def state() -> dict:
     """The task is read first, as it stands: it runs on while this answer is put together in a worker thread, and a
     task said to be finished has its data in the same answer (a live state would say «done» beside the data it
     replaced). Each check's result comes in brief (flows.checks.head): the screens fetch its verdicts by its checkId
     and reviewsStamp (GET /api/checks/{check})."""
-    job = dict(jobs.state)
+    task = storage.tasks.latest()
+    # Whether starting the same work again continues it (work.continuable): the screen offers to go on.
+    job = view(task) | {'continuable': work.continuable(task)}
     found = {check: results_of.head(check) for check in checks.RESULTS}
     return {
         'job': job,
+        # The stopped work of each kind that the same start continues (work.paused): its screen offers to go on.
+        'paused': work.paused(),
         'model': models.main_model(),
         'models': models.describe(),
         'settings': connection.settings(),

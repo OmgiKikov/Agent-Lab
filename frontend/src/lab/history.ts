@@ -116,7 +116,7 @@ export function comparisonText(check: SavedCheck, previous?: SavedCheck): string
   const verdict = check.comparison.verdict;
   const caveat =
     kind === "same-data"
-      ? !same && "Разница — разброс оценки, а не агента."
+      ? !same && "Разница показывает только разброс оценки."
       : verdict !== undefined
         ? verdict && verdict !== "same" && VERDICT[verdict]
         : Math.min(before.measured, now.measured) < FEW

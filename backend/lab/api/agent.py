@@ -6,7 +6,8 @@ from pydantic import BaseModel, Field
 
 from ..agents import knowledge
 from ..flows import connection, inputs
-from .base import Jobs, start
+from . import work
+from .base import Jobs
 
 router = APIRouter()
 
@@ -48,7 +49,7 @@ async def check_agent(key: str) -> dict:
 
 @router.post('/api/sources')
 async def collect_sources(jobs: Jobs) -> dict:
-    return start(jobs, 'sources', lambda progress: inputs.read_code())
+    return work.start(jobs, 'sources', {})
 
 
 @router.get('/api/sources/{source_id}')

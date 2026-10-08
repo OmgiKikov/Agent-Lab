@@ -9,7 +9,7 @@ import { codeSources, TONE_ID } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
 import { UploadButton } from "../../product/UploadLogs";
 import { Button, buttonClass } from "../../ui/Button";
-import { SizePicker, useAssess, useSampleSize } from "./AssessSheet";
+import { Resumes, SizePicker, useAssess, useSampleSize } from "./AssessSheet";
 import { previousOf } from "../../lab/compare";
 import { PreviousCheck, useComparison } from "./Compare";
 
@@ -163,7 +163,7 @@ export function ToneStart() {
 export function AccuracyStart() {
   const { state } = useLabState();
   const previous = usePrevious("code");
-  const { sizes, size, setSize } = useSampleSize();
+  const { sizes, size, setSize, resumes } = useSampleSize();
   const { start, starting } = useAssess();
   const job = state?.job;
   if (job?.running && job.kind === "discover")
@@ -205,6 +205,7 @@ export function AccuracyStart() {
       action={
         <div className="space-y-6">
           <SizePicker sizes={sizes} size={size} onSize={setSize} />
+          <Resumes when={resumes} />
           <Button
             variant="primary"
             size="lg"

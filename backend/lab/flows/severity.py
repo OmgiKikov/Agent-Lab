@@ -53,6 +53,7 @@ async def propose(check: str, progress: Progress | None = None, again: bool = Fa
                 storage.severity.failed(check, str(error))
                 return str(error)
             storage.severity.propose(check, {key: answer.value[id_] for id_, key in ids.items()}, answer.model)
+            storage.tasks.keep(f'proposed:{check}:{part[0]}', True)  # a finished part of the task
     return None
 
 
@@ -63,6 +64,9 @@ async def proposed_after(check: str, progress: Progress) -> None:
     try:
         await propose(check, progress)
     except asyncio.CancelledError:
+        # The Lab closing is no person's stop: the task stays running, and the next process proposes the rest.
+        if storage.tasks.closing():
+            raise
         current = asyncio.current_task()
         if current is not None:
             current.uncancel()
