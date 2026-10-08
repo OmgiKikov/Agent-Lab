@@ -22,6 +22,8 @@ import { ProblemRow } from "../problems/ProblemRow";
 import { CheckHeader } from "./CheckHeader";
 import { Delta } from "./Compare";
 import { savedCriteria, useSaved, type SavedCriterion } from "./saved";
+import { duty } from "../../lab/criteria";
+import { plainRule, RuleText } from "../criteria/RuleText";
 
 const PART = { bad: "fail", ok: "pass", none: "none" } as const;
 const NONE = new Set<string>();
@@ -314,7 +316,7 @@ function PastCheck({ check, id }: { check: Check; id: string }) {
                 <span className="font-medium text-fg">
                   {index + 1}. {criterion.name}
                 </span>
-                <p className="mt-1 whitespace-pre-wrap">{criterion.text}</p>
+                <RuleText text={criterion.text} className="mt-1" />
                 <CriterionFacts criterion={criterion} />
               </li>
             ))}
@@ -335,7 +337,7 @@ function PastCheck({ check, id }: { check: Check; id: string }) {
 function CriterionFacts({ criterion }: { criterion: SavedCriterion }) {
   const facts: [string, ReactNode][] = [
     ["Когда применяется", criterion.condition],
-    ["Исключения и допустимое", criterion.acceptable],
+    ["Исключения и допустимое", criterion.acceptable ? <RuleText text={criterion.acceptable} /> : null],
     [
       "Уточнения команды",
       criterion.clarifications?.length ? (
@@ -346,7 +348,11 @@ function CriterionFacts({ criterion }: { criterion: SavedCriterion }) {
         </ul>
       ) : null,
     ],
-    ["Основание в правилах", criterion.quote && criterion.quote !== criterion.text ? `«${criterion.quote}»` : null],
+    // The rules' words without their headings («## Объём: text_volume»), as the criterion's card says them.
+    [
+      "Основание в правилах",
+      criterion.quote && criterion.quote !== criterion.text ? `«${plainRule(duty(criterion.quote))}»` : null,
+    ],
   ];
   const shown = facts.filter(([, value]) => !!value);
   if (!shown.length) return null;
