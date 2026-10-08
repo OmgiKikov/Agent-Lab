@@ -1,11 +1,16 @@
 """Replay the actual customer's messages, not model-generated messages, and keep both sides of every pair."""
 
 import asyncio
+import time
 import uuid
 
 from .. import agents, config, models, storage
 from ..domain import checks, metric
+from ..domain.tone import for_judging
 from . import Progress, agent_context, check_setup, connection, conversations, error_text, provenance
+
+# How often a run writes its record while it goes, at most: once a second.
+SAVE_EVERY = 1.0
 
 
 async def run(
@@ -39,15 +44,24 @@ async def run(
                 raise ValueError('Версия агента изменилась. Создайте новый запуск для нового сравнения.')
             record['version'] = agent.version
             slots = asyncio.Semaphore(min(4, config.current().concurrency))
+            criteria = {topic['id']: topic['rules'] for topic in record.get('topics') or []}
+            saved = time.monotonic()
 
             async def one(index: int) -> None:
+                nonlocal saved
                 item = record['items'][index]
                 if item['status'] in ('PASS', 'FAIL', 'NOT_APPLICABLE'):
                     return
                 async with slots:
-                    await _play(agent, item)
+                    # A record of an earlier Lab keeps each item's criteria in the item.
+                    await _play(agent, item, item.get('criteria') or criteria.get(item.get('topicId')) or [])
                 record['metric'] = metric.metric(record['items'])
-                storage.launches.save('questions', record)
+                # The whole record is written at most once a second (and at the end, _finish): written after every
+                # answer, a long run would write it again and again in full. An answer not written yet is asked again
+                # after a restart.
+                if time.monotonic() - saved >= SAVE_EVERY:
+                    storage.launches.save('questions', record)
+                    saved = time.monotonic()
                 storage.tasks.keep(f'question:{index}', True)
                 progress(
                     done=sum(i['status'] != 'RUNNING' for i in record['items']),
@@ -121,6 +135,8 @@ async def _new(
         'target': target,
         'startedAt': storage.now(),
         'status': 'running',
+        # The criteria once for the run, by topic; an item names its topic.
+        'topics': [{'id': topic['id'], 'title': topic.get('title', ''), 'rules': topic['rules']} for topic in topics],
         'items': items,
         'metric': None,
         'version': '…',
@@ -139,15 +155,17 @@ def _item(dialogue: dict, topic: dict | None) -> dict:
         'conversation': [],
         'status': 'RUNNING',
         'rules': [],
-        'criteria': topic['rules'] if topic else [],
+        'topicId': topic['id'] if topic else None,
         'topic': topic['title'] if topic else '',
         'error': None,
     }
 
 
-async def _play(agent: agents.HttpAgent, item: dict) -> None:
+async def _play(agent: agents.HttpAgent, item: dict, criteria: list[dict]) -> None:
+    """One recorded conversation asked again and its new answers judged by the criteria of its topic, as the check of
+    the recorded answers judges them: with the clarifications people confirmed (for_judging), so the two compare."""
     item.update(conversation=[], rules=[], error=None, status='RUNNING')
-    if not item['criteria']:
+    if not criteria:
         item.update(status='UNMEASURED', error='Для этого разговора не определены критерии.')
         return
     original = [m['content'] for m in item['original'] if m['role'] == 'user']
@@ -175,7 +193,8 @@ async def _play(agent: agents.HttpAgent, item: dict) -> None:
                 if m['text'].strip() or m.get('events')
             ],
         }
-        result = await conversations.judge_dialogue(transcript, {'id': 'replay', 'rules': item['criteria']})
+        judged = {'id': 'replay', 'rules': [for_judging(rule) for rule in criteria]}
+        result = await conversations.judge_dialogue(transcript, judged)
         item.update({key: result[key] for key in ('rules', 'status', 'model', 'judgeVersion', 'error', 'second')})
         item.update(knowledge=result.get('knowledge'), contextError=result.get('contextError'))
         before = item.get('baseline') or {}

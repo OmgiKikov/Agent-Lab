@@ -13,10 +13,13 @@ def library(kind: str) -> dict:
     (before the library) become its first version, dated when they were made; the ones a set an earlier Lab wrote
     itself copied in, while it is still selected, do not."""
     if kind == 'tone' and storage.judges.selected(kind) is None:
-        draft = storage.documents.load(DRAFT)
-        policy = next((s for s in inputs.sources() if s['id'] == checks.TONE_OF_VOICE), None)
-        if draft and policy:
-            storage.judges.capture_tone(draft, policy, adopted=True)
+        # Under the write lock, asked again: the screens ask for the library twice at once on their first look, and
+        # the criteria must become one version, not one per request.
+        with storage.transaction():
+            draft = storage.documents.load(DRAFT)
+            policy = next((s for s in inputs.sources() if s['id'] == checks.TONE_OF_VOICE), None)
+            if storage.judges.selected(kind) is None and draft and policy:
+                storage.judges.capture_tone(draft, policy, adopted=True)
     selected = storage.judges.active(kind)
     return {'versions': storage.judges.listed(kind), 'selectedId': selected['id'] if selected else None}
 
@@ -39,8 +42,18 @@ def activate(kind: str, version_id: str | None) -> dict:
         sources = [s for s in inputs.sources() if s['id'] != source_id]
         if value:
             sources.append(rules.source(kind, value['name'], value['policy']))
+        draft = (storage.documents.load(DRAFT) or {}) if kind == 'tone' else {}
+        # The same criteria of the same rules under another name or version: the result judged by them, its scenarios
+        # and the revision the screens compare it with stay.
+        same = (
+            bool(value)
+            and draft.get('criteria') == value['criteria']
+            and draft.get('sourceSha256') == sources[-1]['sha256']
+        )
         inputs.replace_sources(sources)
         storage.judges.select(kind, version_id)
+        if same:
+            return value
         storage.documents.save(checks.result(kind), None)
         inputs.drop_deck([kind])
         if kind == 'tone':
@@ -67,9 +80,23 @@ def save(kind: str, name: str, policy: str, criteria: list[dict], set_id: str | 
     found = rules.validate_criteria(criteria, kind)
     found = [r if quotes.found(r['quote'], policy) else r | {'quote': ''} for r in found]
     with storage.transaction():
-        value = storage.judges.save(kind, name, policy, found, set_id=set_id, base_id=base_id)
+        base = storage.judges.get(base_id) if base_id else storage.judges.active(kind)
+        value = storage.judges.save(kind, name, policy, _as_before(found, base), set_id=set_id, base_id=base_id)
         activate(kind, value['id'])
         return value
+
+
+def _as_before(found: list[dict], base: dict | None) -> list[dict]:
+    """A criterion the person left as it was keeps its saved form to the key: the form sends every criterion back with
+    the fields it fills in (empty clarifications, defaults), and a check is comparable with the ones before it, the
+    answers on a criterion carried to it, only while its criteria are the same records (tone.criteria_fingerprint,
+    tone.carry_decisions). Renaming the set or editing one criterion changes nothing of the others."""
+    before = {rule['id']: rule for rule in (base or {}).get('criteria') or []}
+
+    def bare(rule: dict) -> dict:
+        return {key: value for key, value in rule.items() if value not in ('', [], None)}
+
+    return [before[r['id']] if r['id'] in before and bare(before[r['id']]) == bare(r) else r for r in found]
 
 
 def markdown(version_id: str) -> str:

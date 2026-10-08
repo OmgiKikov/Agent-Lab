@@ -5,8 +5,8 @@ and a process that dies leaves its task running for the next one to continue (jo
 A step is one finished part of the work, kept as soon as it is done: a conversation judged, the topics planned. The
 first value kept under a key stays (keep), so a part done twice keeps its first result. A task that ends done needs its
 steps no more; a stopped or failed one keeps them, and the same work started again (an equal fingerprint) continues it
-instead of paying for them again (begin). Only the latest task of a kind can be continued: starting other work of the
-kind lets the steps of the earlier ones go.
+instead of paying for them again (begin). Only the latest task of a kind, or of a line of work of the kind (begin),
+can be continued: starting other work of the same line lets the steps of the earlier ones go.
 
 The only module that knows the tables of tasks: where long work is kept can change here alone.
 """
@@ -14,6 +14,7 @@ The only module that knows the tables of tasks: where long work is kept can chan
 import json
 import sqlite3
 import uuid
+from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
@@ -45,14 +46,24 @@ class Current:
 CURRENT: ContextVar[Current | None] = ContextVar('task', default=None)
 
 
-def begin(kind: str, given: dict, fingerprint: str | None = None, task_id: str | None = None) -> dict:
+def begin(
+    kind: str,
+    given: dict,
+    fingerprint: str | None = None,
+    task_id: str | None = None,
+    line: Callable[[dict], object] | None = None,
+) -> dict:
     """A task running from now: the latest task of the kind when it stopped or failed doing the same work (an equal
-    fingerprint), with the steps it kept (continued), else a new one. Busy while another task runs."""
+    fingerprint), with the steps it kept (continued), else a new one. Busy while another task runs. line: what parts
+    a kind into lines of work that never stand for each other (a launch of tone of voice and one of Точность; one
+    that checks the recorded answers and one that only asks the agent): only the latest task of the same line is
+    continued, and only its line's earlier steps go."""
     with db.transaction(), db.connect() as connection:
         if connection.execute('SELECT 1 FROM tasks WHERE status = ?', (RUNNING,)).fetchone():
             raise Busy
         at = db.now()
-        latest = _latest(connection, kind)
+        same = [task for task in _of(connection, kind) if line is None or line(task['input']) == line(given)]
+        latest = same[0] if same else None
         if fingerprint and latest and latest['status'] in (STOPPED, FAILED) and latest['fingerprint'] == fingerprint:
             connection.execute(
                 'UPDATE tasks SET status = ?, input = ?, progress = ?, error = NULL, started_at = ?, updated_at = ?, '
@@ -60,8 +71,8 @@ def begin(kind: str, given: dict, fingerprint: str | None = None, task_id: str |
                 (RUNNING, db.dump(given), '{}', at, at, latest['id']),
             )
             return _get(connection, latest['id']) | {'continued': True}
-        connection.execute(
-            'DELETE FROM steps WHERE task_id IN (SELECT id FROM tasks WHERE kind = ? AND status != ?)', (kind, RUNNING)
+        connection.executemany(
+            'DELETE FROM steps WHERE task_id = ?', [(task['id'],) for task in same if task['status'] != RUNNING]
         )
         new_id = task_id or uuid.uuid4().hex
         connection.execute(
@@ -163,6 +174,19 @@ def closing() -> bool:
     process, so nothing may be written as stopped."""
     current = CURRENT.get()
     return current is not None and current.closing
+
+
+def of_kind(kind: str) -> list[dict]:
+    """The tasks of a kind, the latest first."""
+    with db.connect() as connection:
+        return _of(connection, kind)
+
+
+def _of(connection: sqlite3.Connection, kind: str) -> list[dict]:
+    rows = connection.execute(
+        f'SELECT {_FIELDS} FROM tasks WHERE kind = ? ORDER BY started_at DESC, rowid DESC', (kind,)
+    ).fetchall()
+    return [_task(row) for row in rows]
 
 
 def _latest(connection: sqlite3.Connection, kind: str | None) -> dict | None:

@@ -38,6 +38,22 @@ def listed(kind: str) -> list[dict]:
         return [_line(json.loads(row[0])) for row in rows]
 
 
+def light(record: dict) -> dict:
+    """A whole record as its screen reads it, again every 1.5 s while it runs: all of it but the text of its rules (the
+    set and version, judges.brief) and what its metrics hold beyond their counts. The record keeps both (get)."""
+    kept = dict(record)
+    if record.get('judge'):
+        kept['judge'] = judges.brief(record['judge'])
+    if 'metric' in record:
+        kept['metric'] = _counts(record['metric'])
+    if 'modes' in record:
+        kept['modes'] = {
+            mode: outcome | ({'metric': _counts(outcome['metric'])} if 'metric' in outcome else {})
+            for mode, outcome in record['modes'].items()
+        }
+    return kept
+
+
 def _line(record: dict) -> dict:
     """A record as its list shows it: its own fields of LINE, the set and version of its rules (judges.brief), and of
     each mode how it stands, its results by id and its counts."""

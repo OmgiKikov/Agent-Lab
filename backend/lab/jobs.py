@@ -70,13 +70,14 @@ class Jobs:
         fingerprint: str | None = None,
         task_id: str | None = None,
         resumed: dict | None = None,
+        line: Callable[[dict], object] | None = None,
     ) -> tuple[asyncio.Task, dict]:
         if self._task is not None and not self._task.done():
             raise BusyError(BUSY)
         self._settle()
         if resumed is None:
             try:
-                record = tasks.begin(kind, given or {}, fingerprint, task_id)
+                record = tasks.begin(kind, given or {}, fingerprint, task_id, line)
             except tasks.Busy:
                 raise BusyError(BUSY) from None
             tasks.report(record['id'], {'message': 'Запускаем…'})
@@ -116,10 +117,12 @@ class Jobs:
         given: dict | None = None,
         fingerprint: str | None = None,
         task_id: str | None = None,
+        line: Callable[[dict], object] | None = None,
     ) -> dict:
         """Long work in the background: the same work (an equal fingerprint) a stop or a failure left continues, with
-        the finished parts it kept (continued, kept)."""
-        _, record = self._launch(kind, work, False, given, fingerprint, task_id)
+        the finished parts it kept (continued, kept); line: which earlier work of the kind it can stand for
+        (storage.tasks.begin)."""
+        _, record = self._launch(kind, work, False, given, fingerprint, task_id, line=line)
         return {'ok': True, 'task': record['id'], 'continued': record['continued'], 'kept': record['kept']}
 
     async def perform(self, kind: str, work: Work) -> Any:

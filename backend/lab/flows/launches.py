@@ -65,7 +65,27 @@ def prepare(given: dict) -> dict:
 
 
 def fingerprint(given: dict) -> str:
-    return same_work(launch=given, **conversations.same_material(given['count']))
+    """The same launch: its choices on the same material by the rules in force. Rules taken or changed since it stopped
+    make it other work, so it is not continued by them (api/work.py, continuable)."""
+    return same_work(launch=given, rules=in_force(given['check']), **conversations.same_material(given['count']))
+
+
+def in_force(check: str) -> dict:
+    """The rules a check goes by now: the version selected, and for tone of voice the revision of its criteria."""
+    selected = storage.judges.active(check)
+    draft = (storage.documents.load(tone.DRAFT) or {}) if check == checks.TONE else {}
+    return {'judge': selected['id'] if selected else None, 'criteria': draft.get('revision')}
+
+
+def current(record: dict) -> bool:
+    """Whether a launch was made of what is in force now: its dataset is the one the checks go by and its rules are the
+    ones selected. Only such a launch is started again or continued: another one would silently put its old rules and
+    dataset back in force (prepare)."""
+    given = record.get('inputs') or {}
+    selected = storage.judges.active(given.get('check') or record.get('check'))
+    chosen = given.get('judgeId') or None
+    same_rules = chosen == (selected['id'] if selected else None)
+    return storage.dialogues.meta().get('datasetId') == given.get('datasetId') and same_rules
 
 
 async def run(given: dict, progress: Progress) -> dict:
@@ -144,6 +164,7 @@ def view(record: dict) -> dict:
     (the Lab closed under it and the next start gave the task up, or the task's end could not be written: jobs) never
     says it runs: it ended as its task did, failed or stopped, with the task's reason, and so did each mode it had not
     finished."""
+    record = storage.launches.light(record)
     if record['status'] != 'running':
         return record
     task = storage.tasks.get(record['id'])
@@ -169,6 +190,13 @@ async def _check(given: dict, progress: Progress) -> dict:
     else:
         await accuracy.check(given['count'], progress, replan=bool(given.get('replan')))
     result = storage.documents.load(checks.result(check))
+    made = storage.tasks.current_id()
+    if made and (result or {}).get('checkId') != made:
+        # Published by this launch before a stop or a restart (conversations.published_once), while the result in
+        # force is another one since: the check stands in the history and is not made again.
+        saved = storage.history.get(check, made)
+        if saved:
+            return {'checkId': made, 'summary': saved['check']['summary']}
     if not result:
         raise ValueError('Проверка не сформировала результат.')
     # Unlike a standalone check, cancellation here must stop the remaining launch modes too.

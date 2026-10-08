@@ -16,6 +16,15 @@ router = APIRouter()
 WRITES = {'tone-check': checks.TONE, 'discover': checks.CODE}
 
 
+def writes(job: dict) -> str | None:
+    """The check whose result the running job writes: a check of its own, or a launch that checks the recorded
+    answers (its mode «Ответы в датасете»)."""
+    if job.get('kind') == 'launch':
+        given = job.get('input') or {}
+        return given.get('check') if 'dataset' in (given.get('modes') or ()) else None
+    return WRITES.get(job.get('kind'))
+
+
 class ReviewCommand(BaseModel):
     """A person's decision on what the judge found: on one criterion of a logged or simulated conversation, or (older
     requests without ruleId) on a simulated conversation as a whole. On a logged one, check names the check whose
@@ -66,7 +75,7 @@ def _on_log(jobs: Jobs, payload: ReviewCommand) -> dict:
         raise HTTPException(409, str(error)) from error
     except LookupError as error:
         raise HTTPException(404, str(error)) from error
-    if jobs.state['running'] and WRITES.get(jobs.state['kind']) == check:
+    if jobs.state['running'] and writes(jobs.state) == check:
         raise HTTPException(
             409, f'Ответ не сохранится, пока идёт проверка «{checks.NAMES[check]}». Ответьте после неё.'
         )

@@ -1,15 +1,18 @@
 """The prototype's library operations preserve data, rule versions and the old working workflows."""
 
+import asyncio
 import json
+import os
 import unittest
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import support
 
 from lab import storage
 from lab.domain import checks, export
 from lab.domain import judges as rules
-from lab.flows import agent_context, connection, datasets, judges
+from lab.flows import agent_context, connection, datasets, inputs, judges, tone
 
 
 def dialogue(key='d1', question='Как вернуть терминал?'):
@@ -94,6 +97,14 @@ class DatasetTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([(item['total'], item['skipped']) for item in listed], [(1, 1)])
         storage.dialogues.replace([dialogue('d2')], 'legacy.jsonl')
         self.assertIsNone(storage.datasets.get(storage.datasets.adopt_current())['skipped'])
+
+    async def test_a_conversation_longer_than_a_csv_cell_takes_by_default_is_read(self):
+        """A CSV export with a reply longer than the 131 072 characters csv takes by default is read, not a 500."""
+        long = 'Длинный ответ агента без переносов строк. ' * 4000
+        body = f'id,role,content\nd1,user,Вопрос\nd1,assistant,"{long}"\n'
+        response = await self.client.post('/api/logs?name=long.csv', content=body.encode())
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(storage.dialogues.read(['d1'])[0]['messages'][1]['content'], long.strip())
 
     async def test_uploaded_formats_are_real_and_invalid_import_keeps_the_active_dataset(self):
         for name, body in (
@@ -223,6 +234,100 @@ class JudgeLibraryTests(unittest.IsolatedAsyncioTestCase):
         v3 = storage.judges.capture_tone(draft | {'criteria': [criterion('Коротко.')]}, other)
         self.assertNotEqual(v3['setId'], v1['setId'])
         self.assertEqual(v3['version'], 1)
+
+    async def test_an_updated_document_given_on_the_screens_is_the_next_version_of_its_set(self):
+        """The rules replaced on «Критерии» with the bank's document updated under the same name: the new text deselects
+        the set in force first (inputs.replace_sources), and the criteria collected from it are still the next version
+        of that set, not a second set of the same name."""
+        first = rules.source('tone', 'tov.docx', 'Всегда обращайтесь к клиенту на вы.')
+        storage.documents.save('sources.json', [first])
+        made = storage.now()
+        draft = {'revision': 'r1', 'createdAt': made, 'sourceSha256': first['sha256'], 'criteria': [criterion()]}
+        v1 = storage.judges.capture_tone(draft, first)
+        updated = rules.source('tone', 'tov.docx', 'Всегда обращайтесь к клиенту на вы. Не используйте жаргон.')
+        inputs.replace_sources([updated])
+        self.assertIsNone(storage.judges.active('tone'))
+        v2 = storage.judges.capture_tone(draft | {'criteria': [criterion('Не используйте жаргон.')]}, updated)
+        self.assertEqual((v2['setId'], v2['version'], v2['name']), (v1['setId'], 2, 'tov.docx'))
+        self.assertEqual([v['setId'] for v in storage.judges.listed('tone')], [v1['setId']] * 2)
+
+    async def test_rules_saved_as_they_were_stay_the_rules_the_checks_went_by(self):
+        """«Изменить критерии» sends every criterion back with the fields its form fills in (empty clarifications). A
+        set renamed keeps its criteria the very same records, its revision and its result, so the next check compares
+        with the ones before and the answers carry over; one criterion edited changes that one alone."""
+        policy = 'Всегда обращайтесь к клиенту на вы. Не используйте жаргон в ответах.'
+        two = [criterion(), criterion('Не используйте жаргон в ответах.') | {'id': 'r2', 'name': 'Жаргон'}]
+        judges.save('tone', 'Правила', policy, two, None, None)
+        before = storage.documents.load(tone.DRAFT)
+        storage.documents.save(checks.result('tone'), {'checkId': 'c1'})
+        current = (await self.client.get('/api/judges/tone')).json()['versions'][0]
+        body = {'policy': policy, 'setId': current['setId']}
+        renamed = await self.client.post(
+            '/api/judges/tone',
+            json=body | {'name': 'Правила банка', 'criteria': current['criteria'], 'baseId': current['id']},
+        )
+        self.assertEqual(renamed.status_code, 200, renamed.text)
+        after = storage.documents.load(tone.DRAFT)
+        self.assertEqual((after['criteria'], after['revision']), (before['criteria'], before['revision']))
+        self.assertEqual(storage.documents.load(checks.result('tone')), {'checkId': 'c1'})
+        edited = [current['criteria'][0] | {'text': 'Обращайтесь к клиенту только на вы.'}, current['criteria'][1]]
+        response = await self.client.post(
+            '/api/judges/tone',
+            json=body | {'name': 'Правила банка', 'criteria': edited, 'baseId': renamed.json()['id']},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        final = storage.documents.load(tone.DRAFT)['criteria']
+        self.assertEqual(final[1], before['criteria'][1])
+        self.assertNotEqual(final[0], before['criteria'][0])
+        self.assertIsNone(storage.documents.load(checks.result('tone')))
+
+    async def test_the_library_asked_twice_at_once_adopts_the_criteria_once(self):
+        """The screens ask for the library twice at once on their first look after the update: the criteria made
+        before the library become one version, not one per request."""
+        policy = rules.source('tone', 'Правила общения банка', 'Всегда обращайтесь к клиенту на вы.')
+        storage.documents.save('sources.json', [policy])
+        storage.documents.save(
+            'tone-of-voice-criteria.json',
+            {'revision': 'r1', 'createdAt': storage.now(), 'sourceSha256': policy['sha256'], 'criteria': [criterion()]},
+        )
+        await asyncio.gather(*(asyncio.to_thread(judges.library, 'tone') for _ in range(6)))
+        self.assertEqual(len(storage.judges.listed('tone')), 1)
+
+    async def test_long_conditions_and_exceptions_of_a_rubric_can_be_saved(self):
+        """A bank's rubric puts a whole section of principles into what is acceptable: «Изменить критерии» saves it."""
+        principles = 'Не считай нарушением юридически значимые формулировки. ' * 120
+        body = {
+            'name': 'Рубрика банка',
+            'policy': 'Всегда обращайтесь к клиенту на вы. ' + principles,
+            'criteria': [criterion() | {'acceptable': principles, 'condition': principles}],
+        }
+        self.assertGreater(len(principles), 5000)
+        response = await self.client.post('/api/judges/tone', json=body)
+        self.assertEqual(response.status_code, 200, response.text)
+
+    async def test_the_knowledge_base_is_asked_over_https_but_on_this_computer(self):
+        """The key and the certificate of the knowledge base go with every request to it."""
+        with self.assertRaisesRegex(ValueError, 'https://'):
+            agent_context.save({'idpUrl': 'http://idp.bank.test/search'})
+        for url in ('https://idp.bank.test/search', 'http://localhost:8080/search', 'http://127.0.0.1:9000'):
+            with self.subTest(url=url):
+                self.assertEqual(agent_context.save({'idpUrl': url})['idpUrl'], url)
+
+    async def test_git_never_asks_in_the_labs_terminal(self):
+        """A clone or a fetch asks for no password or passphrase and takes no unknown host: ssh in batch mode."""
+        process = AsyncMock()
+        process.communicate.return_value = (b'', b'')
+        process.returncode = 0
+        with (
+            patch.dict(os.environ),
+            patch('asyncio.create_subprocess_exec', AsyncMock(return_value=process)) as started,
+        ):
+            os.environ.pop('GIT_SSH_COMMAND', None)  # a person's own ssh command for git would be kept
+            await agent_context._git(['git', 'fetch'])
+        options = started.await_args.kwargs
+        self.assertEqual(options['stdin'], asyncio.subprocess.DEVNULL)
+        self.assertEqual(options['env']['GIT_TERMINAL_PROMPT'], '0')
+        self.assertIn('BatchMode=yes', options['env']['GIT_SSH_COMMAND'])
 
     async def test_failed_rule_save_is_atomic_and_export_is_the_selected_version(self):
         policy = 'Всегда обращайтесь к клиенту на вы.'

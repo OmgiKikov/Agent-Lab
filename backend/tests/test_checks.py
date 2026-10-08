@@ -10,6 +10,7 @@ from test_tone import POLICY
 from test_tone_followthrough import judged
 
 from lab import models, storage
+from lab.domain import judges as rules
 from lab.flows import accuracy, answers, conversations, inputs, tone
 from lab.flows import checks as results_of
 from lab.flows import scenarios as cards
@@ -102,13 +103,16 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
         await self.check_tone(status='PASS')
         state = (await self.client.get('/api/state')).json()
         self.assertNotIn('discover', state)
-        # Each result in brief; its verdicts come from GET /api/checks/{check}.
+        # Each result in brief, its rules by set and version; its verdicts come from GET /api/checks/{check}.
         for check, name in (('tone', TONE_RESULT), ('code', CODE_RESULT)):
             stored, brief = storage.documents.load(name), state['checks'][check]
             self.assertEqual(
                 {key: value for key, value in brief.items() if key not in ('summary', 'conversations', 'answers')},
-                {key: value for key, value in stored.items() if key not in ('summary', 'results')},
+                {key: value for key, value in stored.items() if key not in ('summary', 'results')}
+                | ({'judge': rules.brief(stored['judge'])} if stored.get('judge') else {}),
             )
+            if stored.get('judge'):
+                self.assertNotIn('policy', brief['judge'])
             self.assertEqual(brief['conversations'], len(stored['results']))
             self.assertEqual(brief['answers']['measured'], stored['summary']['measured'])  # nobody answered yet
             self.assertNotIn('patterns', brief['summary'])
@@ -225,6 +229,15 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
             (self.review(CODE_RESULT, 't1r1'), self.review(TONE_RESULT, 'pronouns')), ('agree', 'disagree')
         )
         self.assertEqual((await self.answer(None, 't1r1', check='accuracy')).status_code, 422)
+        # A launch that checks the recorded answers writes its check's result as a check of its own does; one that only
+        # asks the agent again writes none.
+        with support.running('launch', {'check': 'tone', 'modes': ['dataset', 'questions']}):
+            code = await self.answer(code_result['finishedAt'], 't1r1', decision='disagree')
+            own = await self.answer(tone_result['finishedAt'], 'pronouns', decision='agree')
+        self.assertEqual((code.status_code, own.status_code), (200, 409))
+        with support.running('launch', {'check': 'tone', 'modes': ['questions']}):
+            own = await self.answer(tone_result['finishedAt'], 'pronouns', decision='agree')
+        self.assertEqual(own.status_code, 200)
 
     async def build_cards(self, body=None):
         async def build(topic, dialogue, origin, general, reproduces=()):
