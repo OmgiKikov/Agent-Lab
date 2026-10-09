@@ -181,7 +181,7 @@ export const fullDay = (iso: string) =>
 /** «проверено 3 октября 2026 г.», or both days when the checks were made on different ones. */
 export const daysText = (days: string[]) => `проверено ${days.join(" и ")}`;
 
-/** «Датасет «Первая выгрузка» · проверено 3 октября 2026 г.»: what the summary rests on, under its title. */
+/** «Датасет «Чаты за сентябрь» · проверено 3 октября 2026 г.»: what the summary rests on, under its title. */
 export const basisText = (s: Summary) =>
   [s.dataset ? `Датасет ${inQuotes(s.dataset)}` : null, daysText(s.days)].filter(Boolean).join(" · ");
 
