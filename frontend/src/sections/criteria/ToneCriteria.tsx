@@ -444,7 +444,7 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
       <>
         <p className="text-small font-medium text-fg-3">Правила общения</p>
         <h2 className="mt-1 text-page font-semibold text-fg">
-          Собираем критерии из «{policy?.origin || "правил общения"}»
+          Собираем критерии из {policy?.origin ? `правил «${policy.origin}»` : "правил общения"}
         </h2>
         <p className="mt-2 max-w-[62ch] text-read text-fg-3">
           Модель читает правила и собирает из них критерии. Это займёт пару минут: они появятся здесь.
@@ -500,7 +500,7 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
         <p className="text-small font-medium text-fg-3">Правила общения</p>
         <h2 className="mt-1 text-page font-semibold text-fg">
           {count(cards.length, "критерий", "критерия", "критериев")}
-          {source ? ` из «${source}»` : ""}
+          {source ? ` из правил «${source}»` : ""}
         </h2>
         <p className="mt-2 max-w-[66ch] text-read text-fg-3">
           {first
@@ -693,7 +693,7 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
         }
       >
         <p className="text-read text-fg-2">
-          Итог Tone of voice по прежним правилам уйдёт в историю. Следующая проверка пойдёт по «{asking?.name}», версия{" "}
+          Итог по прежним правилам уйдёт в историю. Следующая проверка пойдёт по правилам «{asking?.name}», версия{" "}
           {asking?.version}.
         </p>
       </Modal>

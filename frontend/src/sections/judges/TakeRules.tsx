@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, Copy, Loader2 } from "lucide-react";
 import { rulesLine, takeRules, useRulesSources, type RulesSource } from "../../lab/agents";
+import { SIMULATIONS } from "../../app/product";
 import { count } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { TONE_ID, toneResult } from "../../lab/tone";
@@ -19,14 +20,14 @@ import { useToast } from "../../ui/toast";
 function whatGoes(state: LabState, from: RulesSource) {
   const own = state.sources.find((s) => s.id === TONE_ID);
   const same = !!own?.sha256 && own.sha256 === from.rules.sha256;
-  const deck = state.cards?.check === "tone" && !!state.cards.cards.length;
+  const deck = SIMULATIONS && state.cards?.check === "tone" && !!state.cards.cards.length;
   return [
     `Правила и критерии заменятся правилами агента «${from.name}».`,
     toneResult(state) &&
       (same
-        ? "Итог tone of voice останется, но по предыдущей версии критериев."
-        : "Итог tone of voice уйдёт в «Историю»."),
-    deck && "Сценарии, собранные из tone of voice, сбросятся.",
+        ? "Правила те же, поэтому итог останется до следующей проверки."
+        : "Итог по прежним правилам уйдёт в историю."),
+    deck && "Сценарии из итога сбросятся.",
   ]
     .filter(Boolean)
     .join(" ");
