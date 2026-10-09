@@ -117,7 +117,7 @@ export function summarySentence(data: Problems, source: Source): string {
  * The client data an export hides in the conversations, named once where a text that leaves the product quotes them,
  * after a word of the sentence: a line of a report never begins with «#» (a heading in Markdown, a list in a tracker).
  */
-export const MASKS = "# и * — скрытые данные клиента";
+const MASKS = "# и * — скрытые данные клиента";
 
 /** Whether the quoted words of conversations carry the client data an export hides (MASKS). */
 export const masked = (texts: string[]) => texts.some((t) => /[#*]/.test(t));
@@ -129,7 +129,7 @@ export const masksLine = (examples: number) => `В ${examples === 1 ? "прим�
 export const quotedOf = (e: Example) => [askedOf(e), e.agentQuote];
 
 /** How many characters of someone's words a text quotes at most: a customer's message, the agent's words, a reason. */
-const WORDS = 300;
+const QUOTED = 300;
 
 /** A criterion of a text that leaves the product, named as on every screen (lab/criteria); a text numbers nothing. */
 export const criterionOf = (r: RuleEntry): Criterion => ({ r, n: 0, name: criterionName(r), every: false, topics: [] });
@@ -163,7 +163,7 @@ export function commonLine(c: Criterion, side: Source = "log"): string | null {
 }
 
 /** «Ошибка в 57 из 89 проверенных разговоров, где критерий применим (64%).»: a criterion's count, as on «Итог». */
-export function errorsLine(s: Pick<Side, "failed" | "passed">): string {
+function errorsLine(s: Pick<Side, "failed" | "passed">): string {
   const applies = s.failed + s.passed;
   return `Ошибка в\u00a0${s.failed}\u00a0из\u00a0${count(applies, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")}, где критерий применим (${pct(s.failed, applies)}%).`;
 }
@@ -173,7 +173,7 @@ export function errorsLine(s: Pick<Side, "failed" | "passed">): string {
  * conversations a criterion's count leaves out, only the parts there are; null without any. Those it does not apply to
  * are the service's count; a service without it leaves the check's checked conversations (`assessed`) beyond the rest.
  */
-export function restLine(s: Side, assessed?: number): string | null {
+function restLine(s: Side, assessed?: number): string | null {
   const notApplicable =
     s.notApplicable ?? (assessed === undefined ? 0 : Math.max(0, assessed - s.failed - s.passed - s.unknown));
   const conversations = (n: number) => count(n, "разговоре", "разговорах", "разговорах");
@@ -197,7 +197,7 @@ const wordsOf = (text: string) =>
  * What the agent must do as points (lab/quote, ruleLines), the same words «Критерии» shows, and where it is written.
  * The rules' own words follow only where they say more than the criterion: a rubric's criterion is its passage itself.
  */
-export function dutyLines(r: RuleEntry): string[] {
+function dutyLines(r: RuleEntry): string[] {
   const duty = ruleLines(r.rule.text);
   if (!duty.length) return [];
   const where = [SOURCE_LABEL[r.rule.kind]?.toLowerCase(), r.rule.origin && inQuotes(r.rule.origin)].filter(Boolean);
@@ -221,13 +221,13 @@ export const errorsOf = (s: Side) => s.examples.filter((e) => e.status === "FAIL
  * One error as a text tells it: the customer's words the reply answered (lab/problems, askedOf), the agent's words
  * the model pointed at, why it is an error and who checked it. Long words are cut at a word (lab/quote, clip).
  */
-export function exampleLines(e: Example): string[] {
+function exampleLines(e: Example): string[] {
   const asked = askedOf(e).trim();
   return [
     "Пример:",
-    ...(asked ? [`Клиент: ${clip(asked, WORDS)}`] : []),
-    ...(e.agentQuote.trim() ? [`Агент: ${inQuotes(clip(e.agentQuote, WORDS))}`] : []),
-    ...(e.reason.trim() ? [`Почему это ошибка: ${sentence(capital(clip(e.reason, WORDS)))}`] : []),
+    ...(asked ? [`Клиент: ${clip(asked, QUOTED)}`] : []),
+    ...(e.agentQuote.trim() ? [`Агент: ${inQuotes(clip(e.agentQuote, QUOTED))}`] : []),
+    ...(e.reason.trim() ? [`Почему это ошибка: ${sentence(capital(clip(e.reason, QUOTED)))}`] : []),
     `${capital(reliabilityWord(e, "people"))}.`,
   ];
 }

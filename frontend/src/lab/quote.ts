@@ -107,7 +107,7 @@ export function clip(text: string, limit: number): string {
 }
 
 /** Someone's words inside a quote: their own «ёлочки» and "straight quotes" become „лапки“. */
-export const nested = (text: string) =>
+const nested = (text: string) =>
   text
     .replace(/«/g, "„")
     .replace(/»/g, "“")
