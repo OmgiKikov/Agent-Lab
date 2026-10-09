@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import { useAgents } from "../lab/agents";
 import { LabProvider } from "../lab/LabProvider";
 import { AGENT } from "./agent";
+import { Skeleton } from "../ui/EmptyState";
 import { ToastProvider } from "../ui/toast";
 import { BottomNav } from "./BottomNav";
 import { CommandPalette } from "./CommandPalette";
@@ -51,7 +52,10 @@ function Frame() {
           className="relative flex min-w-0 flex-1 flex-col overflow-hidden pb-[calc(56px+env(safe-area-inset-bottom))] focus:outline-none lg:pb-0 print:block print:overflow-visible print:!pb-0"
         >
           <div className="min-h-0 flex-1 overflow-auto print:overflow-visible">
-            <Outlet />
+            {/* A page comes the first time it is opened (router): the frame stays, and its place waits for it. */}
+            <Suspense fallback={<Skeleton className="mx-4 mt-8 h-60 max-w-[920px] lg:mx-10" />}>
+              <Outlet />
+            </Suspense>
           </div>
           {/* A narrow window has no side navigation: the running task sits above the bottom navigation. */}
           <div className="lg:hidden print:hidden">
