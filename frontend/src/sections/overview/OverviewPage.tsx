@@ -1,7 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { ArrowRight, Database, Presentation } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { Header } from "../../app/Header";
 import { SectionJob } from "../../app/SectionJob";
 import {
@@ -30,7 +29,7 @@ import { codeSources } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
 import { runAnswersPending } from "../../lab/verdicts";
 import { CheckResult } from "../../product/CheckResult";
-import { AccuracyPicture, PAPER, SimulationPicture, TonePicture } from "../../product/Pictures";
+import { FirstStepsLine } from "../../product/FirstSteps";
 import { UploadButton } from "../../product/UploadLogs";
 import { buttonClass } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
@@ -39,6 +38,7 @@ import { CheckReport } from "../checks/CheckReport";
 import { CompareDelta, PreviousCheck } from "../checks/Compare";
 import { shownName } from "../data/DatasetInfo";
 import { checked, queueOf } from "../problems/model";
+import { NoModels } from "../settings/NoModels";
 import { useSimRuns } from "../simulations/stage";
 import { ACCURACY, SIMULATIONS } from "../../app/product";
 
@@ -80,12 +80,13 @@ function useCheckModel(check: Check, state: LabState | null): Model | null {
   const compare = comparisonOf(answer, result);
   if (result) {
     const { failed, measured, unmeasured } = result.summary;
+    // The problem «Итог» puts first, by the name of its criterion (lab/criteria, criterionName).
     const top = queueOf(list, "log")[0];
     return {
       line: { failed, measured, unmeasured, finishedAt: result.finishedAt },
       delta: <CompareDelta check={check} compare={compare} serious={seriousOf(data)?.marked} brief />,
       problem: top && {
-        title: top.r.title,
+        title: top.name,
         failed: top.r.log.failed,
         of: checked(top.r.log),
         to: problemLink(top.r.id, check),
@@ -125,7 +126,7 @@ function useCheckModel(check: Check, state: LabState | null): Model | null {
   const rules = judges.data?.versions.find((v) => v.id === judges.data?.selectedId);
   const code = check === "code" && codeSources(state).length > 0;
   const ready = rules?.criteria.length
-    ? `${count(rules.criteria.length, "критерий", "критерия", "критериев")} из «${rules.name}» готовы.`
+    ? `${count(rules.criteria.length, "критерий", "критерия", "критериев")} из правил «${rules.name}» готовы.`
     : code
       ? "Критерии соберутся из кода агента при первой проверке."
       : null;
@@ -211,7 +212,7 @@ function useSimModel(state: LabState | null): Model | null {
     sub: later ? `Прогон ${BY_CRITERIA[run.check]}` : `Последний прогон ${BY_CRITERIA[run.check]}`,
     note: later && <p className="mt-1 text-small text-fg-3">{later}</p>,
     problem: top && {
-      title: top.r.title,
+      title: top.name,
       failed: top.r.sim.failed,
       of: checked(top.r.sim),
       to: problemLink(top.r.id, "sim", run.id),
@@ -225,22 +226,11 @@ function useSimModel(state: LabState | null): Model | null {
 }
 
 /**
- * A check, or the simulation, as a card — the same as on «Датасеты»: a picture of what it looks at, its name leading
- * to its section, its result in a line, the main problem, and its one next step. `main` — the screen's black button.
+ * A check, or the simulation, as a card — the same as on «Датасеты»: its name leading to its section, its result in a
+ * line, the main problem named by its criterion whole (two lines when it needs them), and its one next step. `main` —
+ * the screen's black button.
  */
-function Card({
-  name,
-  to,
-  picture,
-  model,
-  main,
-}: {
-  name: string;
-  to: string;
-  picture: ReactNode;
-  model: Model;
-  main: boolean;
-}) {
+function Card({ name, to, model, main }: { name: string; to: string; model: Model; main: boolean }) {
   const title = (
     <Link
       to={to}
@@ -251,50 +241,45 @@ function Card({
     </Link>
   );
   return (
-    <section aria-label={name} className="flex gap-4 rounded-block border border-line bg-canvas p-3 pr-4">
-      <div aria-hidden className={cn("hidden w-28 shrink-0 sm:block", PAPER)}>
-        {picture}
-      </div>
-      <div className="flex min-w-0 flex-1 flex-col py-1">
-        {model.line ? (
-          <CheckResult name={title} line={model.line} />
-        ) : (
-          <>
-            <p className="text-small">{title}</p>
-            <p className="mt-1 text-body text-fg-3">{model.status}</p>
-          </>
-        )}
-        {model.sub && <p className="mt-1.5 text-small text-fg-3">{model.sub}</p>}
-        {model.delta && (
-          <div className="mt-2.5 flex flex-wrap items-center gap-2 text-small text-fg-3 empty:hidden">
-            {model.delta}
-          </div>
-        )}
-        {model.note}
-        {model.problem && (
-          <Link
-            to={model.problem.to}
-            className="group mt-3 block rounded-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
-          >
-            <span className="block text-small text-fg-3">Главная проблема</span>
-            <span className="mt-0.5 flex items-baseline gap-2">
-              <span className="min-w-0 truncate text-body text-fg group-hover:underline">{model.problem.title}</span>
-              <span className="shrink-0 text-small tabular-nums text-fg-3">
-                {model.problem.failed}
-                {" из "}
-                {model.problem.of}
-              </span>
+    <section aria-label={name} className="flex min-w-0 flex-col rounded-block border border-line bg-canvas p-4">
+      {model.line ? (
+        <CheckResult name={title} line={model.line} />
+      ) : (
+        <>
+          <p className="text-small">{title}</p>
+          <p className="mt-1 text-body text-fg-3">{model.status}</p>
+        </>
+      )}
+      {model.sub && <p className="mt-1.5 text-small text-fg-3">{model.sub}</p>}
+      {model.delta && (
+        <div className="mt-2.5 flex flex-wrap items-center gap-2 text-small text-fg-3 empty:hidden">{model.delta}</div>
+      )}
+      {model.note}
+      {model.problem && (
+        <Link
+          to={model.problem.to}
+          className="group mt-3 block rounded-control focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
+        >
+          <span className="block text-small text-fg-3">Главная проблема</span>
+          <span className="mt-0.5 flex items-baseline gap-2">
+            <span className="line-clamp-2 min-w-0 flex-1 text-body text-fg group-hover:underline">
+              {model.problem.title}
             </span>
+            <span className="shrink-0 text-small tabular-nums text-fg-3">
+              {model.problem.failed}
+              {"\u00a0из\u00a0"}
+              {model.problem.of}
+            </span>
+          </span>
+        </Link>
+      )}
+      {model.step && (
+        <div className="mt-auto pt-4">
+          <Link to={model.step.to} className={buttonClass({ variant: main ? "primary" : "outline", size: "sm" })}>
+            {model.step.label}
           </Link>
-        )}
-        {model.step && (
-          <div className="mt-auto pt-4">
-            <Link to={model.step.to} className={buttonClass({ variant: main ? "primary" : "outline", size: "sm" })}>
-              {model.step.label}
-            </Link>
-          </div>
-        )}
-      </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -308,7 +293,7 @@ function DatasetLine() {
   if (!d)
     return (
       <div className="mt-6 flex flex-wrap items-center gap-x-4 gap-y-3">
-        <p className="text-read text-fg-2">Разговоров ещё нет: проверки читают датасет разговоров.</p>
+        <p className="text-read text-fg-2">Разговоров ещё нет: проверка идёт по датасету разговоров.</p>
         <UploadButton label="Загрузить датасет" />
       </div>
     );
@@ -327,10 +312,12 @@ function DatasetLine() {
 }
 
 /**
- * «Обзор»: how the agent is doing and what to do next, at a glance. The export the checks read; then each check and the
- * simulation as a card — its own number, never added up with the others, how it stands to its own previous check, its
- * main problem and its one next step. The screen's one black button is the first step not done, in the order of the
- * work: the export, tone of voice, Точность, the simulation. A new agent sees the same cards with what each lacks.
+ * «Обзор»: how the agent keeps the rules of communication and what to do next, at a glance. The export the checks read;
+ * then each check and the simulation as a card — its own number, never added up with the others, how it stands to its
+ * own previous check, its main problem and its one next step. The screen's one black button is the first step not
+ * done, in the order of the work: the export, tone of voice, Точность, the simulation. A new agent («С чего начать»)
+ * sees the three first steps in a line and the same cards with what each lacks; without models, one line says that no
+ * check will start.
  */
 export function OverviewPage() {
   const { state, offline } = useLabState();
@@ -374,6 +361,7 @@ export function OverviewPage() {
             className={buttonClass({ variant: "outline" })}
           >
             <Presentation aria-hidden className="size-3.5" />
+            <span className="sm:hidden">Сводка</span>
             <span className="hidden sm:inline">Сводка для руководителя</span>
           </Link>
         )
@@ -413,47 +401,42 @@ export function OverviewPage() {
       <div className="min-h-0 flex-1 overflow-auto">
         <div className="max-w-[1180px] px-4 pb-24 pt-8 lg:px-10 lg:pt-12">
           <p className="text-read text-fg-3">{[agent?.name, agent?.description].filter(Boolean).join(" · ")}</p>
-          <h2 className="mt-1 text-page font-semibold text-fg">{fresh ? "С чего начать" : "Как работает агент"}</h2>
+          <h2 className="mt-1 text-page font-semibold text-fg">
+            {fresh
+              ? "С чего начать"
+              : ACCURACY || SIMULATIONS
+                ? "Как работает агент"
+                : "Как агент соблюдает правила общения"}
+          </h2>
           <p className="mt-3 max-w-[66ch] text-lead text-fg-2">
             {fresh
               ? "Загрузите разговоры и задайте правила: покажем, где агент ошибается и что исправить."
               : ACCURACY || SIMULATIONS
                 ? "У каждой проверки и у симуляций свой счёт: их числа не складываются, и каждая сравнивает себя только со своей прошлой."
-                : "Как агент соблюдает правила общения банка в настоящих разговорах и что исправить первым."}
+                : "По настоящим разговорам с клиентами: где агент ошибается чаще всего и что исправить первым."}
           </p>
+          {/* Never checked: the way to the first check in the same three steps as «Критерии» and «Новая проверка». */}
+          {fresh && (
+            <FirstStepsLine
+              criteria={state.toneOfVoice?.criteria.length ?? 0}
+              collecting={state.job.running && state.job.kind === "tone-criteria"}
+              className="mt-5"
+            />
+          )}
+          <NoModels className="mt-5" />
           <DatasetLine />
           <section aria-labelledby="overview-checks" className="mt-12">
             <Label id="overview-checks">Проверки</Label>
             <div className="mt-4 grid gap-3 md:grid-cols-2">
-              <Card
-                name={CHECK_NAME.tone}
-                to={stageRoot("tone")}
-                picture={<TonePicture />}
-                model={tone}
-                main={first === tone}
-              />
-              {ACCURACY && (
-                <Card
-                  name={CHECK_NAME.code}
-                  to={stageRoot("code")}
-                  picture={<AccuracyPicture />}
-                  model={code}
-                  main={first === code}
-                />
-              )}
+              <Card name={CHECK_NAME.tone} to={stageRoot("tone")} model={tone} main={first === tone} />
+              {ACCURACY && <Card name={CHECK_NAME.code} to={stageRoot("code")} model={code} main={first === code} />}
             </div>
           </section>
           {SIMULATIONS && (
             <section aria-labelledby="overview-trials" className="mt-10">
               <Label id="overview-trials">Испытания</Label>
               <div className="mt-4 grid gap-3 md:grid-cols-2">
-                <Card
-                  name="Симуляции"
-                  to={SECTIONS.simulations}
-                  picture={<SimulationPicture />}
-                  model={sim}
-                  main={first === sim}
-                />
+                <Card name="Симуляции" to={SECTIONS.simulations} model={sim} main={first === sim} />
               </div>
             </section>
           )}
