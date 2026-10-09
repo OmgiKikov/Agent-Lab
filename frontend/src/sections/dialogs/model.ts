@@ -6,7 +6,10 @@ export type Verdict = "all" | "fail" | "serious" | "pass" | "none" | "disputed";
 export const toVerdict = (raw: string | null): Verdict =>
   raw === "fail" || raw === "serious" || raw === "pass" || raw === "none" || raw === "disputed" ? raw : "all";
 
-/** «Нарушен важный критерий» is offered once a criterion is important (lab/severity); the rest always. */
+/**
+ * «Нарушен важный критерий» is offered once a criterion is important (lab/severity), «Модели разошлись» once a second
+ * model checked some of the conversations (Rows); the rest always.
+ */
 export const VERDICTS: { value: Verdict; label: string }[] = [
   { value: "all", label: "Все разговоры" },
   { value: "fail", label: "С ошибкой" },

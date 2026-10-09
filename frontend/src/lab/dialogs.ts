@@ -39,6 +39,24 @@ export type DialogRow = {
 export const logKey = (dialogueId: string) => `log~${dialogueId}`;
 export const simKey = (runId: string, index: number) => `sim~${runId}~${index}`;
 
+/**
+ * The topic of a conversation worth naming: tone of voice has one topic, called as the check itself, which says
+ * nothing inside its own section.
+ */
+export const topicOf = (row: Pick<DialogRow, "check" | "topic">) =>
+  row.check && row.topic === CHECK_NAME[row.check] ? "" : row.topic;
+
+/** What the marks an export puts in place of the client's data stand for, said once where conversations are read. */
+export const MASKS = "# и * — скрытые данные клиента";
+
+/** A mark standing alone: «#» in anyone's words; «*» only in the client's, since in the agent's it begins a list item. */
+const MASK = /(^|[\s(«])#(?=$|[\s.,:;!?%)»])/m;
+const CLIENT_MASK = /(^|[\s(«])[#*](?=$|[\s.,:;!?%)»])/m;
+
+/** Whether a conversation shows the export's masks, so the line about them is said where it is read. */
+export const masked = (turns: { role: string; text: string }[]) =>
+  turns.some((t) => (t.role === "customer" ? CLIENT_MASK : MASK).test(t.text));
+
 /** The dialogue an example of a problem or a rule comes from: in its check's section, or in its run. */
 export const dialogOf = (e: Pick<Example, "source" | "dialogueId" | "runId" | "index" | "check">) =>
   e.source === "log"
@@ -156,18 +174,27 @@ export function exampleFor(row: DialogRow, rule: Rule): Example {
   };
 }
 
-/** The dialogue as text for a ticket: who said what, then the judge's verdicts. */
-export function transcript(row: DialogRow, turns: { role: string; text: string }[]): string {
-  const where = row.source === "log" ? ["Диалоги", row.check && CHECK_NAME[row.check]] : ["Симуляция"];
+/**
+ * The conversation as text for a ticket: who said what, what the masks stand for when it has them, then the judge's
+ * verdicts, each criterion by its name (`nameOf`), as the screen names it.
+ */
+export function transcript(
+  row: DialogRow,
+  turns: { role: string; text: string }[],
+  nameOf: (rule: Rule) => string,
+): string {
+  const where =
+    row.source === "log" ? ["Разговоры", row.check && CHECK_NAME[row.check], topicOf(row)] : ["Симуляция", row.topic];
   // The customer's and the agent's words stay words (inlineText, quoteText): never a heading, a list or a link.
-  const lines = [`# ${inlineText(row.title)}`, "", inlineText([...where, row.topic].filter(Boolean).join(" · ")), ""];
+  const lines = [`# ${inlineText(row.title)}`, "", inlineText(where.filter(Boolean).join(" · ")), ""];
+  if (masked(turns)) lines.push(inlineText(MASKS), "");
   for (const t of turns) lines.push(`${t.role === "customer" ? "Клиент" : "Агент"}:`, quoteText(t.text), "");
   const judged = row.rules.filter((r) => r.status === "FAIL" || r.status === "PASS");
   if (judged.length) {
     lines.push("## Проверка по критериям", "");
     for (const r of judged)
       lines.push(
-        `- ${r.status === "FAIL" ? "✗ ошибка" : "✓ без ошибки"}: ${inlineText(r.rule)}`,
+        `- ${r.status === "FAIL" ? "✗ ошибка" : "✓ без ошибки"}: ${inlineText(nameOf(r))}`,
         `  ${inlineText(r.reason)}${r.agentQuote ? ` «${inlineText(r.agentQuote)}»` : ""}`,
       );
   }

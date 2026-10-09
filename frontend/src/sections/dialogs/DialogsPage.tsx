@@ -56,8 +56,8 @@ export function DialogsPage({ stage }: { stage: Stage }) {
   const named = useMemo(() => (stage === "sim" ? frozenNames(criteria, all) : undefined), [stage, criteria, all]);
   const rule = ruleId ? problems?.rules.find((r) => r.id === ruleId) : undefined;
   const own = rule ? criteria.find((c) => c.r.id === rule.id) : undefined;
-  // A criterion with errors here opens the conversations with its errors; one without them (the line «Ошибок в этой
-  // выгрузке не нашли» leads here) opens the conversations it was checked in, with or without an error.
+  // A criterion with errors here opens the conversations with its errors; one without them (the line «Ошибок в этом
+  // датасете не нашли» leads here) opens the conversations it was checked in, with or without an error.
   const broken = !!rule && rule[side(stage)].failed > 0;
   // Over the list: the criterion it is filtered by, or that the one the address names is not in this result or run.
   const chip = rule
@@ -97,7 +97,6 @@ export function DialogsPage({ stage }: { stage: Stage }) {
     set((n) => {
       if (k) n.set("d", k);
       else n.delete("d");
-      n.delete("dt");
     }, wide);
   const step = (d: 1 | -1) => {
     if (!rows.length || waitRun || waitRecord) return;

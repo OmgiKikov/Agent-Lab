@@ -1,10 +1,9 @@
 import { KnowledgeEvidence } from "../../product/KnowledgeEvidence";
 import { useState, type ReactNode } from "react";
-import { useSearchParams } from "react-router-dom";
-import { ArrowLeft, ChevronDown, Download } from "lucide-react";
+import { ArrowLeft, ChevronDown, Code2, Download } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Criterion } from "../../lab/criteria";
-import { exampleFor, transcript, twoChecks, type DialogRow } from "../../lab/dialogs";
+import { exampleFor, topicOf, transcript, twoChecks, type DialogRow } from "../../lab/dialogs";
 import { longDay, plural } from "../../lab/format";
 import { personaName } from "../../lab/look";
 import { download, secondLine } from "../../lab/problemReport";
@@ -15,20 +14,19 @@ import { Conversation, type Mark } from "../../product/Conversation";
 import { Facts } from "../../product/Facts";
 import { MarkNo } from "../../product/MarkNo";
 import { ReviewButtons } from "../../product/ReviewButtons";
+import { visible } from "../../product/text";
 import { useLabState } from "../../lab/LabProvider";
 import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
-import { Segmented } from "../../ui/Segmented";
 import { VerdictWord } from "./Rows";
 import { criteriaByRule, type Named } from "./model";
 
-type Tab = "talk" | "details";
 const ORDER: Record<string, number> = { FAIL: 0, PASS: 1, UNKNOWN: 2, NOT_APPLICABLE: 3 };
 const WORD: Record<string, [string, string]> = {
   FAIL: ["ошибка", "text-bad"],
   PASS: ["без ошибки", "text-ok"],
   UNKNOWN: ["не удалось проверить", "text-fg-3"],
-  NOT_APPLICABLE: ["не относится к разговору", "text-fg-3"],
+  NOT_APPLICABLE: ["не применим", "text-fg-3"],
 };
 
 /** The verdicts of one kind folded under a line, «Без ошибки 11», opened on a press. */
@@ -73,16 +71,16 @@ function Fold({
  */
 function Verdicts({
   rules,
-  find,
-  named,
+  criterionOf,
+  nameOf,
   shownOf,
   lit,
   onLit,
   onDecide,
 }: {
   rules: Rule[];
-  find: (ruleId: string) => Criterion | undefined;
-  named?: Named;
+  criterionOf: (r: Rule) => { n: number } | undefined;
+  nameOf: (r: Rule) => string;
   shownOf: (r: Rule) => Example;
   lit: number | null;
   onLit: (n: number | null) => void;
@@ -95,8 +93,7 @@ function Verdicts({
   const [keptOpen, setKeptOpen] = useState(!errors.length);
   const [restOpen, setRestOpen] = useState(false);
   const row = (r: Rule) => {
-    // A criterion that applied nowhere in a run is not among the problems: its frozen name and number stand in.
-    const c = find(r.ruleId) ?? named?.get(r.ruleId);
+    const c = criterionOf(r);
     const shown = shownOf(r);
     // With one model there is no second check to speak of: the line is empty, and so is the place.
     const second = r.status === "FAIL" ? secondLine(shown, null) : "";
@@ -121,8 +118,7 @@ function Verdicts({
         </span>
         <div className="min-w-0">
           <p className="text-body text-fg">
-            <span className="font-medium">{c?.name ?? r.title ?? r.rule}</span>{" "}
-            <span className={cn("text-small", tone)}>· {word}</span>
+            <span className="font-medium">{nameOf(r)}</span> <span className={cn("text-small", tone)}>· {word}</span>
           </p>
           <p className="mt-1 text-read text-fg-2">{r.reason}</p>
           {second && <p className="mt-1 text-small text-fg-3">{second}</p>}
@@ -164,7 +160,10 @@ function Verdicts({
   );
 }
 
-/** One conversation: what was said with the quotes the checks cited, numbered by their criteria; every criterion's result and the record. */
+/**
+ * One conversation: what was said with the quotes the checks cited, numbered by their criteria; every criterion's
+ * result; and, folded at the end for the agent's developers, the record the check keeps.
+ */
 export function Dialog({
   row,
   criteria,
@@ -183,24 +182,11 @@ export function Dialog({
    */
   saved?: { turns: Turn[] | null };
 }) {
-  const [params, setParams] = useSearchParams();
   const { state } = useLabState();
   const review = useReview();
   const [lit, setLit] = useState<number | null>(null);
   // Answers shown at once, by result and verdict: a new check or a changed verdict does not inherit them.
   const [decided, setDecided] = useState<Record<string, Decision | null>>({});
-  const raw = params.get("dt");
-  const tab: Tab = raw === "details" ? raw : "talk";
-  const setTab = (t: Tab) =>
-    setParams(
-      (prev) => {
-        const n = new URLSearchParams(prev);
-        if (t === "talk") n.delete("dt");
-        else n.set("dt", t);
-        return n;
-      },
-      { replace: true },
-    );
   const probe = {
     source: row.source === "sim" ? "sim" : "log",
     check: row.check,
@@ -213,6 +199,9 @@ export function Dialog({
   const { loading, error } = fetched;
   const byRule = criteriaByRule(criteria);
   const find = (ruleId: string) => byRule(row.source, ruleId);
+  // A criterion that applied nowhere in a run is not among the problems: its frozen name and number stand in.
+  const criterionOf = (r: Rule) => find(r.ruleId) ?? named?.get(r.ruleId);
+  const nameOf = (r: Rule) => criterionOf(r)?.name ?? r.title ?? r.rule;
   const rules = [...row.rules].sort((a, b) => (ORDER[a.status] ?? 9) - (ORDER[b.status] ?? 9));
   const marks: Mark[] = rules
     .filter((r) => r.status === "FAIL" && r.agentQuote)
@@ -227,7 +216,7 @@ export function Dialog({
   const run = row.runId ? state?.runs.find((r) => r.id === row.runId) : undefined;
   const where =
     row.source === "log"
-      ? ["Диалоги", row.topic].filter(Boolean).join(" · ")
+      ? ["Разговоры", topicOf(row)].filter(Boolean).join(" · ")
       : [
           "Симуляция",
           run ? longDay(run.startedAt) : "",
@@ -263,6 +252,11 @@ export function Dialog({
     );
   };
   const reviewed = rules.filter((r) => r.status === "FAIL" && shownOf(r).review).length;
+  // The codes of the buttons the agent sent, by its reply: an export keeps only them, and only its developers read them.
+  const codes = (turns ?? []).flatMap((t, i) => {
+    const sent = t.role === "agent" ? visible(t.text).buttons.filter(Boolean) : [];
+    return sent.length ? [{ реплика: i + 1, коды: sent }] : [];
+  });
   return (
     <article className="min-h-0 overflow-auto" aria-label={row.title}>
       {onBack && (
@@ -287,7 +281,9 @@ export function Dialog({
             <Button
               icon={Download}
               disabled={!turns}
-              onClick={() => turns && download(`dialog-${row.dialogueId ?? row.index}.md`, transcript(row, turns))}
+              onClick={() =>
+                turns && download(`dialog-${row.dialogueId ?? row.index}.md`, transcript(row, turns, nameOf))
+              }
             >
               Скачать
             </Button>
@@ -338,50 +334,42 @@ export function Dialog({
             ]}
           />
         </div>
-        <div className="mt-6 flex flex-wrap items-center gap-3">
-          <Segmented<Tab>
-            size="sm"
-            label="Что показать"
-            value={tab}
-            onChange={setTab}
-            options={[
-              { value: "talk", label: "Разговор" },
-              { value: "details", label: "Детали" },
-            ]}
-          />
+        <div className="mt-6 rounded-sheet bg-inset px-4 pb-5 pt-4 sm:px-6">
+          {loading ? (
+            <Skeleton className="h-40" />
+          ) : error ? (
+            <>
+              <p className="text-small text-bad">Не удалось загрузить разговор.</p>
+              <p className="mt-1 text-small text-fg-3">{error instanceof Error ? error.message : String(error)}</p>
+            </>
+          ) : turns ? (
+            <Conversation turns={turns} marks={marks} lit={lit} onLit={(on, n) => setLit(on && n ? n : null)} />
+          ) : saved ? (
+            <p className="text-body text-fg-3">Текст разговора не сохранился.</p>
+          ) : (
+            <p className="text-read text-fg">{row.title}</p>
+          )}
         </div>
-        {tab === "talk" && (
-          <>
-            <div className="mt-4 rounded-sheet bg-inset px-4 pb-5 pt-4 sm:px-6">
-              {loading ? (
-                <Skeleton className="h-40" />
-              ) : error ? (
-                <>
-                  <p className="text-small text-bad">Не удалось загрузить разговор.</p>
-                  <p className="mt-1 text-small text-fg-3">{error instanceof Error ? error.message : String(error)}</p>
-                </>
-              ) : turns ? (
-                <Conversation turns={turns} marks={marks} lit={lit} onLit={(on, n) => setLit(on && n ? n : null)} />
-              ) : saved ? (
-                <p className="text-body text-fg-3">Текст разговора не сохранился.</p>
-              ) : (
-                <p className="text-read text-fg">{row.title}</p>
-              )}
-            </div>
-            {rules.length > 0 && (
-              <Verdicts
-                rules={rules}
-                find={find}
-                named={named}
-                shownOf={shownOf}
-                lit={lit}
-                onLit={setLit}
-                onDecide={saved ? undefined : decide}
-              />
-            )}
-          </>
+        {rules.length > 0 && (
+          <Verdicts
+            rules={rules}
+            criterionOf={criterionOf}
+            nameOf={nameOf}
+            shownOf={shownOf}
+            lit={lit}
+            onLit={setLit}
+            onDecide={saved ? undefined : decide}
+          />
         )}
-        {tab === "details" && (
+        {/* The record as the check keeps it, with the codes of the buttons: for the agent's developers, folded. */}
+        <details className="group mt-10 border-t border-line pt-6">
+          <summary className="flex cursor-pointer list-none items-center gap-2 rounded-sm text-read font-medium text-fg-2 transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60 [&::-webkit-details-marker]:hidden">
+            <Code2 aria-hidden className="size-4 text-fg-3" />
+            Для разработчика
+            <span aria-hidden className="text-fg-3 transition-transform group-open:rotate-90">
+              ›
+            </span>
+          </summary>
           <pre className="mt-4 overflow-auto rounded-block bg-inset p-4 font-mono text-meta text-fg-3">
             {JSON.stringify(
               {
@@ -392,12 +380,13 @@ export function Dialog({
                 итог: row.status,
                 вторая_проверка: row.second,
                 критерии: row.rules,
+                кнопки: codes.length ? codes : undefined,
               },
               null,
               2,
             )}
           </pre>
-        )}
+        </details>
       </div>
     </article>
   );
