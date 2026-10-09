@@ -78,9 +78,7 @@ export function Segmented<T extends string>({
             )}
           >
             {o.label}
-            {o.count !== undefined && (
-              <span className={cn("text-meta tabular-nums", on ? "text-fg-3" : "text-fg-4")}>{o.count}</span>
-            )}
+            {o.count !== undefined && <span className="text-meta tabular-nums text-fg-3">{o.count}</span>}
           </button>
         );
       })}

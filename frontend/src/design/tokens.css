@@ -20,11 +20,11 @@
   --fg-3: 110 110 115;
   --fg-4: 134 134 139;
 
-  /* Meaning only, always with a word. All read on white. */
+  /* Meaning only, always with a word. All read on white; the blue of links on the grey surfaces too (4.5:1 and more). */
   --bad: 215 0 21;
   --ok: 36 138 61;
   --warn: 178 80 0;
-  --run: 0 113 227;
+  --run: 0 102 204;
 
   /* The main action: one per screen, a black pill. */
   --primary: 29 29 31;
