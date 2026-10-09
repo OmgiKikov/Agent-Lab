@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ChevronDown, CircleCheck, Download, FileText, Pencil, Plus, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { launchLink, SECTIONS } from "../../app/links";
@@ -15,7 +15,7 @@ import { useFirstRun } from "../../lab/compare";
 import { TONE_ID, toneJudgedByOther, toneResult } from "../../lab/tone";
 import { MarkNo } from "../../product/MarkNo";
 import { Step, Steps, STEP_NEXT } from "../../product/Checklist";
-import { SeriousTag, SeverityHint, SeverityNote, SeveritySwitch } from "../../product/Severity";
+import { IMPORTANT, SeriousTag, SeverityHint, SeverityNote, SeveritySwitch } from "../../product/Severity";
 import { Button } from "../../ui/Button";
 import { EmptyState, Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
@@ -43,7 +43,7 @@ type Card = {
 
 /**
  * One criterion as a card, as the criteria were shown before the first check: its number, name and words; after a
- * check, what it found — «45 из 100 с ошибкой» with a thin bar, «серьёзная» when it is. Pressed, it opens. Under it,
+ * check, what it found — «45 из 100 с ошибкой» with a thin bar, «важный» when it is. Pressed, it opens. Under it,
  * after a check, whether its errors are serious: switched on the card itself, with whose decision it is and the model's
  * reason, so the proposals of the automatic check are read and decided on one screen.
  */
@@ -189,7 +189,7 @@ function FirstSteps({ criteria, collecting, line }: { criteria: number; collecti
         title={
           total ? `${name ? `«${name}»: ` : ""}${count(total, "разговор", "разговора", "разговоров")}` : "Разговоры"
         }
-        text={total ? undefined : "Загрузите выгрузку разговоров агента: по ним соберутся критерии и пойдёт проверка."}
+        text={total ? undefined : "Загрузите датасет разговоров агента: по нему пойдёт проверка."}
         action={
           !total && (
             <Link to={SECTIONS.data} className={STEP_NEXT}>
@@ -329,18 +329,35 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
   // never for these, and stay on «Итог» and in the history.
   const other = hasResult && toneJudgedByOther(state);
   const collecting = !!state?.job.running && state.job.kind === "tone-criteria";
-  // The criteria come where the rules were given, low on the page: the page goes back to its top, to them and to the
-  // next step. Its own scroll moves, not the frame around it (as checks/RunPage does).
+  // The first criteria collected lead on to the first check: «Новая проверка» takes them, and opens them from there.
+  // They come a moment after the task ends (the rules' versions are fetched again), so the page waits for them.
+  // Collected again later, the criteria come where the rules were given, low on the page: the page goes back to its
+  // top, to them. Its own scroll moves, not the frame around it (as checks/RunPage does). A collection is told by its
+  // task, finished since the page opened: a quick one may end between two looks at the service.
+  const navigate = useNavigate();
+  const [collected, setCollected] = useState(false);
   const top = useRef<HTMLDivElement>(null);
-  const wasCollecting = useRef(collecting);
+  const loaded = !!state;
+  const finished =
+    state?.job.kind === "tone-criteria" && !state.job.running ? `${state.job.id}|${state.job.startedAt}` : "";
+  const seen = useRef<string | null>(null);
   useEffect(() => {
-    if (wasCollecting.current && !collecting) {
-      let box = top.current?.parentElement ?? null;
-      while (box && !/(auto|scroll)/.test(getComputedStyle(box).overflowY)) box = box.parentElement;
-      box?.scrollTo({ top: 0 });
+    if (!loaded) return;
+    // What the page found when it opened is no collection of its own.
+    if (seen.current !== null && finished && finished !== seen.current) {
+      if (first) setCollected(true);
+      else {
+        let box = top.current?.parentElement ?? null;
+        while (box && !/(auto|scroll)/.test(getComputedStyle(box).overflowY)) box = box.parentElement;
+        box?.scrollTo({ top: 0 });
+      }
     }
-    wasCollecting.current = collecting;
-  }, [collecting]);
+    seen.current = finished;
+  }, [loaded, finished, first]);
+  const jobError = state?.job.error;
+  useEffect(() => {
+    if (collected && set.length && !jobError) navigate(launchLink("tone"));
+  }, [collected, set.length, jobError, navigate]);
   const failed =
     !state?.job.running && state?.job.kind === "tone-criteria" && state.job.error && state.job.error !== "Остановлено"
       ? state.job.error
@@ -587,6 +604,7 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
               </p>
             )
           )}
+          {!other && <p>{IMPORTANT}</p>}
           {!other && <SeverityHint check="tone" data={data} />}
         </div>
       )}

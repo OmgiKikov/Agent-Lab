@@ -194,7 +194,7 @@ export function wasOf(compare: Compare | null): ((id: string) => ReactNode) | un
  * denominator says what it rests on, and the service's verdict always stands beside it — «мало разговоров, чтобы
  * судить», beyond chance or within it — so that «0 из 12» is never read as a conclusion about the agent. Each opens
  * the conversations of this result it was checked in. The serious criteria (`serious`, by their keys) come first and
- * say «серьёзная», as the problems above.
+ * say «важный», as the problems above.
  */
 export function NoLongerFound({
   check,
@@ -213,7 +213,7 @@ export function NoLongerFound({
   return (
     <section aria-labelledby={`gone-${check}`} className="mt-12">
       <h3 id={`gone-${check}`} className="text-lead font-semibold text-fg">
-        {repeat ? "При повторной оценке ошибок не нашли" : "Ошибок в этой выгрузке не нашли"}
+        {repeat ? "При повторной оценке ошибок не нашли" : "Ошибок в этом датасете не нашли"}
       </h3>
       <p className="mt-1 text-body text-fg-3">
         {repeat ? "В прошлой оценке тех же разговоров ошибки по ним были." : "В прошлой проверке ошибки по ним были."}

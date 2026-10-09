@@ -8,7 +8,7 @@ import type { Check, Source } from "../../lab/types";
 
 /**
  * All criteria as one list, broken first: the number, the duty, where it is written, and how it went in logs and
- * simulation; whether two checks agreed only when a second model checked them (hasSecond); and «Серьёзная» — switched
+ * simulation; whether two checks agreed only when a second model checked them (hasSecond); and «Важный» — switched
  * in the row itself, with whose mark it is under it: «модель» (its reason in the tooltip), «вы» or «не решено». A
  * decision never moves the row: the list stays where the person decides.
  */
@@ -70,9 +70,9 @@ export function CriteriaTable({
             )}
             <th
               className="w-px whitespace-nowrap py-2.5 pr-5 text-right font-medium"
-              title="Серьёзные ошибки идут первыми и считаются отдельно. Под переключателем написано, кто решил."
+              title="Важные критерии идут первыми и считаются отдельно. Под переключателем написано, кто решил."
             >
-              Серьёзная
+              Важный
             </th>
           </tr>
         </thead>

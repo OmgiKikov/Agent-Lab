@@ -173,11 +173,11 @@ export function compareParts(compare: Compare): { value: string; note: string } 
 }
 
 /**
- * «С серьёзными ошибками: 6 из 53 (11%) → сейчас 0 из 71 (0%). Мало разговоров, чтобы судить.» — the line under the
+ * «С нарушением важных критериев: 6 из 53 (11%) → сейчас 0 из 71 (0%). Мало разговоров, чтобы судить.» — the line under the
  * comparison of the whole check, in its words: the same counts and arrow, the same verdict (few, beyond chance or
  * within it), and for a re-evaluation of the same conversations — that the difference is the evaluation's. Both sides
  * by the serious criteria as they are now (`marked` of them in the current result). The share rests on the
- * conversations where a serious criterion could be checked: with few of them a second line says how few, «Серьёзные
+ * conversations where a serious criterion could be checked: with few of them a second line says how few, «Важные
  * критерии удалось проверить в 16 разговорах в прошлый раз и в 4 сейчас.» Null when nothing is marked or the checks
  * are not compared.
  */
@@ -189,15 +189,15 @@ export function seriousCompareText(compare: Compare, marked = 2): string | null 
   const both = !!before.measured && !!now.measured;
   const counts = both ? shiftText(before, now, same, "сейчас") : `${sideText(before)}, сейчас ${sideText(now)}`;
   if (compare.kind === "same-data")
-    return `С серьёзными ошибками: ${counts}.${both && !same ? " Разница показывает только разброс оценки." : ""}`;
-  const criteria = marked === 1 ? "Серьёзный критерий" : "Серьёзные критерии";
+    return `С нарушением важных критериев: ${counts}.${both && !same ? " Разница показывает только разброс оценки." : ""}`;
+  const criteria = marked === 1 ? "Важный критерий" : "Важные критерии";
   const said =
     verdict === "few" && checked && Math.min(checked.before, checked.now) < FEW
       ? ` ${VERDICT.few}\n${criteria} удалось проверить в\u00a0${checked.before}\u00a0${plural(checked.before, "разговоре", "разговорах", "разговорах")} в прошлый раз и в\u00a0${checked.now} сейчас.`
       : verdict && verdict !== "same"
         ? ` ${VERDICT[verdict]}`
         : "";
-  return `С серьёзными ошибками: ${counts}.${said}`;
+  return `С нарушением важных критериев: ${counts}.${said}`;
 }
 
 /** «было 6 из 52», or «было 0 из 52»: what a criterion with errors now had in the previous check, beside its count. */

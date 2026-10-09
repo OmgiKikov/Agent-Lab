@@ -52,7 +52,7 @@ function ExampleRow({ e }: { e: Example }) {
 }
 
 /**
- * The chosen criterion: what it requires, «Серьёзная ошибка» with whose decision it is (the automatic check's proposal
+ * The chosen criterion: what it requires, «Важный критерий» with whose decision it is (the automatic check's proposal
  * with its reason and «Подтвердить», or the person's), how it went in this stage, and the conversations behind each
  * count.
  */

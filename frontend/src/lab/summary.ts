@@ -2,7 +2,7 @@ import { agentKey } from "../app/agent";
 import { answersText, yesNoText, type Answers } from "./answers";
 import { CHECK_NAME, CHECKS } from "./checks";
 import { count, pct, plural } from "./format";
-import { cleanText } from "./history";
+import { cleanPct } from "./history";
 import { headingOf, inlineText, quoteText } from "./problemReport";
 import { splitQuote } from "./quote";
 import type { Severity } from "./problems";
@@ -39,14 +39,14 @@ export type SummaryCheck = {
    */
   serious: Serious | null;
   /**
-   * What it says about serious errors, line by line, for people (lab/severity, severityLines): «С серьёзными ошибками
-   * — 6 из 53 (11%)», «Серьёзные критерии — 2 из 8. Их отметила автоматическая проверка, люди проверили 0 из 8.», where
-   * they could be checked; or «Серьёзных критериев нет. Так решили люди.» None while nothing is marked.
+   * What it says about serious errors, line by line, for people (lab/severity, severityLines): «С нарушением важных критериев
+   * — 6 из 53 (11%)», «Важные критерии — 2 из 8. Их отметила автоматическая проверка, люди проверили 0 из 8.», where
+   * they could be checked; or «Важных критериев нет. Так решили люди.» None while nothing is marked.
    */
   severity: SeverityLine[];
   /** «Прошлая проверка, 3 октября: 22 из 53 (42%) → сейчас 4 из 12 (33%). …» — the line of «Итог», or none. */
   compare: string | null;
-  /** «С серьёзными ошибками: 3 из 53 (6%) → сейчас 6 из 53 (11%). …», or none. */
+  /** «С нарушением важных критериев: 3 из 53 (6%) → сейчас 6 из 53 (11%). …», or none. */
   seriousCompare: string | null;
   /** Every problem of the check, the serious ones first, then the most frequent; the ticked ones go into the PDF and the letter. */
   problems: SummaryProblem[];
@@ -55,7 +55,7 @@ export type SummaryCheck = {
 export type SummaryProblem = {
   id: string;
   chosen: boolean;
-  /** Its criterion is serious: «серьёзная» beside its name, with whose decision it is (`severity`). */
+  /** Its criterion is serious: «важный» beside its name, with whose decision it is (`severity`). */
   serious: boolean;
   severity: Severity;
   title: string;
@@ -84,13 +84,13 @@ export const SUMMARY_WHAT: Record<Check, string> = {
 const ofConversations = (n: number) => count(n, "разговора", "разговоров", "разговоров");
 
 /**
- * «С ошибкой агента — 22 из 53 проверенных разговоров · 58% без найденных ошибок». With none checked there is no count
- * to give, as on «Итог»
+ * «Без найденных ошибок — 58% проверенных разговоров · с ошибкой агента 22 из 53»: the measurement first, as «Итог»
+ * says it. With none checked there is no count to give, as on «Итог»
  * (product/StageResult): «Ни один из 60 разговоров не удалось проверить», never «0 из 0».
  */
 export const headline = (c: SummaryCheck) =>
   c.measured
-    ? `С ошибкой агента — ${c.failed}\u00a0из\u00a0${count(c.measured, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} · ${cleanText(c)}`
+    ? `Без найденных ошибок — ${cleanPct(c)}% проверенных разговоров · с ошибкой агента ${c.failed}\u00a0из\u00a0${c.measured}`
     : `Ни один ${c.unmeasured ? `из\u00a0${count(c.unmeasured, "разговора", "разговоров", "разговоров")}` : "разговор"} не удалось проверить`;
 
 /**
@@ -141,7 +141,7 @@ export const HOW_BOTH = "Tone of voice и Точность проверяют р
 
 /** Said once a criterion is serious: that its count is part of the number, and who decides it. */
 export const HOW_SERIOUS =
-  "«С серьёзными ошибками» — проверенные разговоры, где есть ошибка хотя бы по одному серьёзному критерию. Они уже входят в число разговоров с ошибкой агента. Какие критерии серьёзные, предлагает автоматическая проверка, а люди подтверждают или меняют.";
+  "«С нарушением важных критериев» — проверенные разговоры, где нарушен хотя бы один важный критерий: одно такое нарушение может навредить клиенту или банку. Они уже входят в число разговоров с ошибкой агента. Какие критерии важные, предлагает автоматическая проверка, а люди подтверждают или меняют.";
 
 /**
  * The footnote of a summary: with the line about two checks when it has both, and the line about serious errors once
@@ -187,7 +187,7 @@ export function summaryMarkdown(s: Summary): string {
   const lines = [
     `# Сводка для руководителя: ${inlineText(s.agent)}`,
     "",
-    stop([s.file ? `Выгрузка «${inlineText(s.file)}»` : null, daysText(s.days)].filter(Boolean).join(" · ")),
+    stop([s.file ? `Датасет «${inlineText(s.file)}»` : null, daysText(s.days)].filter(Boolean).join(" · ")),
   ];
   for (const c of s.checks) {
     lines.push(

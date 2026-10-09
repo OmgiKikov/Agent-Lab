@@ -126,10 +126,10 @@ const where = (p: RuleEntry, source?: Source) =>
  * comes from a model that read the customers' words: inlineText).
  */
 export const headingOf = (p: Pick<RuleEntry, "title" | "serious">) =>
-  p.serious ? `${inlineText(p.title)} · серьёзная` : inlineText(p.title);
+  p.serious ? `${inlineText(p.title)} · важный критерий` : inlineText(p.title);
 
 /**
- * One problem for a ticket or a message: what (with «серьёзная» when its errors are serious), how often, where the
+ * One problem for a ticket or a message: what (with «важный» when its errors are serious), how often, where the
  * agent's code says it, one proof and the link. With a source, only that source is told; with an agent, a ticket of
  * its own names it first (agentLine), a problem inside a report does not repeat the report's.
  */
@@ -184,7 +184,7 @@ export function problemsReport(
     ...(agent ? [agentLine(agent)] : []),
     `Проверка «${CHECK_NAME[data.check]}».`,
   ];
-  if (source === "log" && data.log && filename) lines.push(`Выгрузка «${inlineText(filename)}».`);
+  if (source === "log" && data.log && filename) lines.push(`Датасет «${inlineText(filename)}».`);
   if (source === "log" && data.log) {
     lines.push(
       `Диалоги ${day(data.log.finishedAt)}: проверено ${data.log.assessed}\u00a0из\u00a0${count(data.log.sampled, "разговора", "разговоров", "разговоров")}.`,

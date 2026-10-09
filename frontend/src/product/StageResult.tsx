@@ -6,10 +6,10 @@ import { pct, plural } from "../lab/format";
 import { useArrived, useCountUp } from "./motion";
 
 /**
- * The result of a stage as the one number it exists to say: in how many of the checked conversations the agent erred,
- * the share without an error found beside it (it grows as the agent gets better: «5% без найденных ошибок», never 95%
- * of errors), and the split of all of them — with an error, without one found, not checked (never in the count).
- * The error count is the screen's one red.
+ * The result of a stage as the one number it exists to say, the value of the measurement: the share of the checked
+ * conversations without an error found (it grows as the agent gets better), with the count of those the agent erred in
+ * under it — the errors to fix, the screen's one red — and the split of all of them: with an error, without one found,
+ * not checked (never in the count).
  */
 export function StageResult({
   failed,
@@ -18,6 +18,7 @@ export function StageResult({
   size = "hero",
   link,
   all,
+  important,
   delta,
   className,
 }: {
@@ -29,19 +30,21 @@ export function StageResult({
   link?: (part: "bad" | "ok" | "none") => string;
   /** Where all of them open, at the end of the parts. */
   all?: string;
+  /** The conversations with an important criterion broken, on a line of their own: never added to the number. */
+  important?: ReactNode;
   /** How the number stands to the previous check, on a line under it (checks/Compare, CompareDelta). */
   delta?: ReactNode;
   className?: string;
 }) {
   const clean = Math.max(0, checked - failed);
+  const share = pct(clean, checked);
   const parts = [
     { key: "bad", n: failed, word: "с ошибкой агента", dot: "bg-bad", bar: "bg-bad" },
     { key: "ok", n: clean, word: "без найденных ошибок", dot: "bg-ok", bar: "bg-ok" },
     { key: "none", n: unchecked, word: "не удалось проверить", dot: "border border-fg-4", bar: "hatch" },
   ].filter((p) => p.n > 0);
   const total = parts.reduce((s, p) => s + p.n, 0) || 1;
-  const shownFailed = useCountUp(failed);
-  const shownChecked = useCountUp(checked);
+  const shownShare = useCountUp(share);
   const arrived = useArrived();
   return (
     <div className={className}>
@@ -54,26 +57,17 @@ export function StageResult({
             )}
           >
             {/* The counting digits are for the eye; a screen reader hears the final number once. */}
-            <span className="sr-only">
-              {failed} из {checked}
-            </span>
-            <span aria-hidden className={failed ? "text-bad" : "text-fg"}>
-              {shownFailed}
-            </span>
-            <span aria-hidden className="font-normal text-fg-3">
-              {" "}
-              из{" "}
-            </span>
-            <span aria-hidden>{shownChecked}</span>
+            <span className="sr-only">{share}%</span>
+            <span aria-hidden>{shownShare}%</span>
           </p>
           <p className={cn("text-fg-2", size === "hero" ? "mt-3 text-lead" : "mt-2 text-read")}>
-            {plural(checked, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} с ошибкой
-            агента
-            <span className="text-fg-3">
-              {"\u00a0· "}
-              <span className="whitespace-nowrap">{pct(clean, checked)}% без найденных ошибок</span>
-            </span>
+            разговоров без найденных ошибок
           </p>
+          <p className={cn("text-fg-3", size === "hero" ? "mt-1 text-read" : "mt-0.5 text-body")}>
+            <span className={cn("font-semibold tabular-nums", failed ? "text-bad" : "text-fg-2")}>{failed}</span>
+            {`\u00a0из\u00a0${checked} ${plural(checked, "проверенного", "проверенных", "проверенных")} — с ошибкой агента`}
+          </p>
+          {important}
           {delta && (
             <div className="mt-3 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-small text-fg-3">{delta}</div>
           )}

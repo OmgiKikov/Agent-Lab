@@ -72,8 +72,8 @@ export const shareText = ({ failed, measured }: Counts) =>
 export const cleanPct = ({ failed, measured }: Counts) => pct(Math.max(0, measured - failed), measured);
 /** «5% без найденных ошибок» */
 export const cleanText = (c: Counts) => `${cleanPct(c)}%\u00a0без найденных ошибок`;
-/** «22 из 53 с ошибкой · 58% без найденных ошибок»: a check's result in a line. */
-export const resultText = (c: Counts) => `${c.failed}\u00a0из\u00a0${c.measured} с ошибкой · ${cleanText(c)}`;
+/** «58% без найденных ошибок · 22 из 53 с ошибкой»: a check's result in a line, its measurement first, as «Итог». */
+export const resultText = (c: Counts) => `${cleanText(c)} · ${c.failed}\u00a0из\u00a0${c.measured} с ошибкой`;
 /** The counts of the conversations without an error found, as the comparisons of whole results tell them. */
 export const cleanOf = (c: Counts): Counts => ({ ...c, failed: Math.max(0, c.measured - c.failed) });
 

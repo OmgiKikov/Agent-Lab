@@ -51,7 +51,7 @@ import { SIMULATIONS } from "../../app/product";
 
 /**
  * One problem, read top to bottom: what the agent does wrong, what it must do instead, whether its errors are serious
- * («Серьёзная ошибка» on its criterion, with whose decision it is: the automatic check's proposal with its reason and
+ * («Важный критерий» on its criterion, with whose decision it is: the automatic check's proposal with its reason and
  * «Подтвердить», or the person's), how often (one line of numbers), then the case itself — the conversation as the
  * customer saw it — and the person's answer. One stage at a time: in a check, its conversations; in the simulation,
  * one run of that check's scenarios. The other is one link away. Another problem of the same stage opens afresh: the

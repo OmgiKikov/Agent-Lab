@@ -162,7 +162,7 @@ export function Rows({
     ].sort((a, b) => a - b);
   const count = (v: Verdict) => all.filter((r) => matchesRow(r, v, "", null, serious)).length;
   const current = VERDICTS.find((v) => v.value === verdict)!;
-  // «С серьёзной ошибкой» once a criterion is serious, or when an address asks for it.
+  // «Нарушен важный критерий» once a criterion is important, or when an address asks for it.
   const marked = criteria.some((c) => c.r.serious);
   const verdicts = VERDICTS.filter((v) => v.value !== "serious" || marked || verdict === "serious");
   return (

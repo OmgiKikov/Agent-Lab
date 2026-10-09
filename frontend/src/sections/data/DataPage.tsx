@@ -1,28 +1,26 @@
 import { useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { Archive, ArrowRight, ChevronDown, Database, Info, RotateCcw } from "lucide-react";
+import { Archive, ArrowLeft, ArrowRight, Database, Info, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Header } from "../../app/Header";
 import { SectionJob } from "../../app/SectionJob";
 import { SECTIONS, datasetLink, launchLink, stageRoot } from "../../app/links";
 import { useWide } from "../../app/useWide";
-import { CHECKS, resultOf } from "../../lab/checks";
+import { CHECK_NAME, CHECKS, resultOf } from "../../lab/checks";
 import { useDatasets, type Dataset } from "../../lab/datasets";
-import { count, longDay, plural } from "../../lab/format";
+import { count, longDay, pct, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
-import { useLaunches } from "../../lab/launches";
+import { useLaunches, type Launch } from "../../lab/launches";
+import type { LabState } from "../../lab/types";
 import { ExportFormat } from "../../product/ExportFormat";
 import { UploadButton } from "../../product/UploadLogs";
 import { Button, buttonClass } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
-import { Menu, type MenuItem } from "../../ui/Menu";
 import { useToast } from "../../ui/toast";
 import { ArchiveSheet, DatasetInfo, shownName } from "./DatasetInfo";
-import { CheckCards } from "./CheckCards";
+import { CheckCards, type Found } from "./CheckCards";
 import { ExportConversations } from "./ExportConversations";
-
-const conversations = (n: number) => count(n, "разговор", "разговора", "разговоров");
 
 /** A number the line is about: dark and even, the rest of the line quiet. */
 const Num = ({ n, bad }: { n: number; bad?: boolean }) => (
@@ -50,39 +48,93 @@ function Facts({ facts }: { facts: Fact[] }) {
 }
 
 /**
- * «Датасеты»: one export at a time, the newest by default — what it holds and what the checks found in it, in one line,
- * then its conversations as the file has them. The others open from its name; looking at one changes nothing. Its
- * details and the archive are behind ⓘ. Without one, where to get it.
+ * What the checks found in a dataset: the agent's current results for the one the checks read now (the Обзор shows
+ * them), the newest finished launch on it for another.
+ */
+function foundIn(d: Dataset, state: LabState, inWork: boolean, launches: Launch[] = []): Found[] {
+  return CHECKS.flatMap((check) => {
+    if (inWork) {
+      const result = resultOf(state, check);
+      if (!result) return [];
+      const { failed, measured, unmeasured } = result.summary;
+      return [{ check, line: { failed, measured, unmeasured, finishedAt: result.finishedAt }, to: stageRoot(check) }];
+    }
+    const launch = launches.find((l) => l.check === check && l.dataset?.datasetId === d.id && l.modes.dataset?.metric);
+    const metric = launch?.modes.dataset?.metric;
+    if (!launch || !metric) return [];
+    const { failed, measured, unmeasured } = metric;
+    return [
+      { check, line: { failed, measured, unmeasured, finishedAt: launch.startedAt }, to: launchLink(check, launch.id) },
+    ];
+  });
+}
+
+/**
+ * One dataset in the list: its name, how many conversations and when it came, and what each check found in it as
+ * «Итог» says it — or that the one the checks read now is not checked yet. The row opens its page.
+ */
+function Row({ d, found, unchecked }: { d: Dataset; found: Found[]; unchecked: boolean }) {
+  return (
+    <Link
+      to={datasetLink(d.id)}
+      className="group -mx-3 flex items-start gap-4 rounded-block px-3 py-4 transition-colors hover:bg-hover focus-visible:bg-hover focus-visible:outline-none"
+    >
+      <span className="min-w-0 flex-1">
+        <span className="block break-words text-read font-semibold text-fg">{shownName(d)}</span>
+        <span className="mt-1 block text-body text-fg-3">
+          {count(d.total, "разговор", "разговора", "разговоров")} · загружен {longDay(d.createdAt)}
+          {d.skipped ? ` · пропущено ${d.skipped}` : ""}
+        </span>
+        {found.map(({ check, line }) => (
+          <span key={check} className="mt-1 block text-body text-fg-3">
+            {CHECK_NAME[check]}:{" "}
+            {line.measured ? (
+              <>
+                <span className="font-semibold tabular-nums text-fg">
+                  {pct(Math.max(0, line.measured - line.failed), line.measured)}%
+                </span>{" "}
+                без найденных ошибок · {longDay(line.finishedAt)}
+              </>
+            ) : (
+              "ни один разговор не удалось проверить"
+            )}
+          </span>
+        ))}
+        {unchecked && !found.length && <span className="mt-1 block text-body text-fg-3">Ещё не проверен</span>}
+      </span>
+      <ArrowRight
+        aria-hidden
+        className="mt-1 size-4 shrink-0 text-fg-4 transition-transform group-hover:translate-x-0.5"
+      />
+    </Link>
+  );
+}
+
+/**
+ * «Датасеты»: every dataset of the agent as a list, newest first, each with what the checks found in it; a dataset
+ * opens on its own page (`/data/:id`) with its conversations as the file has them — looking at one changes nothing.
+ * «Добавить датасет» is the list's one black button. The archive is under the list. Without a dataset, where to get one.
  */
 export function DataPage() {
   const { datasetId } = useParams();
   const { state, offline } = useLabState();
   const library = useDatasets(true);
   const launches = useLaunches(undefined, `${state?.job.id}-${state?.job.running}`);
-  const [params] = useSearchParams();
-  const wide = useWide();
   const navigate = useNavigate();
-  const toast = useToast();
-  const [info, setInfo] = useState(false);
   const [archive, setArchive] = useState(false);
 
   const all = library.data?.datasets ?? [];
   const listed = all.filter((x) => !x.archivedAt);
   const archived = all.filter((x) => x.archivedAt);
   const activeId = library.data?.activeId ?? null;
-  const d = datasetId ? all.find((x) => x.id === datasetId) : (listed.find((x) => x.id === activeId) ?? listed[0]);
   const header = (
     <Header
       title="Датасеты"
       actionsInline
       actions={
+        !datasetId &&
         listed.length > 0 && (
-          <UploadButton
-            variant="outline"
-            label="Добавить датасет"
-            compact
-            onLoaded={() => void navigate(SECTIONS.data)}
-          />
+          <UploadButton label="Добавить датасет" compact onLoaded={() => void navigate(SECTIONS.data)} />
         )
       }
       below={<SectionJob kinds={["logs"]} />}
@@ -107,24 +159,37 @@ export function DataPage() {
         />
       </div>
     );
-  if (datasetId && !d)
+  if (datasetId) {
+    const d = all.find((x) => x.id === datasetId);
+    if (!d)
+      return (
+        <div className="flex h-full flex-col">
+          {header}
+          <EmptyState
+            drop
+            title="Такого датасета нет"
+            action={
+              <Link to={SECTIONS.data} className={buttonClass()}>
+                К датасетам
+              </Link>
+            }
+          >
+            У этого агента его нет: может быть, ссылка от другого агента.
+          </EmptyState>
+        </div>
+      );
     return (
-      <div className="flex h-full flex-col">
-        {header}
-        <EmptyState
-          drop
-          title="Такого датасета нет"
-          action={
-            <Link to={SECTIONS.data} className={buttonClass()}>
-              К датасетам
-            </Link>
-          }
-        >
-          У этого агента его нет: может быть, ссылка от другого агента.
-        </EmptyState>
-      </div>
+      <DatasetPage
+        key={d.id}
+        d={d}
+        header={header}
+        found={foundIn(d, state, d.id === activeId, launches.data?.launches)}
+        inWork={d.id === activeId}
+        next={listed.find((x) => x.id !== d.id) ?? null}
+      />
     );
-  if (!d)
+  }
+  if (!listed.length)
     return (
       <div>
         {header}
@@ -134,8 +199,8 @@ export function DataPage() {
           </h2>
           <p className="mt-3 max-w-[65ch] text-read text-fg-3">
             {archived.length
-              ? "Верните нужный из архива или загрузите новую выгрузку."
-              : "Выгрузка чата с настоящими разговорами клиентов: по ней проверяется агент."}
+              ? "Верните нужный из архива или загрузите новый датасет."
+              : "Датасет — выгрузка чата с настоящими разговорами клиентов: по нему проверяется агент."}
           </p>
           {archived.length > 0 && (
             <Button className="mt-5" icon={Archive} onClick={() => setArchive(true)}>
@@ -147,7 +212,7 @@ export function DataPage() {
               <span className="mb-5 flex size-12 items-center justify-center rounded-block bg-hover text-fg-3">
                 <Database aria-hidden className="size-6" />
               </span>
-              <h3 className="text-read font-semibold text-fg">Добавьте выгрузку чата</h3>
+              <h3 className="text-read font-semibold text-fg">Добавьте датасет</h3>
               <p className="mb-6 mt-2 text-body text-fg-3">XLSX, JSONL, JSON или CSV · до 50 МБ</p>
               <UploadButton />
               <p className="mt-4 text-small text-fg-3">Подключение к агенту не требуется.</p>
@@ -164,51 +229,64 @@ export function DataPage() {
         <ArchiveSheet open={archive} onClose={() => setArchive(false)} archived={archived} />
       </div>
     );
+  return (
+    <div className="flex h-full flex-col">
+      {header}
+      <div className="min-h-0 flex-1 overflow-auto">
+        <div className="max-w-[880px] px-4 pb-16 pt-4 lg:px-10 lg:pt-6">
+          <ul aria-label="Датасеты" className="divide-y divide-line">
+            {listed.map((d) => {
+              const inWork = d.id === activeId;
+              return (
+                <li key={d.id}>
+                  <Row d={d} found={foundIn(d, state, inWork, launches.data?.launches)} unchecked={inWork} />
+                </li>
+              );
+            })}
+          </ul>
+          {archived.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setArchive(true)}
+              className="mt-6 inline-flex items-center gap-1.5 rounded-control text-body text-fg-3 transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
+            >
+              <Archive aria-hidden className="size-4" />
+              Архив · {archived.length}
+            </button>
+          )}
+        </div>
+      </div>
+      <ArchiveSheet open={archive} onClose={() => setArchive(false)} archived={archived} />
+    </div>
+  );
+}
 
-  const inWork = d.id === activeId;
-  // What the checks found in it: the agent's current results for the one in work (the Обзор shows them), the newest
-  // finished launch on it for another.
-  const found = CHECKS.flatMap((check) => {
-    if (inWork) {
-      const result = resultOf(state, check);
-      if (!result) return [];
-      const { failed, measured, unmeasured } = result.summary;
-      return [{ check, line: { failed, measured, unmeasured, finishedAt: result.finishedAt }, to: stageRoot(check) }];
-    }
-    const launch = launches.data?.launches.find(
-      (l) => l.check === check && l.dataset?.datasetId === d.id && l.modes.dataset?.metric,
-    );
-    const metric = launch?.modes.dataset?.metric;
-    if (!launch || !metric) return [];
-    const { failed, measured, unmeasured } = metric;
-    return [
-      { check, line: { failed, measured, unmeasured, finishedAt: launch.startedAt }, to: launchLink(check, launch.id) },
-    ];
-  });
-  // The newest dataset left goes into work when the one in work goes to the archive (backend: flows/datasets.archive).
-  const next = listed.find((x) => x.id !== d.id) ?? null;
-  const choices: MenuItem[] = [
-    ...(listed.length > 1 || (d.archivedAt && listed.length)
-      ? listed.map((x) => ({
-          key: x.id,
-          label: shownName(x),
-          sub: `${conversations(x.total)} · загружен ${longDay(x.createdAt)}`,
-          on: x.id === d.id,
-          run: () => void navigate(x.id === activeId ? SECTIONS.data : datasetLink(x.id)),
-        }))
-      : []),
-    ...(archived.length
-      ? [
-          {
-            key: "archive",
-            label: "Архив",
-            sub: count(archived.length, "датасет", "датасета", "датасетов"),
-            run: () => setArchive(true),
-          },
-        ]
-      : []),
-  ];
-  const title = shownName(d);
+/**
+ * One dataset on its own page: «← Датасеты», its name with what the file holds in one line (details, rename and the
+ * archive behind ⓘ), what each check found in it with the way into a check of it, then its conversations as the file
+ * has them. Looking at one changes nothing: a check of it is started from its card.
+ */
+function DatasetPage({
+  d,
+  header,
+  found,
+  inWork,
+  next,
+}: {
+  d: Dataset;
+  header: ReactNode;
+  found: Found[];
+  inWork: boolean;
+  /** The newest dataset left, which goes into work when this one in work goes to the archive (flows/datasets). */
+  next: Dataset | null;
+}) {
+  const { state } = useLabState();
+  const library = useDatasets(true);
+  const [params] = useSearchParams();
+  const wide = useWide();
+  const navigate = useNavigate();
+  const toast = useToast();
+  const [info, setInfo] = useState(false);
   // What the file holds, then what the checks found: two groups, each whole on a line of its own when they wrap.
   const held: Fact[] = [
     {
@@ -219,6 +297,7 @@ export function DataPage() {
         </>
       ),
     },
+    { key: "at", node: `загружен ${longDay(d.createdAt)}` },
     ...(d.skipped
       ? [
           {
@@ -263,21 +342,16 @@ export function DataPage() {
       {header}
       {!reading && (
         <section aria-label="Датасет" className="flex-shrink-0 border-b border-line px-4 py-5 lg:px-10">
-          <div className="flex flex-wrap items-start gap-x-10 gap-y-4">
+          <Link
+            to={SECTIONS.data}
+            className="inline-flex items-center gap-1.5 rounded-sm text-body text-fg-3 transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
+          >
+            <ArrowLeft aria-hidden className="size-4" />
+            Датасеты
+          </Link>
+          <div className="mt-3 flex flex-wrap items-start gap-x-10 gap-y-4">
             <div className="min-w-[min(100%,22rem)] flex-1">
-              <h2 className={choices.length ? "sr-only" : "break-words text-title font-semibold text-fg"}>{title}</h2>
-              {choices.length > 0 && (
-                <Menu
-                  items={choices}
-                  className="max-w-full"
-                  trigger={
-                    <span className="flex min-w-0 items-center gap-1.5 text-left">
-                      <span className="min-w-0 break-words text-title font-semibold text-fg">{title}</span>
-                      <ChevronDown aria-hidden className="size-4 flex-shrink-0 text-fg-3" />
-                    </span>
-                  }
-                />
-              )}
+              <h2 className="break-words text-title font-semibold text-fg">{shownName(d)}</h2>
               <p className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-read text-fg-3">
                 <Facts facts={held} />
                 <button
@@ -294,7 +368,7 @@ export function DataPage() {
             {d.archivedAt && (
               <Button
                 icon={RotateCcw}
-                disabled={library.changing || !!state.job.running}
+                disabled={library.changing || !!state?.job.running}
                 onClick={() =>
                   void library.change("archive", d.id, { undo: true }).catch((cause) => toast.error(cause))
                 }
@@ -308,7 +382,7 @@ export function DataPage() {
           </div>
         </section>
       )}
-      <ExportConversations key={d.id} datasetId={d.id} />
+      <ExportConversations datasetId={d.id} />
       <DatasetInfo
         open={info}
         onClose={() => setInfo(false)}
@@ -317,7 +391,6 @@ export function DataPage() {
         next={next}
         onArchived={archivedNow}
       />
-      <ArchiveSheet open={archive} onClose={() => setArchive(false)} archived={archived} />
     </div>
   );
 }

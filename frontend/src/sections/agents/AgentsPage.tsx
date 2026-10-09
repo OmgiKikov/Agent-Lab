@@ -104,7 +104,7 @@ function DeleteAgent({ agent, onClose }: { agent: Agent | null; onClose: () => v
         </>
       }
     >
-      <p className="text-read text-fg-2">Пропадут его выгрузка, правила, проверки, сценарии и ответы людей.</p>
+      <p className="text-read text-fg-2">Пропадут его датасеты, правила, проверки, сценарии и ответы людей.</p>
       <p className="mt-2 text-small text-fg-3">
         Файлы не стираются: они переедут в папку <span className="font-mono">data/deleted/</span> на этом компьютере.
       </p>
@@ -172,7 +172,7 @@ export function AgentsPage() {
             <Mark quiet className="size-12 rounded-2xl" />
             <h2 className="mt-6 text-title font-semibold text-fg">Добавьте первого агента</h2>
             <p className="mt-2 text-read text-fg-2">
-              Имя и одна строка о том, что это за агент. Дальше — выгрузка его разговоров и правила общения.
+              Имя и одна строка о том, что это за агент. Дальше — датасет его разговоров и правила общения.
             </p>
             <Button className="mt-6" variant="primary" size="lg" icon={Plus} onClick={() => setCreating(true)}>
               Новый агент

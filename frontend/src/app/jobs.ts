@@ -9,7 +9,7 @@ export const JOBS: Record<string, { label: string; to: string }> = {
   "judge-rules": { label: "Правила", to: SECTIONS.overview },
   datasets: { label: "Датасеты", to: "/data" },
   "agent-context": { label: "Контекст агента", to: "/agent" },
-  logs: { label: "Загрузка диалогов", to: SECTIONS.data },
+  logs: { label: "Загрузка датасета", to: SECTIONS.data },
   "tone-criteria": { label: "Критерии tone of voice", to: criterionLink("tone") },
   "tone-check": { label: "Проверка tone of voice", to: SECTIONS.tone },
   "tone-advice": { label: "Предложение по находке", to: SECTIONS.tone },

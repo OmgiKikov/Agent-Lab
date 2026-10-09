@@ -258,7 +258,7 @@ export function LaunchReport() {
               {record.ruleIds?.length
                 ? `, ${count(record.ruleIds.length, "выбранный критерий", "выбранных критерия", "выбранных критериев")}`
                 : ""}
-              {record.agentVersion ? ` · ${record.agentVersion}` : ""}
+              {record.agentVersion ? ` · версия агента ${record.agentVersion}` : ""}
             </p>
             {!again && record.status !== "running" && (
               <p className="mt-1 text-body text-fg-3">

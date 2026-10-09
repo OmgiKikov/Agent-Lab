@@ -1,4 +1,4 @@
-import { Select } from "../../ui/Field";
+import { Input, Select } from "../../ui/Field";
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
@@ -347,7 +347,7 @@ export function LaunchPage({ check }: { check: Check }) {
       ? "Загружаем датасеты и правила…"
       : !dataset
         ? // The lines above say what is missing and give the way to it; here, only that the launch waits for it.
-          "Сначала загрузите выгрузку чата."
+          "Сначала загрузите датасет."
         : !rulesReady
           ? check === "tone"
             ? "Сначала нужны правила общения."
@@ -386,7 +386,6 @@ export function LaunchPage({ check }: { check: Check }) {
     }
   };
 
-  const [versioning, setVersioning] = useState(!!draft.version);
   // What the launch waits for, said beside its button; the step that is missing gives the way to it above.
   const why = state?.job.running ? "Сейчас идёт другая задача этого агента." : ready ? null : missing;
   const plan =
@@ -482,7 +481,7 @@ export function LaunchPage({ check }: { check: Check }) {
                   !library ? (
                     <Skeleton className="h-7 w-48" />
                   ) : !dataset ? (
-                    "Нет выгрузки"
+                    "Нет датасета"
                   ) : library.datasets.length > 1 ? (
                     <Menu
                       className="max-w-full"
@@ -507,7 +506,7 @@ export function LaunchPage({ check }: { check: Check }) {
               >
                 {!library ? null : !dataset ? (
                   <span className="flex flex-wrap items-center gap-3">
-                    Проверка идёт по выгрузке чата.
+                    Проверка идёт по датасету разговоров.
                     <UploadButton variant="outline" label="Загрузить" />
                   </span>
                 ) : (
@@ -626,7 +625,23 @@ export function LaunchPage({ check }: { check: Check }) {
               </p>
             )}
 
-            <div className="mt-10 flex flex-wrap items-center gap-x-5 gap-y-3">
+            {/* The version the check measures: a field of its own, so that checks of versions can be told apart. */}
+            <label className="mt-10 block max-w-sm">
+              <span className="block text-read font-medium text-fg">Версия агента</span>
+              <Input
+                name="agent-version"
+                value={version}
+                onChange={(e) => setVersion(e.target.value)}
+                maxLength={80}
+                placeholder="Например, v2.4"
+                className="mt-2"
+              />
+              <span className="mt-1.5 block text-small text-fg-3">
+                Необязательно. Видна в итоге и в истории, чтобы сравнивать проверки разных версий.
+              </span>
+            </label>
+
+            <div className="mt-8 flex flex-wrap items-center gap-x-5 gap-y-3">
               <Button
                 size="lg"
                 variant="primary"
@@ -637,28 +652,6 @@ export function LaunchPage({ check }: { check: Check }) {
               >
                 Запустить проверку
               </Button>
-              {versioning ? (
-                <label className="flex items-center gap-2 text-body text-fg-3">
-                  версия агента
-                  <input
-                    autoFocus={!version}
-                    value={version}
-                    onChange={(e) => setVersion(e.target.value)}
-                    maxLength={80}
-                    placeholder="например, v2.4"
-                    className="w-40 border-b border-line-strong bg-transparent pb-0.5 text-body text-fg placeholder:text-fg-4 focus:border-fg focus:outline-none"
-                  />
-                </label>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setVersioning(true)}
-                  className="inline-flex items-center gap-1 text-body text-fg-3 hover:text-fg"
-                >
-                  <Plus aria-hidden className="size-3.5" />
-                  версия агента
-                </button>
-              )}
               {(why ?? plan) && <p className="min-w-0 basis-full text-body text-fg-3">{why ?? plan}</p>}
             </div>
             {error && (
