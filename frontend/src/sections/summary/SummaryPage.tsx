@@ -9,19 +9,21 @@ import { answersOf, answersSentence } from "../../lab/answers";
 import { api } from "../../lab/api";
 import { CHECK_NAME, CHECKS, resultOf } from "../../lab/checks";
 import { compareSentence, seriousCompareText } from "../../lab/compare";
-import { duty, useCriteria, type Criterion } from "../../lab/criteria";
+import { useCriteria, type Criterion } from "../../lab/criteria";
+import { useDatasets } from "../../lab/datasets";
 import { pct } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
-import { copyReport, useReportAgent } from "../../lab/problemReport";
-import { useProblems, type Example, type LogDialogue } from "../../lab/problems";
+import { commonLine, copyReport, errorsOf, proofOf, useReportAgent } from "../../lab/problemReport";
+import { askedOf, importantByPerson, useProblems, type Example, type LogDialogue } from "../../lab/problems";
 import { humansOf } from "../../lab/problemStats";
 import { splitQuote } from "../../lab/quote";
 import {
+  basisText,
   chosenOf,
-  daysText,
   fullDay,
   howOf,
   madeText,
+  masksText,
   problemAnswers,
   readChosen,
   rechecked,
@@ -43,22 +45,20 @@ import { Button, buttonClass } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { useToast } from "../../ui/toast";
 import { useComparison } from "../checks/Compare";
-import { queueOf, violationsOf } from "../problems/model";
-
-/** The example a problem shows: one the people did not refute, else its first; with the words the check pointed at. */
-const exampleFor = (examples: Example[]) => examples.find((e) => e.review !== "disagree") ?? examples[0];
+import { RuleText } from "../criteria/RuleText";
+import { queueOf } from "../problems/model";
 
 /**
- * The agent's reply with the words the check pointed at, and the customer's message before it. Without the
- * conversation at hand, or when the words are not in a reply (a step the agent took), only the words and the first
- * message of the customer.
+ * The agent's reply with the words the model pointed at, and the customer's message it answered. Without the
+ * conversation at hand, or when the words are not in a reply (a step the agent took), only the words and the
+ * customer's words the service names for them (lab/problems, askedOf).
  */
 function exampleOf(e: Example, dialogue: LogDialogue | undefined): SummaryExample | null {
   if (!e.agentQuote) return null;
   const messages = dialogue?.messages ?? [];
   const at = messages.findIndex((m) => m.role === "assistant" && splitQuote(visible(m.content).text, e.agentQuote));
   const before = messages.slice(0, Math.max(0, at)).filter((m) => m.role === "user");
-  const customer = at < 0 ? e.opening : (before[before.length - 1]?.content ?? null);
+  const customer = at < 0 ? askedOf(e) : (before[before.length - 1]?.content ?? null);
   return {
     customer: customer ? visible(customer).text : null,
     reply: at < 0 ? null : visible(messages[at].content).text,
@@ -69,10 +69,10 @@ function exampleOf(e: Example, dialogue: LogDialogue | undefined): SummaryExampl
 
 /**
  * «Сводка для руководителя» (/summary): one page of the agent for someone who does not use the product — each check's
- * number with its denominator, its conversations with a serious error and whose decision that is (how many criteria
- * people checked of the automatic check's proposals), the same number with people's answers, how it stands to the
- * check's previous check, and the problems the person ticked (the serious ones by default), each with what the agent
- * must do, its count, people's answers and one reply of the agent.
+ * number with its denominator, its conversations with an error by an important criterion and whose decision that is,
+ * the same number with people's answers, how it stands to the check's previous check, and the problems the person
+ * ticked (by default the ones of the criteria a person marked important, else the three most frequent), each by its
+ * criterion's name with what the agent must do as a list, its count, people's answers and one reply of the agent.
  * The ticks are kept in this browser, per agent; «Скачать PDF» prints the page (no navigation, buttons or ticks; A4),
  * «Скопировать для письма» puts the same on the clipboard. Numbers, answers and examples; no verdict on the agent.
  * Both wait for the agent's name and for the problems: what could not be loaded says so, with «Повторить».
@@ -81,6 +81,7 @@ export function SummaryPage() {
   const { state, offline } = useLabState();
   // The letter and the PDF are named after the agent: never sent under a placeholder while its name is unknown.
   const agent = useReportAgent();
+  const datasets = useDatasets();
   const toast = useToast();
   const criteria: Record<Check, ReturnType<typeof useCriteria>> = {
     tone: useCriteria(resultOf(state, "tone") ? "tone" : null),
@@ -104,9 +105,9 @@ export function SummaryPage() {
     };
   }, [agent.name]);
 
-  // The checks with a result, each with its problems, serious first, then the most frequent — of that very result,
-  // not of one replaced meanwhile (null until they are at hand) — its serious count, and the ones ticked: by default
-  // the serious problems, else the three most frequent.
+  // The checks with a result, each with its problems in the order of «Итог» — of that very result, not of one replaced
+  // meanwhile (null until they are at hand) — its important count, and the ones ticked: by default the problems of the
+  // criteria a person marked important, else the three most frequent.
   const checks = CHECKS.filter((c) => resultOf(state, c));
   const problems = {} as Record<Check, Criterion[] | null>;
   const serious = {} as Record<Check, Serious | null>;
@@ -121,14 +122,14 @@ export function SummaryPage() {
     const own = problems[check] ?? [];
     ticked[check] = chosenOf(
       stored[check],
-      own.map((c) => c.r.id),
-      own.filter((c) => c.r.serious).map((c) => c.r.id),
+      own.map((c) => ({ id: c.r.id, failed: c.r.log.failed })),
+      own.filter((c) => importantByPerson(c.r)).map((c) => c.r.id),
     );
   }
   const examples = checks.flatMap((check) =>
     (problems[check] ?? [])
       .filter((c) => ticked[check].has(c.r.id))
-      .map((c) => exampleFor(violationsOf(c, "log")))
+      .map((c) => proofOf(errorsOf(c.r.log)))
       .filter((e): e is Example => !!e),
   );
   // The conversations of the ticked examples, as «Весь разговор» reads them (lab/problems, useTurns): one cache.
@@ -141,6 +142,8 @@ export function SummaryPage() {
     })),
   });
   const dialogueOf = (e: Example) => dialogues[examples.indexOf(e)]?.data;
+  // The dataset by its name; its file only while the list of datasets is not at hand.
+  const dataset = datasets.data?.datasets.find((d) => d.id === state?.logs.datasetId)?.name ?? state?.logs.file;
 
   const toggle = (check: Check, id: string) => {
     const ids = [...ticked[check]];
@@ -153,7 +156,7 @@ export function SummaryPage() {
     ? {
         // Told only once the name is at hand (`ready`): the page waits for it, never shows another.
         agent: agent.name ?? "",
-        file: state.logs.file ?? null,
+        dataset: dataset ?? null,
         days: [...new Set(checks.map((c) => fullDay(resultOf(state, c)!.finishedAt)))],
         madeAt: new Date().toISOString(),
         checks: checks.map((check): SummaryCheck => {
@@ -175,14 +178,15 @@ export function SummaryPage() {
             problems: (problems[check] ?? []).map((c): SummaryProblem => {
               const s = c.r.log;
               const people = humansOf(s);
-              const e = ids.has(c.r.id) ? exampleFor(violationsOf(c, "log")) : undefined;
+              const e = ids.has(c.r.id) ? proofOf(errorsOf(s)) : undefined;
               return {
                 id: c.r.id,
                 chosen: ids.has(c.r.id),
                 serious: c.r.serious,
                 severity: c.r.severity,
-                title: c.r.title,
-                duty: duty(c.r.rule.text),
+                name: c.name,
+                common: commonLine(c),
+                duty: c.r.rule.text,
                 failed: s.failed,
                 checked: s.failed + s.passed,
                 yes: people.agree,
@@ -194,7 +198,12 @@ export function SummaryPage() {
         }),
       }
     : null;
-  const ready = !!summary && !!agent.name && checks.every((c) => problems[c]) && dialogues.every((d) => !d.isLoading);
+  const ready =
+    !!summary &&
+    !!agent.name &&
+    !datasets.isLoading &&
+    checks.every((c) => problems[c]) &&
+    dialogues.every((d) => !d.isLoading);
 
   const copy = () => {
     if (summary) copyReport(summaryMarkdown(summary)).then(() => toast.notify("Сводка скопирована"), toast.error);
@@ -208,7 +217,9 @@ export function SummaryPage() {
         actions={
           checks.length > 0 && (
             <>
+              {/* On a phone each keeps a short word beside its icon: what leaves the product is never a guess. */}
               <Button icon={Copy} aria-label="Скопировать для письма" disabled={!ready} onClick={copy}>
+                <span className="sm:hidden">Для письма</span>
                 <span className="hidden sm:inline">Скопировать для письма</span>
               </Button>
               <Button
@@ -218,6 +229,7 @@ export function SummaryPage() {
                 disabled={!ready}
                 onClick={() => window.print()}
               >
+                <span className="sm:hidden">PDF</span>
                 <span className="hidden sm:inline">Скачать PDF</span>
               </Button>
             </>
@@ -257,6 +269,7 @@ export function SummaryPage() {
     );
 
   const several = summary.days.length > 1;
+  const masks = masksText(summary);
   return page(
     <article className="max-w-[860px] px-4 pb-24 pt-8 lg:px-10 lg:pt-12 print:max-w-none print:p-0">
       {/* On paper the page has no head: the title goes on the sheet. */}
@@ -268,25 +281,23 @@ export function SummaryPage() {
       ) : (
         <Skeleton className="h-10 w-72 max-w-full" />
       )}
-      <p className="mt-2 break-words text-read text-fg-2">
-        {summary.file ? `Датасет «${summary.file}» · ` : ""}
-        {daysText(summary.days)}
-      </p>
+      <p className="mt-2 break-words text-read text-fg-2">{basisText(summary)}</p>
 
       {summary.checks.map((c) => (
         <CheckPart key={c.check} c={c} dated={several} />
       ))}
 
-      <section aria-labelledby="summary-main" className="mt-14 border-t border-line pt-8 print:mt-10">
+      <section aria-labelledby="summary-main" className="mt-14 border-t border-line pt-8 print:mt-8 print:pt-6">
         <h3 id="summary-main" className="text-title font-semibold text-fg print:break-after-avoid">
           Главное
         </h3>
         <p className="mt-1 max-w-[68ch] text-body text-fg-3 print:hidden">
           В PDF и письмо войдут только отмеченные проблемы.{" "}
-          {summary.checks.some((c) => c.problems.some((p) => p.serious))
-            ? "Сразу отмечены проблемы по важным критериям, а где их нет, три самые частые."
+          {summary.checks.some((c) => c.problems.some((p) => importantByPerson(p)))
+            ? "Сразу отмечены проблемы по критериям, которые люди отметили важными, а где таких нет — три самые частые."
             : "Сразу отмечены три самые частые проблемы каждой проверки."}
         </p>
+        {masks && <p className="mt-1 text-body text-fg-3 print:break-after-avoid">{masks}</p>}
         {summary.checks.map((c) => (
           <CheckProblems
             key={c.check}
@@ -313,8 +324,9 @@ export function SummaryPage() {
 }
 
 /**
- * One check: its number as «Итог» shows it, with its serious errors and whose decision they are, people's answers, its
- * previous check and who found the errors.
+ * One check: its number as «Итог» shows it, with its conversations with an error by an important criterion and whose
+ * decision that is, who found the errors and what people answered, the same number with their answers and its
+ * previous check.
  */
 function CheckPart({ c, dated }: { c: SummaryCheck; dated: boolean }) {
   // People's answers count the checked conversations: with none checked there is no «0 из 0» to give.
@@ -338,6 +350,7 @@ function CheckPart({ c, dated }: { c: SummaryCheck; dated: boolean }) {
             <p key={i}>{line.text}</p>
           ),
         )}
+        {found && <p>{found}</p>}
         {answers && (
           <p>
             {answers.head} — <span className="whitespace-nowrap font-semibold text-fg">{answers.share}</span>
@@ -346,7 +359,6 @@ function CheckPart({ c, dated }: { c: SummaryCheck; dated: boolean }) {
         )}
         {c.compare && <p>{c.compare}</p>}
         {c.seriousCompare && <p className="whitespace-pre-line">{c.seriousCompare}</p>}
-        {found && <p>{found}</p>}
       </div>
     </section>
   );
@@ -394,7 +406,7 @@ function CheckProblems({
         <Skeleton className="mt-3 h-40" />
       ) : !c.problems.length ? (
         <p className="mt-2 text-read text-fg-3">
-          {c.measured ? "Автоматическая проверка ошибок не нашла." : "Ни один разговор не удалось проверить."}
+          {c.measured ? "Модель ошибок не нашла." : "Ни один разговор не удалось проверить."}
         </p>
       ) : (
         <ul className="mt-2 divide-y divide-line">
@@ -407,11 +419,16 @@ function CheckProblems({
   );
 }
 
-/** A ticked problem in full; one not ticked as its name and count, on the screen only. */
+/**
+ * A ticked problem in full: its criterion's name, the kind of error named most often, what the agent must do as the
+ * criterion's list (RuleText, the same as on «Критерии»), people's answers and one reply. One not ticked as its name
+ * and count, on the screen only. On paper a problem flows over a sheet's end between its parts, never inside its
+ * head or its reply.
+ */
 function ProblemItem({ p, onToggle }: { p: SummaryProblem; onToggle: () => void }) {
   const id = `summary-${p.id}`;
   return (
-    <li className={cn("flex items-start gap-3 py-5 print:break-inside-avoid", !p.chosen && "py-3 print:hidden")}>
+    <li className={cn("flex items-start gap-3 py-5", !p.chosen && "py-3 print:hidden")}>
       <input
         id={id}
         type="checkbox"
@@ -420,29 +437,30 @@ function ProblemItem({ p, onToggle }: { p: SummaryProblem; onToggle: () => void 
         className="mt-1.5 size-4 flex-shrink-0 accent-primary print:hidden"
       />
       <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5">
-          <label
-            htmlFor={id}
-            className={cn(
-              "min-w-0 cursor-pointer",
-              p.chosen ? "text-lead font-semibold text-fg" : "text-read text-fg-2",
-            )}
-          >
-            {p.title}
-            {p.serious && <SeriousTag rule={p} className="relative -top-px ml-2 align-middle font-normal" />}
-          </label>
-          <span className="whitespace-nowrap text-read tabular-nums text-fg-2">
-            <span className="font-semibold text-fg">{p.failed}</span> из {p.checked}{" "}
-            <span className="text-fg-3">({pct(p.failed, p.checked)}%)</span>
-          </span>
+        <div className="print:break-inside-avoid print:break-after-avoid">
+          <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5">
+            <label
+              htmlFor={id}
+              className={cn(
+                "min-w-0 cursor-pointer",
+                p.chosen ? "text-lead font-semibold text-fg" : "text-read text-fg-2",
+              )}
+            >
+              {p.name}
+              {p.serious && <SeriousTag rule={p} className="relative -top-px ml-2 align-middle font-normal" />}
+            </label>
+            <span className="whitespace-nowrap text-read tabular-nums text-fg-2">
+              <span className="font-semibold text-fg">{p.failed}</span> из {p.checked}{" "}
+              <span className="text-fg-3">({pct(p.failed, p.checked)}%)</span>
+            </span>
+          </div>
+          {p.chosen && p.common && <p className="mt-1 max-w-[68ch] text-read text-fg-2">{p.common}</p>}
         </div>
         {p.chosen && (
           <>
-            <p className="mt-1.5 max-w-[68ch] text-read text-fg-2">
-              <span className="text-fg-3">Агент должен: </span>
-              {p.duty}
-            </p>
-            <p className="mt-1 text-read text-fg-2">{problemAnswers(p)}</p>
+            <p className="mt-2 text-read text-fg-3 print:break-after-avoid">Агент должен:</p>
+            <RuleText text={p.duty} className="mt-1 max-w-[68ch] text-read text-fg-2" />
+            <p className="mt-2 text-read text-fg-2 print:break-after-avoid">{problemAnswers(p)}</p>
             {p.example && <Reply e={p.example} />}
           </>
         )}
@@ -451,11 +469,11 @@ function ProblemItem({ p, onToggle }: { p: SummaryProblem; onToggle: () => void 
   );
 }
 
-/** One reply of the agent, as the customer saw it, with the words the check pointed at marked. */
+/** One reply of the agent, as the customer saw it, with the words the model pointed at marked. */
 function Reply({ e }: { e: SummaryExample }) {
   const parts = e.reply ? splitQuote(e.reply, e.quote) : null;
   return (
-    <div className="mt-3 max-w-[72ch] space-y-1.5 rounded-block bg-inset px-4 py-3 text-read">
+    <div className="mt-3 max-w-[72ch] space-y-1.5 rounded-block bg-inset px-4 py-3 text-read print:break-inside-avoid">
       {e.customer && (
         <p className="whitespace-pre-line text-fg-2">
           <span className="font-medium text-fg-3">Клиент: </span>

@@ -1,10 +1,10 @@
 import { agentKey } from "../app/agent";
-import { answersText, yesNoText, type Answers } from "./answers";
+import { answersText, type Answers } from "./answers";
 import { CHECK_NAME, CHECKS } from "./checks";
 import { count, pct, plural } from "./format";
 import { cleanPct } from "./history";
-import { headingOf, inlineText, quoteText } from "./problemReport";
-import { splitQuote } from "./quote";
+import { importanceTag, masked, masksLine } from "./problemReport";
+import { inQuotes, oneLine, ruleLines, splitQuote } from "./quote";
 import type { Severity } from "./problems";
 import { lineText, type Serious, type SeverityLine } from "./severity";
 import type { Check } from "./types";
@@ -13,12 +13,12 @@ import type { Check } from "./types";
  * «Сводка для руководителя»: one page of the agent for a person who
  * does not use the product. The page and the letter are told from this one model, so they never differ: numbers with
  * their denominators, people's answers and examples, and no verdict on the agent — the reader draws the conclusion.
- * No «промпт», «модель», conversation ids or file paths: «автоматическая проверка» found the errors.
+ * No «промпт», conversation ids, file paths or the rubric's codes: the model found the errors, people answered.
  */
 export type Summary = {
   agent: string;
-  /** The export the checks read, and the days they were made, as a person says them. */
-  file: string | null;
+  /** The dataset the checks read, by its name, and the days they were made, as a person says them. */
+  dataset: string | null;
   days: string[];
   checks: SummaryCheck[];
   /** When the summary was put together: people's answers may be added after it. */
@@ -34,32 +34,38 @@ export type SummaryCheck = {
   unmeasured: number;
   answers: Answers;
   /**
-   * The checked conversations with a serious error, once a criterion is serious (lab/severity), and their «было →
-   * стало» under the comparison of the whole check; none before.
+   * The checked conversations with an error by an important criterion, once a criterion is important (lab/severity),
+   * and their «было → стало» under the comparison of the whole check; none before.
    */
   serious: Serious | null;
   /**
-   * What it says about serious errors, line by line, for people (lab/severity, severityLines): «С нарушением важных критериев
-   * — 6 из 53 (11%)», «Важные критерии — 2 из 8. Их отметила автоматическая проверка, люди проверили 0 из 8.», where
-   * they could be checked; or «Важных критериев нет. Так решили люди.» None while nothing is marked.
+   * What it says about important criteria, line by line, for people (lab/severity, severityLines): «С нарушением
+   * важных критериев — 6 из 53 (11%).», «Важных критериев 2 из 8, их отметили люди.», where they apply when not in
+   * every checked conversation; or «Важных критериев нет, так решили люди.» None while nothing is marked.
    */
   severity: SeverityLine[];
   /** «Прошлая проверка, 3 октября: 22 из 53 (42%) → сейчас 4 из 12 (33%). …» — the line of «Итог», or none. */
   compare: string | null;
   /** «С нарушением важных критериев: 3 из 53 (6%) → сейчас 6 из 53 (11%). …», or none. */
   seriousCompare: string | null;
-  /** Every problem of the check, the serious ones first, then the most frequent; the ticked ones go into the PDF and the letter. */
+  /**
+   * Every problem of the check in the order of «Итог»: the important ones a person marked first, then the most frequent;
+   * the ticked ones go into the PDF and the letter.
+   */
   problems: SummaryProblem[];
 };
 
 export type SummaryProblem = {
   id: string;
   chosen: boolean;
-  /** Its criterion is serious: «важный» beside its name, with whose decision it is (`severity`). */
+  /** Its criterion is important: «важный» beside its name, with whose decision it is (`severity`). */
   serious: boolean;
   severity: Severity;
-  title: string;
-  /** What the agent must do, in the criterion's words. */
+  /** Its criterion's name, as on every screen (lab/criteria, criterionName). */
+  name: string;
+  /** «Чаще всего: «…» — 12 из 57 ошибок.», when the most frequent kind of its errors is worth a line. */
+  common: string | null;
+  /** What the agent must do, in the criterion's words: a list on the page and points in the letter (lab/quote). */
   duty: string;
   failed: number;
   checked: number;
@@ -70,7 +76,7 @@ export type SummaryProblem = {
 };
 
 /**
- * One reply of the agent with the words the check pointed at: the customer's message before it, the whole reply when
+ * One reply of the agent with the words the model pointed at: the customer's message it answered, the whole reply when
  * the conversation is at hand (else only the words), and whether people answered that this was no error.
  */
 export type SummaryExample = { customer: string | null; reply: string | null; quote: string; refuted: boolean };
@@ -80,8 +86,6 @@ export const SUMMARY_WHAT: Record<Check, string> = {
   tone: "Соблюдает ли агент правила общения с клиентами: обращение, тон, ясность.",
   code: "Делает ли агент то, что требуют его инструкции: отвечает по базе знаний и ничего не выдумывает.",
 };
-
-const ofConversations = (n: number) => count(n, "разговора", "разговоров", "разговоров");
 
 /**
  * «Без найденных ошибок — 58% проверенных разговоров · с ошибкой агента 22 из 53»: the measurement first, as «Итог»
@@ -102,50 +106,65 @@ export const unmeasuredText = (c: SummaryCheck) =>
     ? `Ещё ${count(c.unmeasured, "разговор", "разговора", "разговоров")} не удалось проверить, в счёт ${c.unmeasured === 1 ? "он не входит" : "они не входят"}.`
     : null;
 
-/** «из 29 найденных», «из 21 найденной»: of the errors the check found. */
+/** «из 29 найденных», «из 21 найденной»: of the errors the model found. */
 const ofFound = (n: number) => `${n}\u00a0${plural(n, "найденной", "найденных", "найденных")}`;
 
 /**
- * «Ошибки нашла автоматическая проверка. Люди перепроверили 11 из 29 найденных и согласились с 10.» Nothing when it
- * could check no conversation: it found no errors only because it saw none.
+ * People's «да» among their answers on errors, after «и»: «согласились с 3», «согласились с ней», «согласились со
+ * всеми», «не согласились ни с одной».
+ */
+const agreement = (yes: number, answered: number) =>
+  yes === answered
+    ? answered === 1
+      ? "согласились с ней"
+      : "согласились со всеми"
+    : yes
+      ? `согласились с\u00a0${yes}`
+      : answered === 1
+        ? "не согласились с ней"
+        : "не согласились ни с одной";
+
+/**
+ * «Ошибки нашла модель. Люди перепроверили 11 из 29 найденных и согласились с 10.» — or «…1 из 29 найденных и не
+ * согласились с ней». Nothing when it could check no conversation: it found no errors only because it saw none.
  */
 export function rechecked(a: Answers): string | null {
   const answered = a.confirmed + a.removed;
   if (!a.measured) return null;
-  if (!a.errors) return "Автоматическая проверка ошибок не нашла.";
+  if (!a.errors) return "Модель ошибок не нашла.";
   return answered
-    ? `Ошибки нашла автоматическая проверка. Люди перепроверили ${answered}\u00a0из\u00a0${ofFound(a.errors)} и согласились с\u00a0${a.confirmed}.`
-    : `Ошибки нашла автоматическая проверка. Люди пока не перепроверяли ни одной из\u00a0${ofFound(a.errors)}.`;
+    ? `Ошибки нашла модель. Люди перепроверили ${answered}\u00a0из\u00a0${ofFound(a.errors)} и ${agreement(a.confirmed, answered)}.`
+    : `Ошибки нашла модель. Люди пока не перепроверяли ни одной из\u00a0${ofFound(a.errors)}.`;
 }
 
-/** «Ошибка в 6 из 52 разговоров (12%)» — of the conversations where it could be checked. */
+/** «Ошибка в 57 из 89 проверенных разговоров, где критерий применим (64%).» */
 export const problemCount = (p: SummaryProblem) =>
-  `Ошибка в\u00a0${p.failed}\u00a0из\u00a0${ofConversations(p.checked)} (${pct(p.failed, p.checked)}%)`;
+  `Ошибка в\u00a0${p.failed}\u00a0из\u00a0${count(p.checked, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")}, где критерий применим (${pct(p.failed, p.checked)}%).`;
 
-/** «Люди перепроверили 6 из 6 найденных: 5 — ошибка, 1 — нет.» */
+/** «Люди перепроверили 6 из 57 найденных и согласились с 5.», or that nobody did yet. */
 export const problemAnswers = (p: SummaryProblem) =>
   p.yes + p.no
-    ? `Люди перепроверили ${p.yes + p.no}\u00a0из\u00a0${ofFound(p.failed)}: ${yesNoText(p.yes, p.no)}.`
+    ? `Люди перепроверили ${p.yes + p.no}\u00a0из\u00a0${ofFound(p.failed)} и ${agreement(p.yes, p.yes + p.no)}.`
     : "Люди эти ошибки ещё не перепроверяли.";
 
-/** The quiet footnote: what the numbers count and what they do not say. */
+/** The quiet footnote: what each number is and what it does not say. */
 export const HOW = [
-  "«N из M» значит, что автоматическая проверка смогла оценить M разговоров и в N из них нашла ошибку агента. Процент рядом — доля проверенных разговоров без найденных ошибок: чем он выше, тем лучше. Разговоры, которые не удалось проверить, названы отдельно и в счёт не входят.",
-  "«Без найденных ошибок» не значит, что ошибок нет. Проверка находит не всё.",
-  "«С учётом ответов людей» считает те же разговоры. Ошибка, которую человек снял, не считается, а ошибка, которую он нашёл сам, считается. Число автоматической проверки от этого не меняется, и с прошлыми проверками сравнивают только его.",
+  "«Без найденных ошибок» — доля проверенных разговоров, где модель не нашла ошибок: чем она выше, тем лучше. Это не значит, что ошибок нет: модель находит не всё. Разговоры, которые не удалось проверить, названы отдельно и в счёт не входят.",
+  "«N из M» у проблемы: M — проверенные разговоры, где её критерий применим, N — те из них, где модель нашла ошибку. Процент рядом — доля этих разговоров с ошибкой: чем он ниже, тем лучше.",
+  "«С учётом ответов людей» считает те же разговоры. Ошибка, которую человек снял, не считается, а ошибка, которую он нашёл сам, считается. Счёт модели от этого не меняется, и с прошлыми проверками сравнивают только его.",
   "С прошлой проверкой сравнивают, только если критерии и способ проверки те же. Если хотя бы с одной стороны меньше 30 разговоров, этого мало, чтобы судить.",
 ];
 
 /** Said when the summary has both checks: their numbers are not added up. */
 export const HOW_BOTH = "Tone of voice и Точность проверяют разное, их числа не складываются.";
 
-/** Said once a criterion is serious: that its count is part of the number, and who decides it. */
+/** Said once a criterion is important: that its count is part of the number, and who decides it. */
 export const HOW_SERIOUS =
-  "«С нарушением важных критериев» — проверенные разговоры, где нарушен хотя бы один важный критерий: одно такое нарушение может навредить клиенту или банку. Они уже входят в число разговоров с ошибкой агента. Какие критерии важные, предлагает автоматическая проверка, а люди подтверждают или меняют.";
+  "«С нарушением важных критериев» — проверенные разговоры, где нарушен хотя бы один важный критерий: одно такое нарушение может навредить клиенту или банку. Они уже входят в число разговоров с ошибкой агента. Какие критерии важные, предлагает модель, а люди подтверждают или меняют.";
 
 /**
- * The footnote of a summary: with the line about two checks when it has both, and the line about serious errors once
- * a check of it has a serious criterion.
+ * The footnote of a summary: with the line about two checks when it has both, and the line about important criteria
+ * once a check of it has one.
  */
 export const howOf = (s: Summary) => [
   ...HOW,
@@ -153,12 +172,18 @@ export const howOf = (s: Summary) => [
   ...(s.checks.some((c) => c.serious) ? [HOW_SERIOUS] : []),
 ];
 
-/** A whole date with its year, for a page that leaves the product: «3 октября 2026 г.» */
+/** A whole date with its year, for a page that leaves the product: «3 октября 2026 г.», never parted at a line's end. */
 export const fullDay = (iso: string) =>
-  new Date(iso).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+  new Date(iso)
+    .toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })
+    .replace(/\s/g, "\u00a0");
 
 /** «проверено 3 октября 2026 г.», or both days when the checks were made on different ones. */
 export const daysText = (days: string[]) => `проверено ${days.join(" и ")}`;
+
+/** «Датасет «Чаты за сентябрь» · проверено 3 октября 2026 г.»: what the summary rests on, under its title. */
+export const basisText = (s: Summary) =>
+  [s.dataset ? `Датасет ${inQuotes(s.dataset)}` : null, daysText(s.days)].filter(Boolean).join(" · ");
 
 /** A sentence ends with one full stop, also after «2026 г.» */
 export const stop = (text: string) => (text.endsWith(".") ? text : `${text}.`);
@@ -166,29 +191,39 @@ export const stop = (text: string) => (text.endsWith(".") ? text : `${text}.`);
 /** «Сводка составлена 4 октября 2026 г.» */
 export const madeText = (s: Summary) => stop(`Сводка составлена ${fullDay(s.madeAt)}`);
 
-/** «…» closing a sentence: the quote's own full stop goes after the closing mark; «!», «?» and «…» stay and end it. */
-const quoted = (quote: string) => {
-  const text = quote.trim();
-  return /[!?…]$/.test(text) ? `«${text}»` : `«${text.replace(/\.$/, "")}».`;
-};
-
-/** The words the check pointed at are the whole reply: a letter then has nothing to point at in it. */
+/** The words the model pointed at are the whole reply: a letter then has nothing to point at in it. */
 const wholeReply = (reply: string, quote: string) => {
   const parts = splitQuote(reply, quote);
   return !!parts && !/[\p{L}\p{N}]/u.test(parts[0] + parts[2]);
 };
 
 /**
- * The summary as a letter (lab/problemReport, copyReport): the same as the page, the ticked problems only. Headings,
- * paragraphs and a quote: the only Markdown the reports write. The words of the customer, the agent and the criteria
- * stay words (inlineText, quoteText): never a link, a heading or a quote of their own.
+ * The words the model pointed at, closing a sentence: «…», and a full stop after it unless they end in their own —
+ * kept as written, since a full stop may be the very error.
+ */
+const pointedAt = (quote: string) => `${inQuotes(quote)}${/[.!?…]$/.test(quote.trim()) ? "" : "."}`;
+
+/** The examples of the ticked problems: the page and the letter show them under «Главное». */
+const examplesOf = (s: Summary) =>
+  s.checks.flatMap((c) => c.problems.flatMap((p) => (p.chosen && p.example ? [p.example] : [])));
+
+/**
+ * «В примерах # и * — скрытые данные клиента.» once under «Главное» when the examples of the ticked problems carry the
+ * client data an export hides (lab/problemReport, MASKS); null when they do not.
+ */
+export function masksText(s: Summary): string | null {
+  const examples = examplesOf(s);
+  return masked(examples.flatMap((e) => [e.customer ?? "", e.reply ?? e.quote])) ? masksLine(examples.length) : null;
+}
+
+/**
+ * The summary as a letter (lab/problemReport, copyReport): the same as the page, the ticked problems only, each by its
+ * criterion's name with what the agent must do as points (lab/quote, ruleLines). Headings, paragraphs and a quote: the
+ * only Markdown the reports write; no line of the customer's, the agent's or the rules' words begins one of them.
  */
 export function summaryMarkdown(s: Summary): string {
-  const lines = [
-    `# Сводка для руководителя: ${inlineText(s.agent)}`,
-    "",
-    stop([s.file ? `Датасет «${inlineText(s.file)}»` : null, daysText(s.days)].filter(Boolean).join(" · ")),
-  ];
+  const masks = masksText(s);
+  const lines = [`# Сводка для руководителя: ${s.agent}`, "", stop(basisText(s))];
   for (const c of s.checks) {
     lines.push(
       "",
@@ -198,36 +233,42 @@ export function summaryMarkdown(s: Summary): string {
       "",
       [`${headline(c)}.`, unmeasuredText(c)].filter(Boolean).join(" "),
       ...c.severity.map(lineText),
-      // People's answers count the checked conversations: with none checked there is no «0 из 0» to give.
+      // Who found the errors, then the count with people's answers: with none checked there is no «0 из 0» to give.
       ...[
+        rechecked(c.answers),
         c.measured ? answersText(c.answers, "people") : null,
         c.compare,
         c.seriousCompare,
-        rechecked(c.answers),
       ].filter((x): x is string => !!x),
     );
   }
   const chosen = s.checks.filter((c) => c.problems.some((p) => p.chosen));
   if (chosen.length) {
-    lines.push("", "## Главное");
+    lines.push("", "## Главное", ...(masks ? ["", masks] : []));
     for (const c of chosen) {
       lines.push("", `### ${CHECK_NAME[c.check]}`);
       for (const p of c.problems.filter((x) => x.chosen)) {
         lines.push(
           "",
-          `#### ${headingOf(p)}`,
+          `#### ${p.name}${importanceTag(p)}`,
           "",
-          `Агент должен: ${inlineText(p.duty)}`,
-          `${problemCount(p)}.`,
+          ...(p.common ? [p.common] : []),
+          problemCount(p),
+          "",
+          "Агент должен:",
+          ...ruleLines(p.duty),
+          "",
           problemAnswers(p),
         );
         const e = p.example;
         if (e) {
-          lines.push("");
-          if (e.customer) lines.push(`Клиент: ${inlineText(e.customer)}`);
-          lines.push(quoteText(`Агент: ${e.reply ?? `«${e.quote}»`}`));
-          if (e.reply && !wholeReply(e.reply, e.quote))
-            lines.push(`Проверка указала на слова: ${quoted(inlineText(e.quote))}`);
+          // The customer's words and the reply as one quote, as the page puts them in one box.
+          const said = [
+            ...(e.customer ? [`Клиент: ${oneLine(e.customer)}`] : []),
+            `Агент: ${e.reply ?? inQuotes(e.quote)}`,
+          ];
+          lines.push(...said.flatMap((part) => part.split("\n")).map((line) => `> ${line.trim()}`));
+          if (e.reply && !wholeReply(e.reply, e.quote)) lines.push(`Модель указала на слова: ${pointedAt(e.quote)}`);
           if (e.refuted) lines.push("Люди ответили, что здесь ошибки нет.");
         }
       }
@@ -265,20 +306,27 @@ export function writeChosen(chosen: Chosen) {
   }
 }
 
-/** How many of a check's problems the summary takes when the person has not ticked any and none is serious. */
+/** How many of a check's problems the summary takes when the person has not ticked any and marked none important. */
 export const DEFAULT_CHOSEN = 3;
 
 /**
- * The ticked problems of a check, given its problems (serious first, then the most frequent) and the serious ones among
- * them: the person's ticks that still exist, else the serious problems, else the most frequent three. A person who
- * unticked everything gets nothing; ticks that all belong to criteria gone since (other rules, other code) count as
- * none given.
+ * The ticked problems of a check, given its problems with their errors and the ones a person marked important
+ * (lab/problems, importantByPerson): the person's ticks that still exist, else the important problems, else the three
+ * most frequent — a model's proposal ticks nothing. A person who unticked everything gets nothing; ticks that all
+ * belong to criteria gone since (other rules, other code) count as none given.
  */
-export function chosenOf(stored: string[] | undefined, problems: string[], serious: string[] = []): Set<string> {
+export function chosenOf(
+  stored: string[] | undefined,
+  problems: { id: string; failed: number }[],
+  important: string[] = [],
+): Set<string> {
+  const ids = problems.map((p) => p.id);
   if (stored) {
-    const known = stored.filter((id) => problems.includes(id));
+    const known = stored.filter((id) => ids.includes(id));
     if (known.length || !stored.length) return new Set(known);
   }
-  const grave = problems.filter((id) => serious.includes(id));
-  return new Set(grave.length ? grave : problems.slice(0, DEFAULT_CHOSEN));
+  const marked = ids.filter((id) => important.includes(id));
+  if (marked.length) return new Set(marked);
+  const frequent = [...problems].sort((a, b) => b.failed - a.failed).slice(0, DEFAULT_CHOSEN);
+  return new Set(frequent.map((p) => p.id));
 }
