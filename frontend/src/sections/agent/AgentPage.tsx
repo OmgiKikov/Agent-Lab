@@ -62,7 +62,7 @@ export function AgentPage() {
         <>
           {(back === "tone" || back === "code") && (
             <Link to={launchLink(back)} className={buttonClass()}>
-              К запуску
+              К новой проверке
             </Link>
           )}
           {/* The agent's code gives the criteria of Точность, hidden in the first release (app/product). */}

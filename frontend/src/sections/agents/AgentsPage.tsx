@@ -13,8 +13,9 @@ import { CheckResult } from "../../product/CheckResult";
 import { NewAgent } from "./NewAgent";
 
 /**
- * One agent: its name, what it is, the result of each of its checks. The whole card opens the agent; the bin in its
- * corner, shown on hover and always on a touch screen, asks to delete it.
+ * One agent: its name, what it is, the result of each of its checks. The cards of a row share one height and keep
+ * their results at the bottom, so the numbers and the bars of a row stand level. The whole card opens the agent; the
+ * bin in its corner, shown on hover and always on a touch screen, asks to delete it.
  */
 function AgentCard({ agent, onDelete }: { agent: Agent; onDelete: () => void }) {
   const lines = CHECKS.flatMap((c) => {
@@ -25,7 +26,7 @@ function AgentCard({ agent, onDelete }: { agent: Agent; onDelete: () => void }) 
     <div className="group relative">
       <a
         href={agentHref(agent.id)}
-        className="flex min-h-[176px] flex-col rounded-block md:min-h-[220px] border border-line bg-canvas p-5 transition-[border-color,box-shadow] hover:border-line-strong hover:shadow-card"
+        className="flex h-full min-h-[176px] flex-col rounded-block border border-line bg-canvas p-5 transition-[border-color,box-shadow] hover:border-line-strong hover:shadow-card md:min-h-[220px]"
       >
         <h2 className="pr-8 text-count font-semibold text-fg">{agent.name}</h2>
         {agent.description && <p className="mt-1 line-clamp-2 text-body text-fg-3">{agent.description}</p>}
@@ -40,7 +41,7 @@ function AgentCard({ agent, onDelete }: { agent: Agent; onDelete: () => void }) 
             <div>
               <p className="text-read text-fg-2">Ещё не проверялся</p>
               <p className="mt-2 inline-flex items-center gap-1 text-read font-medium text-run group-hover:underline">
-                Начать проверку
+                С чего начать
                 <ArrowRight aria-hidden className="size-4" />
               </p>
             </div>
@@ -120,7 +121,7 @@ function DeleteAgent({ agent, onClose }: { agent: Agent | null; onClose: () => v
 /**
  * «Агенты»: the first screen of the product. Every agent the Lab checks, each on its own dialogues by its own rules;
  * inside an agent, the product as it was. Never ranked or compared: their numbers come from other exports and other
- * rules.
+ * rules. «Новый агент» is offered once: in the head, or as the one action of the empty list.
  */
 export function AgentsPage() {
   const { data, isLoading, error } = useAgents();
@@ -163,7 +164,7 @@ export function AgentsPage() {
             <ServiceDown />
           </div>
         ) : isLoading || !data ? (
-          <div className="mt-10 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <div className="mt-10 grid gap-4 md:grid-cols-2">
             <Skeleton className="h-[220px]" />
             <Skeleton className="h-[220px]" />
           </div>
@@ -180,22 +181,15 @@ export function AgentsPage() {
           </div>
         ) : (
           <>
-            <div className="mt-10 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {/* Two to a row at most: a result's line keeps to one line, so the numbers of a row stand level too. */}
+            <div className="mt-10 grid gap-4 md:grid-cols-2">
               {data.map((agent) => (
                 <AgentCard key={agent.id} agent={agent} onDelete={() => setDeleting(agent)} />
               ))}
-              <button
-                type="button"
-                onClick={() => setCreating(true)}
-                className="flex min-h-[96px] flex-col items-center justify-center gap-2 rounded-block border border-dashed md:min-h-[220px] border-line-strong p-5 text-fg-3 transition-colors hover:border-fg-3 hover:text-fg"
-              >
-                <Plus aria-hidden className="size-5" />
-                <span className="text-read font-medium">Новый агент</span>
-              </button>
             </div>
             {data.length > 1 && (
               <p className="mt-8 max-w-[64ch] text-small text-fg-3">
-                Числа агентов не сравниваются: у каждого свои разговоры и правила.
+                Агентов не сравнивают между собой: у каждого свои разговоры и правила.
               </p>
             )}
           </>
