@@ -2,8 +2,8 @@
 
 A validator rubric in the rules (# Правила коммуникаций, a section per code) defines its criteria itself
 (coded_criteria); other rules get theirs from a model (roles.tone). A clarification people confirmed is part of the
-criterion the judge reads (for_judging) and stays with the same words of the rules (kept_clarifications). Pure
-functions: nothing is read or stored.
+criterion the judge reads (for_judging) and stays with the same words of the rules (kept_clarifications); a criterion's
+name is not: checks compare, and a result stands, by what the judge reads. Pure functions: nothing is read or stored.
 """
 
 import hashlib
@@ -116,10 +116,15 @@ def kept_clarifications(criteria: list[dict], previous: dict | None, source: dic
 
 
 def for_judging(rule: dict) -> dict:
+    """A criterion as the judge reads it: all of it but its name, which people give it to tell the criteria apart, with
+    the clarifications people confirmed in its text. Saved checks compare by it (criteria_fingerprint), an answer on a
+    verdict stays while it is the same (flows.tone.carry_decisions), and a save that keeps it keeps the result
+    (flows.judges.activate): a criterion renamed is the same criterion."""
+    read = {key: value for key, value in rule.items() if key != 'name'}
     notes = rule.get('clarifications') or []
-    if not notes:
-        return rule
-    return {**rule, 'text': rule['text'] + '\n\nУточнения, подтверждённые человеком:\n' + '\n'.join(notes)}
+    if notes:
+        read['text'] = rule['text'] + '\n\nУточнения, подтверждённые человеком:\n' + '\n'.join(notes)
+    return read
 
 
 def judged(snapshot: dict) -> tuple[dict, dict, dict]:
@@ -135,15 +140,44 @@ def judged(snapshot: dict) -> tuple[dict, dict, dict]:
 
 
 def criteria_fingerprint(criteria: list[dict], source: dict) -> str:
-    return fingerprint({'source': source['sha256'], 'criteria': sorted(criteria, key=lambda rule: rule['id'])})
+    """What the judge reads of these criteria (for_judging), in whatever order, and the rules they come from."""
+    judged = sorted(map(for_judging, criteria), key=lambda rule: rule['id'])
+    return fingerprint({'source': source['sha256'], 'criteria': judged})
+
+
+def compared(saved: dict) -> dict:
+    """The line of a saved check (snapshot) as the next check compares with it: its criteria fingerprinted as
+    criteria_fingerprint does now, from the criteria the record keeps, not as the Lab that saved it did. A check saved
+    while names were part of the fingerprint still compares with the next one the judge reads the same."""
+    sources = (saved.get('result') or {}).get('sources') or []
+    if not isinstance(saved.get('criteria'), list) or not sources:
+        return saved['check']
+    return saved['check'] | {'criteriaFingerprint': criteria_fingerprint(saved['criteria'], sources[0])}
+
+
+def named(result: dict, criteria: list[dict]) -> dict:
+    """A result whose criteria go by the names of these (the ones in force) where the judge reads them the same
+    (for_judging): a criterion renamed since the check is the one it judged by, under its new name. A criterion in
+    force that reads otherwise is another one, whatever its id: the result keeps the name it was judged under."""
+    by_id = {rule['id']: rule for rule in criteria}
+
+    def renamed(rule: dict) -> dict:
+        now = by_id.get(rule['id'])
+        if now is None or now.get('name') == rule.get('name') or for_judging(now) != for_judging(rule):
+            return rule
+        return rule | {'name': now['name']}
+
+    if not result.get('topics'):
+        return result
+    return result | {'topics': [topic | {'rules': list(map(renamed, topic['rules']))} for topic in result['topics']]}
 
 
 def snapshot(
     result: dict, dialogues: list[dict], criteria: list[dict], source: dict, export: dict, previous: dict | None
 ) -> dict:
-    """The record of a finished check in the history: its line, how it stands to the check saved before it, and the
-    evidence behind it: the conversations, the criteria and the rules they came from. export: the file the
-    conversations came from and how many it had."""
+    """The record of a finished check in the history: its line, how it stands to the check saved before it (previous,
+    as compared gives it), and the evidence behind it: the conversations, the criteria and the rules they came from.
+    export: the file the conversations came from and how many it had."""
     check = {
         'id': result['checkId'],
         'finishedAt': result['finishedAt'],

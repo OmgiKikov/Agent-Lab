@@ -369,7 +369,7 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
                     'status': status,
                     'reason': 'Тестовый вердикт',
                     'agentQuote': text,
-                    'title': r['name'],
+                    'title': 'Нет обращения на вы' if status == 'FAIL' else '',
                 }
                 for r in rules
             ]

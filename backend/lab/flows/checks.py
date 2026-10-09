@@ -4,18 +4,26 @@ conversation with its evaluation. Reads stored records only: no model is called.
 """
 
 from .. import agents, storage
-from ..domain import answers, checks, judges, metric, results, statistics, was_is
+from ..domain import answers, checks, judges, metric, results, statistics, tone, was_is
 from ..domain import problems as problem_book
 from . import inputs
 
 
 def current(check: str) -> dict | None:
-    """The check's current result with the answers people gave on its verdicts (domain.answers.on_result); None when
-    it has none."""
+    """The check's current result with the answers people gave on its verdicts (domain.answers.on_result), and tone of
+    voice's under the names its criteria have now (domain.tone.named); None when it has none."""
     result = storage.documents.load(checks.result(check))
     if not result:
         return result
+    result = _named(check, result)
     return answers.on_result(result, storage.reviews.visible(answers.LOG, answers.record_of(check, result)))
+
+
+def _named(check: str, result: dict) -> dict:
+    """Tone of voice's result under the names its criteria have now (domain.tone.named); Точность's as it is."""
+    if check != checks.TONE:
+        return result
+    return tone.named(result, (storage.documents.load(inputs.TONE_DRAFT) or {}).get('criteria') or [])
 
 
 def shown(check: str) -> dict | None:
@@ -156,7 +164,7 @@ def comparison(check: str) -> dict:
     """The current result against the saved check before it. Without a current result (a new export not checked yet)
     the last saved check is named, nothing compared; a result from before the history has nothing to compare with."""
     saved = saved_checks(check)
-    result = storage.documents.load(checks.result(check)) or {}
+    result = _named(check, storage.documents.load(checks.result(check)) or {})
     current = next((record for record in saved if record['id'] == result.get('checkId')), None)
     if current is None:
         latest = None if result.get('results') else next(iter(saved), None)
