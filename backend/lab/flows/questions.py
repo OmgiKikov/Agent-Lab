@@ -203,6 +203,8 @@ async def _play(agent: agents.HttpAgent, item: dict, criteria: list[dict]) -> No
             and bool(before.get('model'))
             and all(before.get(key) == item.get(key) for key in ('model', 'judgeVersion', 'knowledge'))
         )
+    except models.RateLimited:
+        raise  # every next question would meet the same limit of the model: the run stops, to be continued later
     except (agents.AgentError, models.ModelError) as error:
         item.update(status='UNMEASURED', error=str(error))
 

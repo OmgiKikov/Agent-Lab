@@ -8,10 +8,10 @@ Two backends, chosen as the Lab starts (endpoints):
   with LAB_SECOND_MODEL (+ LAB_SECOND_URL / LAB_SECOND_KEY). It re-checks every verdict; its actual model is recorded in
   that result. Without it, or when it is the main model again, there is no second check (second_judge).
 
-chat() is the one way to ask: within the limit of concurrent calls, asked again when another try may pass (no
-connection, 429, 5xx), and every try written to the agent's journal of calls with the role that asks, the version of
-its instructions and what the calls are about (about): a check, a run, a deck. The journal keeps no conversation: the
-texts are in the results already. The roles (roles/) ask through it.
+chat() is the one way to ask: within the limit of concurrent calls (one by default), asked again when another try may
+pass (no connection, 5xx; over the limit of requests, 429, for longer), and every try written to the agent's journal of
+calls with the role that asks, the version of its instructions and what the calls are about (about): a check, a run, a
+deck. The journal keeps no conversation: the texts are in the results already. The roles (roles/) ask through it.
 """
 
 import asyncio
@@ -32,7 +32,7 @@ from pydantic import SecretStr, ValidationError
 from .. import config, storage
 from . import gateway, openai_compatible
 from .completion import Completion
-from .errors import MalformedAnswer, ModelError, refused
+from .errors import MalformedAnswer, ModelError, RateLimited, refused
 from .openai_compatible import NO_KEY, OPENROUTER
 
 GATEWAY = 'gateway'
@@ -41,7 +41,16 @@ DEFAULT_MODEL = 'z-ai/glm-5.3'
 ATTEMPTS = 3  # tries of a call that may pass later; after a read timeout, one more try only
 CONNECT_TIMEOUT = 10  # seconds: an unreachable model fails fast, while an answer may take the whole read timeout
 PAUSE = 2  # seconds before the second try, doubled before each next one, plus up to as much again at random
-MAX_PAUSE = 30  # a longer Retry-After is cut to this
+MAX_PAUSE = 60  # a longer Retry-After is cut to this, and so is a pause that doubled past it
+# Over its limit of requests (429) a model is waited for longer, as the limit passes with time: up to LIMIT_ATTEMPTS
+# tries, the pause it asks for or one doubling from LIMIT_PAUSE, about four minutes in all. Then the work stops
+# (RateLimited), whatever it did kept.
+LIMIT_ATTEMPTS = 8
+LIMIT_PAUSE = 5
+RATE_LIMITED = (
+    'Модель не принимает запросы: превышен лимит (HTTP 429). Lab подождал и повторил запрос {} раз, но лимит не снят. '
+    'Подождите несколько минут и продолжите: сделанное сохранено.'
+)
 # No connection, a dropped one, or no answer in time: the next try may pass.
 _TRANSIENT = (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)
 # No connection, or no answer in time: what is wrong in plain words, the exception's name for support, and where to
@@ -157,9 +166,10 @@ async def chat(
     attempts: int = ATTEMPTS,
     call: Call | None = None,
 ) -> Reply:
-    """One answer in words. No connection, 429 and 5xx are asked again, up to `attempts` tries, after the pause the
-    model asked for or a doubling one; a read timeout once only, as the model may have done (and billed) the work;
-    nothing else. Every try goes to the journal."""
+    """One answer in words. No connection and 5xx are asked again, up to `attempts` tries, after the pause the model
+    asked for or a doubling one; a model over its limit of requests (429) longer, up to LIMIT_ATTEMPTS tries, then
+    RateLimited — unless the caller asked for one try only; a read timeout once only, as the model may have done (and
+    billed) the work; nothing else. Every try goes to the journal."""
     base, model = endpoint or endpoints().main
     if isinstance(messages, str):
         messages = [{'role': 'user', 'content': messages}]
@@ -175,9 +185,15 @@ async def chat(
         except ModelError as error:
             await _journal(call, base, model, started, clock, error=error)
             timeouts += isinstance(error.__cause__, httpx.ReadTimeout)
-            if not error.retryable or attempt >= attempts or timeouts > 1:
+            limited = error.status == 429 and attempts > 1
+            tries = max(attempts, LIMIT_ATTEMPTS) if limited else attempts
+            if not error.retryable or attempt >= tries or timeouts > 1:
+                if limited:
+                    raise RateLimited(
+                        RATE_LIMITED.format(attempt), status=429, retryable=True, detail=str(error)
+                    ) from error
                 raise
-            await asyncio.sleep(_pause(attempt, error.retry_after))
+            await asyncio.sleep(_pause(attempt, error.retry_after, limited))
             continue
         line = await _journal(call, base, model, started, clock, done=done)
         return Reply(done.text.strip(), done.model, line)
@@ -212,12 +228,13 @@ def _key(endpoint: Endpoint) -> str | None:
     return found.main_key if endpoint[0] == found.main[0] else None
 
 
-def _pause(attempt: int, retry_after: float | None) -> float:
+def _pause(attempt: int, retry_after: float | None, limited: bool = False) -> float:
     """Seconds before the next try: the model's own Retry-After up to MAX_PAUSE, else a doubling pause with jitter, so
-    the calls that failed together do not all come back at once."""
+    the calls that failed together do not all come back at once; over the limit of requests, from a longer first one."""
     if retry_after is not None:
         return min(retry_after, MAX_PAUSE)
-    return PAUSE * 2 ** (attempt - 1) + random.uniform(0, PAUSE)
+    first = LIMIT_PAUSE if limited else PAUSE
+    return min(first * 2 ** (attempt - 1), MAX_PAUSE) + random.uniform(0, first)
 
 
 async def _journal(
@@ -368,6 +385,7 @@ __all__ = [
     'Endpoints',
     'MalformedAnswer',
     'ModelError',
+    'RateLimited',
     'Reply',
     'about',
     'chat',

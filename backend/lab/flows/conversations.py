@@ -45,9 +45,11 @@ def same_material(count: int) -> dict:
 
 async def judge_dialogue(dialogue: dict, topic: dict) -> dict:
     """One conversation judged by the criteria of its topic, by both judges. A conversation the model could not judge
-    stays «не удалось проверить», with the reason, and never fails the check. The systems the agent called, where its
-    replies carry them (events: its answers to recorded questions asked again), are shown to the judges under each
-    reply and are the only evidence of a call, as in a played conversation."""
+    stays «не удалось проверить», with the reason, and never fails the check — except a model that stayed over its
+    limit of requests (RateLimited): every next conversation would meet the same limit, so the check stops with what it
+    judged kept, to be continued later. The systems the agent called, where its replies carry them (events: its answers
+    to recorded questions asked again), are shown to the judges under each reply and are the only evidence of a call,
+    as in a played conversation."""
     rules, shown = topic['rules'], export.conversation(dialogue)
     tools = '\n'.join(call for message in dialogue['messages'] for call in tool_calls(message))
     knowledge, context_error = [], None
@@ -67,6 +69,8 @@ async def judge_dialogue(dialogue: dict, topic: dict) -> dict:
             second = await judge.second_opinion(judge.log_verdict, rules, shown, tools)
         rows, status, model, version = verdict.rows, verdict.status, verdict.model, verdict.version
         error = None
+    except models.RateLimited:
+        raise
     except models.ModelError as exc:
         rows = verdicts.checked([], rules, '')
         status, second, error, model, version = verdicts.verdict_of(rows), None, str(exc), None, None

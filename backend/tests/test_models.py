@@ -217,10 +217,38 @@ class RetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(line['ms'] >= 0 and line['at'] for line in lines))
         self.assertEqual(storage.calls.listed('elsewhere'), [])
 
-    async def test_a_long_retry_after_is_cut_and_three_tries_are_the_most(self):
+    async def test_a_model_over_its_limit_is_waited_for_longer_then_the_work_stops_in_words(self):
         busy = status(429, **{'Retry-After': '3600'})
-        result, requests, pauses = await self.ask(busy, busy, busy)
-        self.assertEqual((requests, pauses, result.status), (3, [models.MAX_PAUSE, models.MAX_PAUSE], 429))
+        result, requests, pauses = await self.ask(*[busy] * models.LIMIT_ATTEMPTS)
+        tries = models.LIMIT_ATTEMPTS
+        self.assertEqual((requests, pauses), (tries, [models.MAX_PAUSE] * (tries - 1)))  # a long Retry-After is cut
+        self.assertIsInstance(result, models.RateLimited)
+        self.assertEqual((result.status, str(result)), (429, models.RATE_LIMITED.format(tries)))
+        self.assertIn('превышен лимит (HTTP 429)', str(result))
+
+    async def test_a_limit_without_retry_after_is_waited_for_longer_and_longer(self):
+        result, requests, pauses = await self.ask(status(429), status(429), answered())
+        self.assertEqual((result.model, requests), ('m', 3))
+        first = models.LIMIT_PAUSE
+        self.assertTrue(first <= pauses[0] < 2 * first <= pauses[1] < 3 * first, pauses)
+
+    async def test_the_connection_check_says_the_limit_at_once(self):
+        """«Проверить модели» asks once: a model over its limit says so at once, in words."""
+        requests, pauses = [], []
+
+        def handler(request):
+            requests.append(request)
+            return httpx.Response(429, request=request)
+
+        with (
+            patch.object(models.httpx, 'AsyncClient', side_effect=client_for(handler)),
+            patch.object(models.asyncio, 'sleep', AsyncMock(side_effect=pauses.append)),
+        ):
+            checked = await models.check(('http://p/v1', 'm'))
+        self.assertEqual(
+            (checked, len(requests), pauses),
+            ({'ok': False, 'error': 'Модель ответила ошибкой: превышен лимит запросов (HTTP 429).'}, 1, []),
+        )
 
     async def test_a_retry_after_date_is_read_as_seconds(self):
         when = format_datetime(datetime.now(UTC) + timedelta(seconds=20), usegmt=True)

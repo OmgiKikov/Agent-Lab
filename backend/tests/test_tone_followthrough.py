@@ -12,6 +12,7 @@ from lab.flows import answers as answering
 from lab.flows import checks as results_of
 from lab.flows import conversations, simulation, tone
 from lab.flows import scenarios as cards
+from lab.roles import judge as judging
 
 
 def judged(status='FAIL', model='model-a', down=()):
@@ -150,6 +151,49 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         result = await self.check(count=2, down={'d2'})
         self.assertEqual((result['summary']['measured'], result['summary']['unmeasured']), (1, 1))
         self.assertEqual(len(storage.history.lines('tone')), 1)
+
+    async def test_a_model_over_its_limit_stops_the_check_and_the_same_check_goes_on_from_there(self):
+        """Every next conversation would meet the same limit: the check stops in words, keeps what it judged, and the
+        same check started again judges only the rest, nothing marked «не удалось проверить» on the way."""
+        await self.upload(self.dialogue, self.other)
+        over = {'Где мой терминал?'}
+        asked = []
+
+        async def verdict(rules, shown, tools='', model=None):
+            opening = shown[0]['text']
+            if opening in over:
+                raise models.RateLimited(models.RATE_LIMITED.format(models.LIMIT_ATTEMPTS), status=429)
+            if model is None:
+                asked.append(opening)
+            rows = [
+                {
+                    'ruleId': rule['id'],
+                    'rule': rule['text'],
+                    'status': 'PASS',
+                    'reason': 'Ответ следует критерию.',
+                    'agentQuote': shown[-1]['text'],
+                    'title': '',
+                }
+                for rule in rules
+            ]
+            return judging.Verdict(rows, 'PASS', 'model-a', 'v1')
+
+        draft = storage.documents.load(tone.DRAFT)
+        request = {'ruleIds': ['pronouns'], 'count': 2, 'revision': draft['revision']}
+        with patch.object(judging, 'log_verdict', side_effect=verdict):
+            await self.client.post('/api/tone-of-voice/check', json=request)
+            await self.wait_job()
+            self.assertEqual(self.jobs.state['error'], models.RATE_LIMITED.format(models.LIMIT_ATTEMPTS))
+            self.assertIsNone(storage.documents.load(tone.RESULT))
+            before, over = list(asked), set()
+            await self.client.post('/api/tone-of-voice/check', json=request)
+            await self.wait_job()
+        self.assertIsNone(self.jobs.state['error'])
+        # The second start judged only what the first did not: no conversation twice, both in the result.
+        self.assertEqual(sorted(asked), sorted({'Как принести документы?', 'Где мой терминал?'}))
+        self.assertEqual(len(asked), 2, (before, asked))
+        result = storage.documents.load(tone.RESULT)
+        self.assertEqual((result['summary']['measured'], result['summary']['unmeasured']), (2, 0))
 
     async def test_an_answer_survives_a_check_that_could_not_decide_its_conversation(self):
         await self.upload(self.dialogue, self.other)

@@ -30,11 +30,16 @@ class MalformedAnswer(ModelError):
     """The model answered, but not in the agreed form: another answer may be well-formed (llm.structured)."""
 
 
+class RateLimited(ModelError):
+    """The model kept refusing over its limit of requests (HTTP 429) through every try (models.chat): every call after
+    this one would meet the same limit, so long work stops here, with what it did kept, to be continued later."""
+
+
 def refused(prefix: str, response: httpx.Response) -> ModelError:
     """An error status: a busy (429) or failing (5xx) model may answer later, any other 4xx will not."""
     status = response.status_code
     return ModelError(
-        f'{prefix} (HTTP {status}).',
+        f'{prefix}{": превышен лимит запросов" if status == 429 else ""} (HTTP {status}).',
         status=status,
         retryable=status == 429 or status >= 500,
         retry_after=_seconds(response.headers.get('Retry-After')),
