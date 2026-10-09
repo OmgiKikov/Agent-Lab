@@ -81,7 +81,7 @@ async def retry(launch_id: str, jobs: Jobs) -> dict:
     given = record['inputs'] if record is not None else _task(launch_id)['input']
     if not launches.current({'inputs': given, 'check': given['check']}):
         raise HTTPException(
-            409, 'После этого запуска сменились правила или датасет. Запустите новую проверку, она пойдёт по текущим.'
+            409, 'После этой проверки сменились правила или датасет. Запустите новую проверку, она пойдёт по текущим.'
         )
     return await launch(jobs, LaunchCommand(**given))
 
@@ -90,7 +90,7 @@ def _task(launch_id: str) -> dict:
     """The task of a launch kept with no record of it (stopped before the record's first save), else 404."""
     task = storage.tasks.get(launch_id)
     if task is None or task['kind'] != 'launch':
-        raise HTTPException(404, 'Запуск не найден.')
+        raise HTTPException(404, 'Проверка не найдена.')
     return task
 
 
@@ -110,7 +110,7 @@ def question(run_id: str, dialogue_id: str) -> dict:
     """One recorded conversation asked again, in full: both sides and the verdicts on the new answers."""
     found = next((i for i in _questions(run_id)['items'] if str(i['dialogueId']) == dialogue_id), None)
     if found is None:
-        raise HTTPException(404, 'Такого разговора в запуске нет.')
+        raise HTTPException(404, 'Такого разговора в проверке нет.')
     baseline = found.get('baseline')
     return {key: value for key, value in found.items() if key != 'criteria'} | {
         'baseline': baseline and {'status': baseline.get('status')}

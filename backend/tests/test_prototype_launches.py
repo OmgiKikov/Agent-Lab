@@ -511,12 +511,43 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
         with patch('lab.flows.launches._mode', new=AsyncMock(side_effect=mode)):
             first = work.start(self.jobs, 'launch', launches.prepare(given))
             await wait()
+            self.assertEqual(self.jobs.state['error'], '«Вопросы живому агенту»: Временный сбой')
             second = work.start(self.jobs, 'launch', launches.prepare(given))
             await wait()
         self.assertEqual(first['task'], second['task'])
         self.assertEqual(calls.count('dataset'), 1)
         self.assertEqual(calls.count('questions'), 2)
-        self.assertEqual(storage.launches.get('launch', first['task'])['status'], 'done')
+        done = storage.launches.get('launch', first['task'])
+        self.assertEqual((done['status'], done.get('error')), ('done', None))
+
+    async def test_a_failed_launch_says_its_own_reason(self):
+        """A launch that failed says why in its own words, never «Часть режимов не завершена»: the reason its one way
+        of checking gave, or the reason of each way that failed, by the way's name."""
+        from lab.api import work
+
+        reasons = {
+            'dataset': 'Модель не ответила ни по одному разговору.',
+            'questions': 'Агент не ответил ни на один вопрос.',
+        }
+
+        async def failing(name, *args):
+            raise ValueError(reasons[name])
+
+        for modes, said in (
+            (['dataset'], reasons['dataset']),
+            (
+                ['dataset', 'questions'],
+                f'«Ответы в датасете»: {reasons["dataset"]} «Вопросы живому агенту»: {reasons["questions"]}',
+            ),
+        ):
+            with self.subTest(modes=modes), patch('lab.flows.launches._mode', new=AsyncMock(side_effect=failing)):
+                started = work.start(self.jobs, 'launch', launches.prepare(self.given(modes=modes)))
+                for _ in range(100):
+                    if not self.jobs.state['running']:
+                        break
+                    await asyncio.sleep(0.01)
+                self.assertEqual(self.jobs.state['error'], said)
+                self.assertEqual(storage.launches.get('launch', started['task'])['error'], said)
 
     async def test_a_launch_whose_task_was_given_up_is_never_shown_running(self):
         """The Lab closed under a launch and the next start gave its task up: on its page and in the list the launch

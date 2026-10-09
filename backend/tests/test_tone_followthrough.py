@@ -129,7 +129,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             await self.wait_job()
         self.assertEqual(
             self.jobs.state['error'],
-            'Модель проверки не ответила ни по одному разговору. Проверьте модель в разделе «Настройки».',
+            'Модель не ответила ни по одному разговору. Проверьте модель в разделе «Настройки».',
         )
         self.assertIsNone(storage.documents.load(tone.RESULT))
         previous = await self.check()
@@ -140,8 +140,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             await self.wait_job()
         self.assertEqual(
             self.jobs.state['error'],
-            'Модель проверки не ответила ни по одному разговору. Прежний итог сохранён. '
-            'Проверьте модель в разделе «Настройки».',
+            'Модель не ответила ни по одному разговору. Прежний итог сохранён. Проверьте модель в разделе «Настройки».',
         )
         self.assertEqual(storage.documents.load(tone.RESULT), previous)
         self.assertEqual(storage.documents.load(cards.DECK), deck)

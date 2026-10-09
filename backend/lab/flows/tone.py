@@ -93,7 +93,7 @@ async def prepare(progress: Progress) -> dict:
     """New criteria from the current rules, not saved yet: from their code when they define it, else from the model."""
     source = current_policy()
     if not storage.dialogues.count():
-        raise ValueError('Сначала загрузите диалоги.')
+        raise ValueError('Сначала загрузите датасет.')
     progress(message='Собираем критерии из правил общения')
     criteria = tone.coded_criteria(source)
     model = None
@@ -285,7 +285,7 @@ async def _assess(check_id: str, criteria: list[dict], count: int, progress: Pro
     source, draft = current_policy(), storage.documents.load(DRAFT)
     dialogues = conversations.sample(count)
     if not dialogues:
-        raise ValueError('Сначала загрузите диалоги.')
+        raise ValueError('Сначала загрузите датасет.')
     started = storage.now()
     topic = {'id': 't1', 'title': checks.TONE_TOPIC, 'rules': criteria, 'dialogueIds': [d['id'] for d in dialogues]}
     kept = storage.tasks.steps()

@@ -4,7 +4,7 @@ results; a result that judged nothing is no result."""
 
 from . import quotes
 
-UNANSWERED = 'Модель проверки не ответила ни по одному разговору.'
+UNANSWERED = 'Модель не ответила ни по одному разговору.'
 
 
 def with_unmeasured(summary: dict, sampled: object) -> dict:

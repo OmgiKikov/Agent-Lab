@@ -163,7 +163,7 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
     async def test_an_outage_says_the_previous_result_is_kept_only_when_the_check_has_one(self):
         self.assertIsNone(await self.assess_code())
         unanswered, advice = (
-            'Модель проверки не ответила ни по одному разговору.',
+            'Модель не ответила ни по одному разговору.',
             ' Проверьте модель в разделе «Настройки».',
         )
         self.assertEqual(await self.check_tone(down={'d1'}), unanswered + advice)

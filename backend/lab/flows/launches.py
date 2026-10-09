@@ -24,6 +24,8 @@ from . import (
 )
 
 MODES = ('dataset', 'questions', 'simulations')
+# The ways of checking as the screens name them.
+NAMES = {'dataset': 'Ответы в датасете', 'questions': 'Вопросы живому агенту', 'simulations': 'Симуляции клиента'}
 STOPPED = 'Остановлено пользователем.'
 
 
@@ -124,6 +126,7 @@ async def run(given: dict, progress: Progress) -> dict:
             'modes': {mode: {'status': 'pending'} for mode in MODES if mode in given['modes']},
         }
     record['status'] = 'running'
+    record.pop('error', None)
     storage.launches.save('launch', record)
     try:
         for mode, result in record['modes'].items():
@@ -144,7 +147,7 @@ async def run(given: dict, progress: Progress) -> dict:
             except Exception as error:
                 result.update(status='failed', error=error_text(error))
             storage.launches.save('launch', record)
-        record['status'] = 'done' if all(r['status'] == 'done' for r in record['modes'].values()) else 'failed'
+        record.update(_ended(record['modes']))
     except asyncio.CancelledError:
         if not storage.tasks.closing():
             record['status'] = 'stopped'
@@ -157,8 +160,19 @@ async def run(given: dict, progress: Progress) -> dict:
             record['finishedAt'] = storage.now()
         storage.launches.save('launch', record)
     if record['status'] == 'failed':
-        raise RuntimeError('Часть режимов не завершена. Результаты успешных режимов сохранены в отчёте запуска.')
+        raise RuntimeError(record['error'])
     return record
+
+
+def _ended(modes: dict[str, dict]) -> dict:
+    """How a launch ended once each of its ways of checking did: done, or failed for their own reasons, each by the
+    way's name when it had more than one."""
+    failed = {mode: outcome['error'] for mode, outcome in modes.items() if outcome['status'] != 'done'}
+    if not failed:
+        return {'status': 'done'}
+    if len(modes) == 1:
+        return {'status': 'failed', 'error': next(iter(failed.values()))}
+    return {'status': 'failed', 'error': ' '.join(f'«{NAMES[mode]}»: {error}' for mode, error in failed.items())}
 
 
 def _waits_for_answers(mode: str, given: dict, record: dict) -> str | None:

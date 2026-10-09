@@ -68,8 +68,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(
             response.json()['detail'],
-            'Не удалось прочитать файл. Строка 1 не читается как JSON. '
-            'Нужна выгрузка чата, по одному разговору в строке.',
+            'Не удалось прочитать файл. Строка 1 не читается как JSON. В датасете нужен один разговор в строке.',
         )
 
     async def test_successful_upload_invalidates_old_audit_and_scenarios(self) -> None:
@@ -138,8 +137,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         down.assert_awaited_once()
         self.assertEqual(
             self.jobs.state['error'],
-            'Модель проверки не ответила ни по одному разговору. Прежний итог сохранён. '
-            'Проверьте модель в разделе «Настройки».',
+            'Модель не ответила ни по одному разговору. Прежний итог сохранён. Проверьте модель в разделе «Настройки».',
         )
         self.assertEqual(storage.documents.load(accuracy.RESULT), previous)
         self.assertEqual(storage.documents.load(checks.DECK), {'cards': ['built from the previous audit']})
