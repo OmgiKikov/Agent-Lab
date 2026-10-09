@@ -1,14 +1,12 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, Copy, Loader2 } from "lucide-react";
-import { rulesLine, takeRules, useRulesSources, type RulesSource } from "../../lab/agents";
 import { SIMULATIONS } from "../../app/product";
+import { takeRules, useRulesSources, type RulesSource } from "../../lab/agents";
 import { count } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { TONE_ID, toneResult } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
-import { Button, buttonClass } from "../../ui/Button";
-import { Menu } from "../../ui/Menu";
+import { Button } from "../../ui/Button";
 import { Modal } from "../../ui/Modal";
 import { useToast } from "../../ui/toast";
 
@@ -34,7 +32,7 @@ function whatGoes(state: LabState, from: RulesSource) {
 }
 
 /**
- * Taking another agent's rules (backend: tone.take), for a menu or a list of cards: in a bank the rules of
+ * Taking another agent's rules (backend: tone.take), for the cards of «Правила общения»: in a bank the rules of
  * communication are usually common to all support agents. Another agent's rules and their criteria, with the
  * clarifications people confirmed, become this agent's own as a copy; after that each agent keeps its own. Rules or a
  * result this agent has are replaced only after the person agrees: `choose` asks then, and `confirm` is the question to
@@ -93,38 +91,4 @@ export function useTakeRules(state: LabState, onTaken: (criteria: boolean) => vo
     </Modal>
   );
   return { sources, busy, choose, confirm };
-}
-
-/** «Взять у другого агента» as a menu of the agents with rules; nothing when no other agent has them. */
-export function TakeRules({
-  state,
-  disabled,
-  onTaken,
-}: {
-  state: LabState;
-  disabled: boolean;
-  onTaken: (criteria: boolean) => void;
-}) {
-  const { sources, busy, choose, confirm } = useTakeRules(state, onTaken);
-  if (!sources.length) return null;
-  return (
-    <>
-      <Menu
-        disabled={disabled || !!busy}
-        items={sources.map((a) => ({ key: a.id, label: a.name, sub: rulesLine(a.rules), run: () => choose(a) }))}
-        trigger={
-          <span className={buttonClass({ variant: "ghost" })}>
-            {busy ? (
-              <Loader2 aria-hidden className="size-3.5 animate-spin" />
-            ) : (
-              <Copy aria-hidden className="size-3.5" />
-            )}
-            Взять у другого агента
-            <ChevronDown aria-hidden className="size-3.5" />
-          </span>
-        }
-      />
-      {confirm}
-    </>
-  );
 }
