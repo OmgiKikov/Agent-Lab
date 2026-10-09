@@ -17,6 +17,7 @@ import { UploadButton } from "../../product/UploadLogs";
 import { Button, buttonClass } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
+import { Tag } from "../../ui/Tag";
 import { useToast } from "../../ui/toast";
 import { ArchiveSheet, DatasetInfo, shownName } from "./DatasetInfo";
 import { CheckCards, type Found } from "./CheckCards";
@@ -29,18 +30,22 @@ const Num = ({ n, bad }: { n: number; bad?: boolean }) => (
 
 type Fact = { key: string; node: ReactNode };
 
-/** Facts in a row, a dot between them; a fact and its dot go to the next line together. */
-function Facts({ facts }: { facts: Fact[] }) {
+/**
+ * Facts in a row, a dot between them; a fact and its dot go to the next line together, and `end` (the button of the
+ * details) with the last fact, never alone on a line of its own.
+ */
+function Facts({ facts, end }: { facts: Fact[]; end?: ReactNode }) {
   return (
     <span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-1">
       {facts.map((fact, i) => (
-        <span key={fact.key} className="whitespace-nowrap">
+        <span key={fact.key} className="inline-flex items-center whitespace-nowrap">
           {i > 0 && (
             <span aria-hidden className="mr-1.5">
               ·
             </span>
           )}
           {fact.node}
+          {i === facts.length - 1 && end}
         </span>
       ))}
     </span>
@@ -71,16 +76,41 @@ function foundIn(d: Dataset, state: LabState, inWork: boolean, launches: Launch[
 
 /**
  * One dataset in the list: its name, how many conversations and when it came, and what each check found in it as
- * «Итог» says it — or that the one the checks read now is not checked yet. The row opens its page.
+ * «Итог» says it — or that the one the checks read now is not checked yet. Among several, the one the checks go by is
+ * marked «выбран для проверки» (`selected`) and any other has the button that chooses it (`action`). The row opens its
+ * page; the button over it does only its own.
  */
-function Row({ d, found, unchecked }: { d: Dataset; found: Found[]; unchecked: boolean }) {
+function Row({
+  d,
+  found,
+  unchecked,
+  selected,
+  action,
+}: {
+  d: Dataset;
+  found: Found[];
+  unchecked: boolean;
+  selected: boolean;
+  action?: ReactNode;
+}) {
+  // The button stands beside the arrow on a wide screen, under the facts on a phone, where the facts keep the width.
   return (
-    <Link
-      to={datasetLink(d.id)}
-      className="group -mx-3 flex items-start gap-4 rounded-block px-3 py-4 transition-colors hover:bg-hover focus-visible:bg-hover focus-visible:outline-none"
+    <div
+      className={cn(
+        "group relative -mx-3 grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-3 rounded-block px-3 py-4 transition-colors focus-within:bg-hover hover:bg-hover",
+        action && "sm:grid-cols-[minmax(0,1fr)_auto_auto]",
+      )}
     >
-      <span className="min-w-0 flex-1">
-        <span className="block break-words text-read font-semibold text-fg">{shownName(d)}</span>
+      <span className="min-w-0">
+        <span className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+          <Link
+            to={datasetLink(d.id)}
+            className="break-words text-read font-semibold text-fg after:absolute after:inset-0 after:rounded-block focus-visible:outline-none"
+          >
+            {shownName(d)}
+          </Link>
+          {selected && <Tag>выбран для проверки</Tag>}
+        </span>
         <span className="mt-1 block text-body text-fg-3">
           {count(d.total, "разговор", "разговора", "разговоров")} · загружен {longDay(d.createdAt)}
           {d.skipped ? ` · пропущено ${d.skipped}` : ""}
@@ -104,16 +134,21 @@ function Row({ d, found, unchecked }: { d: Dataset; found: Found[]; unchecked: b
       </span>
       <ArrowRight
         aria-hidden
-        className="mt-1 size-4 shrink-0 text-fg-4 transition-transform group-hover:translate-x-0.5"
+        className={cn(
+          "col-start-2 row-start-1 mt-1 size-4 text-fg-4 transition-transform group-hover:translate-x-0.5",
+          action && "sm:col-start-3",
+        )}
       />
-    </Link>
+      {action && <span className="relative z-10 col-start-1 row-start-2 sm:col-start-2 sm:row-start-1">{action}</span>}
+    </div>
   );
 }
 
 /**
- * «Датасеты»: every dataset of the agent as a list, newest first, each with what the checks found in it; a dataset
- * opens on its own page (`/data/:id`) with its conversations as the file has them — looking at one changes nothing.
- * «Добавить датасет» is the list's one black button. The archive is under the list. Without a dataset, where to get one.
+ * «Датасеты»: every dataset of the agent as a list, newest first, each with what the checks found in it, the one the
+ * checks go by marked and any other chosen for them by its button; a dataset opens on its own page (`/data/:id`) with
+ * its conversations as the file has them — looking at one changes nothing. «Добавить датасет» is the list's one black
+ * button. The archive is under the list. Without a dataset, where to get one.
  */
 export function DataPage() {
   const { datasetId } = useParams();
@@ -121,7 +156,14 @@ export function DataPage() {
   const library = useDatasets(true);
   const launches = useLaunches(undefined, `${state?.job.id}-${state?.job.running}`);
   const navigate = useNavigate();
+  const toast = useToast();
   const [archive, setArchive] = useState(false);
+  // The checks, «Итог» and «Обзор» go by the dataset chosen: its own results come back with it (flows/datasets).
+  const choose = (d: Dataset) =>
+    library
+      .change("select", d.id)
+      .then(() => toast.notify(`Для проверки выбран датасет «${shownName(d)}»`))
+      .catch(toast.error);
 
   const all = library.data?.datasets ?? [];
   const listed = all.filter((x) => !x.archivedAt);
@@ -134,7 +176,7 @@ export function DataPage() {
       actions={
         !datasetId &&
         listed.length > 0 && (
-          <UploadButton label="Добавить датасет" compact onLoaded={() => void navigate(SECTIONS.data)} />
+          <UploadButton label="Добавить датасет" short="Добавить" onLoaded={() => void navigate(SECTIONS.data)} />
         )
       }
       below={<SectionJob kinds={["logs"]} />}
@@ -200,7 +242,7 @@ export function DataPage() {
           <p className="mt-3 max-w-[65ch] text-read text-fg-3">
             {archived.length
               ? "Верните нужный из архива или загрузите новый датасет."
-              : "Датасет — выгрузка чата с настоящими разговорами клиентов: по нему проверяется агент."}
+              : "Датасет — файл с настоящими разговорами клиентов из чата: по нему проверяется агент."}
           </p>
           {archived.length > 0 && (
             <Button className="mt-5" icon={Archive} onClick={() => setArchive(true)}>
@@ -237,9 +279,28 @@ export function DataPage() {
           <ul aria-label="Датасеты" className="divide-y divide-line">
             {listed.map((d) => {
               const inWork = d.id === activeId;
+              const several = listed.length > 1;
               return (
                 <li key={d.id}>
-                  <Row d={d} found={foundIn(d, state, inWork, launches.data?.launches)} unchecked={inWork} />
+                  <Row
+                    d={d}
+                    found={foundIn(d, state, inWork, launches.data?.launches)}
+                    unchecked={inWork}
+                    selected={several && inWork}
+                    action={
+                      several &&
+                      !inWork && (
+                        <Button
+                          size="sm"
+                          disabled={library.changing || !!state.job.running}
+                          title={state.job.running ? "Дождитесь завершения текущей задачи" : undefined}
+                          onClick={() => void choose(d)}
+                        >
+                          Выбрать для проверки
+                        </Button>
+                      )
+                    }
+                  />
                 </li>
               );
             })}
@@ -262,9 +323,10 @@ export function DataPage() {
 }
 
 /**
- * One dataset on its own page: «← Датасеты», its name with what the file holds in one line (details, rename and the
- * archive behind ⓘ), what each check found in it with the way into a check of it, then its conversations as the file
- * has them. Looking at one changes nothing: a check of it is started from its card.
+ * One dataset on its own page: «← Датасеты», its name with what the file holds and whose answers in one line (details,
+ * the name, the agent's version and the archive behind ⓘ), what each check found in it with the way into a check of
+ * it, then its conversations as the file has them. Looking at one changes nothing: a check of it is started from its
+ * card.
  */
 function DatasetPage({
   d,
@@ -316,6 +378,22 @@ function DatasetPage({
         ]
       : []),
     ...(d.archivedAt ? [{ key: "archived", node: `в архиве с ${longDay(d.archivedAt)}` }] : []),
+    // Whose answers the dataset holds: shown, and set or changed in «Подробности».
+    {
+      key: "version",
+      node: (
+        <button
+          type="button"
+          onClick={() => setInfo(true)}
+          className={cn(
+            "rounded-sm underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60",
+            !d.agentVersion && "text-run",
+          )}
+        >
+          {d.agentVersion ? `версия агента ${d.agentVersion}` : "указать версию агента"}
+        </button>
+      ),
+    },
   ];
   // On a phone an open conversation takes the whole page.
   const reading = !!params.get("d") && !wide;
@@ -352,17 +430,21 @@ function DatasetPage({
           <div className="mt-3 flex flex-wrap items-start gap-x-10 gap-y-4">
             <div className="min-w-[min(100%,22rem)] flex-1">
               <h2 className="break-words text-title font-semibold text-fg">{shownName(d)}</h2>
-              <p className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-read text-fg-3">
-                <Facts facts={held} />
-                <button
-                  type="button"
-                  aria-label="Подробности"
-                  title="Подробности"
-                  onClick={() => setInfo(true)}
-                  className="-ml-2.5 grid size-7 place-items-center rounded-full text-fg-3 transition-colors hover:bg-hover hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
-                >
-                  <Info aria-hidden className="size-4" />
-                </button>
+              <p className="mt-1 text-read text-fg-3">
+                <Facts
+                  facts={held}
+                  end={
+                    <button
+                      type="button"
+                      aria-label="Подробности"
+                      title="Подробности"
+                      onClick={() => setInfo(true)}
+                      className="ml-1 grid size-7 place-items-center rounded-full text-fg-3 transition-colors hover:bg-hover hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
+                    >
+                      <Info aria-hidden className="size-4" />
+                    </button>
+                  }
+                />
               </p>
             </div>
             {d.archivedAt && (

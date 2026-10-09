@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Play } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { criterionLink, launchLink, SECTIONS, type Check } from "../../app/links";
 import type { CheckLine } from "../../lab/agents";
 import { CHECK_NAME, CHECKS } from "../../lab/checks";
@@ -9,7 +8,6 @@ import { useJudges } from "../../lab/judges";
 import { useLabState } from "../../lab/LabProvider";
 import { codeSources } from "../../lab/tone";
 import { CheckResult } from "../../product/CheckResult";
-import { AccuracyPicture, PAPER, TonePicture } from "../../product/Pictures";
 import { buttonClass } from "../../ui/Button";
 
 /** What each check looks for, in the line a card has room for. */
@@ -38,9 +36,9 @@ const NEED: Record<Check, Need> = {
 };
 
 /**
- * One check of the dataset as a card: a picture of what it looks at, then what it found (the agents' result line) and
- * «Открыть итог», or what it checks and the way to begin — or, while its rules or the agent's code are missing, the
- * way to them. `main` — the screen's next step: the one black button.
+ * One check of the dataset as a card: what it found (the agents' result line) with «Открыть итог» and «Проверить
+ * датасет» again, or what it checks and the way to begin — or, while its rules or the agent's code are missing, the way
+ * to them. `main` — the screen's next step: the one black button.
  */
 function CheckCard({
   check,
@@ -64,46 +62,41 @@ function CheckCard({
     </Link>
   );
   return (
-    <section aria-label={CHECK_NAME[check]} className="flex gap-4 rounded-block border border-line bg-canvas p-3 pr-4">
-      <div aria-hidden className={cn("hidden w-28 shrink-0 sm:block", PAPER)}>
-        {check === "tone" ? <TonePicture /> : <AccuracyPicture />}
-      </div>
-      <div className="min-w-0 flex-1 py-1">
-        {found ? (
-          <>
-            <CheckResult name={CHECK_NAME[check]} line={found.line} />
-            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
-              {button("Открыть итог", found.to)}
-              {!archived && (
-                <Link
-                  to={launch}
-                  className="rounded-sm text-small font-medium text-run hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
-                >
-                  Проверить снова
-                </Link>
-              )}
-            </div>
-          </>
-        ) : (
-          <>
-            <p className="text-small font-medium text-fg-2">{CHECK_NAME[check]}</p>
-            <p className="mt-1 text-body text-fg-3">{need && !archived ? need.text : ABOUT[check]}</p>
+    <section aria-label={CHECK_NAME[check]} className="min-w-0 rounded-block border border-line bg-canvas p-4">
+      {found ? (
+        <>
+          <CheckResult name={CHECK_NAME[check]} line={found.line} />
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+            {button("Открыть итог", found.to)}
             {!archived && (
-              <div className="mt-3">
-                {need
-                  ? button(need.label, need.to)
-                  : button(
-                      <>
-                        <Play aria-hidden className="size-3.5" />
-                        Начать проверку
-                      </>,
-                      launch,
-                    )}
-              </div>
+              <Link
+                to={launch}
+                className="rounded-sm text-small font-medium text-run hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
+              >
+                Проверить датасет
+              </Link>
             )}
-          </>
-        )}
-      </div>
+          </div>
+        </>
+      ) : (
+        <>
+          <p className="text-small font-medium text-fg-2">{CHECK_NAME[check]}</p>
+          <p className="mt-1 text-body text-fg-3">{need && !archived ? need.text : ABOUT[check]}</p>
+          {!archived && (
+            <div className="mt-3">
+              {need
+                ? button(need.label, need.to)
+                : button(
+                    <>
+                      <Play aria-hidden className="size-3.5" />
+                      Проверить датасет
+                    </>,
+                    launch,
+                  )}
+            </div>
+          )}
+        </>
+      )}
     </section>
   );
 }

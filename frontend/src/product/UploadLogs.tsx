@@ -23,32 +23,25 @@ export const exportFileError = (file: File) => {
 };
 
 /**
- * What a new export does, in the order a person asks about it (backend: store.replace_inputs): what goes — the current
- * results to the history of their checks, the scenarios built from a result reset; what stays — the criteria, the
- * runs and the answers of people, with the saved checks they were given on (store.set_log_review), so the new
- * conversations can be checked by the same criteria and compared with the previous ones.
+ * One upload flow wherever conversations are added: pick, inspect the file and its consequences, upload. The name
+ * and the version of the agent whose answers the file holds are the person's to give, both optional. `short`: the
+ * label a phone shows, where the whole one does not fit beside the page's title.
  */
-function whatHappens(): [string, string] {
-  return [
-    "После загрузки будет выбран новый датасет. Переключиться обратно можно в разделе «Датасеты».",
-    "История проверок и прогоны сохранят свои исходные диалоги и критерии.",
-  ];
-}
-
-/** One upload flow wherever conversations are added: pick, inspect the file and its consequences, upload. */
 export function UploadButton({
   variant = "primary",
+  size = "md",
   label = "Загрузить датасет",
+  short,
   check,
   disabled = false,
-  compact = false,
   onLoaded,
 }: {
   variant?: "primary" | "outline";
+  size?: "sm" | "md";
   label?: string;
+  short?: string;
   check?: Check;
   disabled?: boolean;
-  compact?: boolean;
   /** After the export is read: the page shows what came, such as «Датасеты» the new dataset. */
   onLoaded?: () => void;
 }) {
@@ -61,10 +54,13 @@ export function UploadButton({
   const [open, setOpen] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [datasetName, setDatasetName] = useState("");
+  const [agentVersion, setAgentVersion] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [over, setOver] = useState(false);
   const running = !!state?.job.running || disabled;
+  // A dataset in work already: the new one comes beside it, the one before and its checks stay.
+  const previous = !!state?.logs.total;
   const pick = (files: File[]) => {
     if (lock.current || running) return;
     if (files.length !== 1) {
@@ -81,15 +77,15 @@ export function UploadButton({
     setBusy(true);
     setError("");
     try {
-      const { total, skipped = 0 } = await upload<{ total: number; skipped?: number }>(
-        "/api/logs",
-        file,
-        datasetName.trim() ? { title: datasetName.trim() } : {},
-      );
+      const { total, skipped = 0 } = await upload<{ total: number; skipped?: number }>("/api/logs", file, {
+        ...(datasetName.trim() ? { title: datasetName.trim() } : {}),
+        ...(agentVersion.trim() ? { agentVersion: agentVersion.trim() } : {}),
+      });
       await refresh();
       setOpen(false);
       setFile(null);
       setDatasetName("");
+      setAgentVersion("");
       onLoaded?.();
       const next = check ? launchLink(check) : null;
       const left = skipped
@@ -117,8 +113,9 @@ export function UploadButton({
     <>
       <Button
         ref={trigger}
-        aria-label={compact ? label : undefined}
+        aria-label={short ? label : undefined}
         variant={variant}
+        size={size}
         icon={Upload}
         disabled={running}
         title={running ? "Дождитесь завершения текущей задачи" : undefined}
@@ -127,7 +124,14 @@ export function UploadButton({
           setError("");
         }}
       >
-        <span className={compact ? "hidden sm:inline" : undefined}>{label}</span>
+        {short ? (
+          <>
+            <span className="sm:hidden">{short}</span>
+            <span className="hidden sm:inline">{label}</span>
+          </>
+        ) : (
+          label
+        )}
       </Button>
       <Modal
         open={open}
@@ -152,9 +156,11 @@ export function UploadButton({
           </>
         }
       >
-        <p className="mb-5 text-read text-fg-3">
-          Новый датасет сохранится рядом с предыдущими и станет выбранным для проверки.
-        </p>
+        {previous && (
+          <p className="mb-5 text-read text-fg-3">
+            Новый датасет сохранится рядом с предыдущими и станет выбранным для проверки.
+          </p>
+        )}
         <label className="mb-4 block text-body font-medium text-fg">
           Название датасета <span className="font-normal text-fg-3">· по желанию</span>
           <Input
@@ -162,9 +168,23 @@ export function UploadButton({
             onChange={(event) => setDatasetName(event.target.value)}
             maxLength={160}
             disabled={busy}
-            placeholder={file?.name || "Например: Диалоги за октябрь"}
+            placeholder={file?.name || "Например: Разговоры за октябрь"}
             className="mt-2"
           />
+        </label>
+        <label className="mb-4 block text-body font-medium text-fg">
+          Версия агента в этом датасете <span className="font-normal text-fg-3">· по желанию</span>
+          <Input
+            value={agentVersion}
+            onChange={(event) => setAgentVersion(event.target.value)}
+            maxLength={80}
+            disabled={busy}
+            placeholder="Например, v2.4"
+            className="mt-2"
+          />
+          <span className="mt-1.5 block text-small font-normal text-fg-3">
+            Какая версия агента дала эти ответы. Она будет видна в итоге и в истории.
+          </span>
         </label>
         <input
           ref={input}
@@ -229,18 +249,17 @@ export function UploadButton({
             Сейчас идёт другая задача. Загрузка станет доступна после её завершения.
           </p>
         )}
-        {state?.logs.total ? (
-          <div className="mt-4 rounded-control bg-warn/5 p-4 text-small text-fg-2">
+        {/* Nothing is lost by a new dataset (backend: store.replace_inputs): the current results go to the history of
+            their checks, the criteria and people's answers stay with the saved checks they were given on. */}
+        {previous && (
+          <div className="mt-4 rounded-control bg-inset p-4 text-small text-fg-2">
             <p className="font-medium text-fg">Предыдущий датасет и его результаты останутся доступны.</p>
-            {whatHappens()
-              .filter(Boolean)
-              .map((text) => (
-                <p key={text} className="mt-2">
-                  {text}
-                </p>
-              ))}
+            <p className="mt-2">
+              Прошлые проверки сохранят свои разговоры и критерии. Вернуться к прежнему датасету можно в разделе
+              «Датасеты».
+            </p>
           </div>
-        ) : null}
+        )}
         <div className="mt-4">
           <ExportFormat />
         </div>
