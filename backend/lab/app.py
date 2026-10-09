@@ -4,6 +4,7 @@ uvicorn lab.app:create --factory: the settings are read from the environment as 
 every request and job works with them; a test creates the app on its own.
 """
 
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
@@ -28,6 +29,7 @@ HEADERS = {
     'Content-Security-Policy': "frame-ancestors 'none'",
     'X-Content-Type-Options': 'nosniff',
 }
+log = logging.getLogger(__name__)
 
 
 def create(settings: config.Settings | None = None) -> FastAPI:
@@ -119,19 +121,51 @@ def _origin(value: str) -> tuple[str, str, int | None] | None:
     return parts.scheme, parts.hostname, port or DEFAULT_PORTS.get(parts.scheme)
 
 
+def _page(request: Request) -> tuple[str, tuple[str, int | None]] | None:
+    """The address the browser opened the Lab by. Behind a reverse proxy the request arrives over http after the
+    gateway's TLS, and the page's scheme and name travel in X-Forwarded-Proto and X-Forwarded-Host; a direct request
+    is its own Host and scheme. Any script may add X-Forwarded-Host to its own request, so the name in it counts only on
+    a request to one of the Lab's names, or when it is a name a person added in LAB_ALLOWED_HOSTS: a page on a name
+    that resolves to this computer (DNS rebinding) still sends its own name as the Host, and «127.0.0.1» in the header
+    does not make it this computer's."""
+    scheme = request.headers.get('x-forwarded-proto', '').split(',')[0].strip() or request.scope['scheme']
+    host = _host(request.headers.get('host', ''))
+    marked = request.headers.get('x-forwarded-host', '').split(',')[0].strip()
+    forwarded = _host(marked) if marked else None
+    settings = request.app.state.settings
+    trusted = host is not None and host[0] in allowed_hosts(settings)
+    if forwarded is not None and (trusted or forwarded[0] in settings.allowed_hosts):
+        host = forwarded
+    return None if host is None else (scheme, host)
+
+
 async def local_browser_commands(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
     """A page on another name that resolves to this computer (DNS rebinding) reads and changes nothing, pages
     included. A browser's command comes only from the Lab's own page: another local service on another port (Jupyter,
     a stand's Swagger) cannot replace the export or start paid work. A request without Origin is not a browser page's.
+    The page is the address the browser opened (_page), behind a reverse proxy too; a browser that says the command
+    comes from that very page (Sec-Fetch-Site: same-origin, which no script can set) is believed when the proxy hides
+    the page's own address. A command refused goes to the server log with the headers it was judged by.
     """
-    host = _host(request.headers.get('host', ''))
-    if host is None or host[0] not in allowed_hosts(request.app.state.settings):
+    page = _page(request)
+    if page is None or page[1][0] not in allowed_hosts(request.app.state.settings):
         detail = 'Agent Lab открывается по адресу 127.0.0.1 или localhost. Другое имя добавьте в LAB_ALLOWED_HOSTS.'
         return JSONResponse({'detail': detail}, status_code=400)
     origin = request.headers.get('origin')
     if request.method in ('POST', 'PUT', 'PATCH', 'DELETE') and origin:
-        scheme = request.scope['scheme']
-        if _origin(origin) != (scheme, host[0], host[1] or DEFAULT_PORTS.get(scheme)):
+        scheme, (name, port) = page
+        own = _origin(origin) == (scheme, name, port or DEFAULT_PORTS.get(scheme))
+        if not own and request.headers.get('sec-fetch-site') != 'same-origin':
+            log.warning(
+                'Отклонён запрос %s %s: Origin %s, страница %s, forwarded %s/%s, Sec-Fetch-Site %s',
+                request.method,
+                request.url.path,
+                origin,
+                request.headers.get('host', ''),
+                request.headers.get('x-forwarded-proto', ''),
+                request.headers.get('x-forwarded-host', ''),
+                request.headers.get('sec-fetch-site', ''),
+            )
             return JSONResponse({'detail': 'Запрос с чужой страницы отклонён.'}, status_code=403)
     response = await call_next(request)
     for name, value in HEADERS.items():
