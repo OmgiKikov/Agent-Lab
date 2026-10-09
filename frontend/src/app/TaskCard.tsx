@@ -4,11 +4,9 @@ import { Square, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "../lab/api";
 import type { Job } from "../lab/types";
-import { jobOf } from "./jobs";
+import { jobOf, STOPPED, useFailure } from "./jobs";
 import { useLabState } from "../lab/LabProvider";
 import { useToast } from "../ui/toast";
-
-const STOPPED = "Остановлено";
 
 const MARK = /^(Готово|Не удалось) · /;
 
@@ -49,7 +47,7 @@ const SAID_ON_SCREEN = new Set(["logs", "datasets", "judge-rules", "agent-contex
  * When the service's task ends: one notice with the way to its result, or the reason it failed. Mounted once for the
  * whole product (the task card is drawn twice: the side of a wide window, the bar of a narrow one). A person already
  * looking at the result's section gets no notice: the screen itself changes. Each task is told once, by its start,
- * even when an older answer of the service comes in late.
+ * even when an older answer of the service comes in late. A failed launch is told once its own reason has come.
  */
 export function JobNotices() {
   const { state } = useLabState();
@@ -62,6 +60,9 @@ export function JobNotices() {
   const told = useRef<string | null | undefined>(undefined);
   const here = useRef(pathname);
   here.current = pathname;
+  // The task whose end is to be told, while the reason it failed is on its way.
+  const [news, setNews] = useState<Job | null>(null);
+  const reason = useFailure(news);
   useEffect(() => {
     if (!job) return;
     const before = was.current;
@@ -69,30 +70,34 @@ export function JobNotices() {
     if (!before && !job.running) told.current = job.startedAt;
     if (!ended(before, job) || (job.startedAt && job.startedAt === told.current)) return;
     told.current = job.startedAt;
-    const info = jobOf(job);
-    const label = info?.label ?? "Задача";
     if (job.error !== STOPPED) markTab(job.error ? "Не удалось" : "Готово");
-    if (SAID_ON_SCREEN.has(job.kind ?? "")) return;
-    if (job.error === STOPPED)
+    if (!SAID_ON_SCREEN.has(job.kind ?? "")) setNews(job);
+  }, [job]);
+  useEffect(() => {
+    if (!news || (news.error && news.error !== STOPPED && !reason)) return;
+    setNews(null);
+    const info = jobOf(news);
+    const label = info?.label ?? "Задача";
+    if (news.error === STOPPED)
       toast.notify(
-        job.continuable
-          ? `${label}: остановлено. Сделанное сохранено: тот же запуск продолжит с этого места.`
+        news.continuable
+          ? `${label}: остановлено. Сделанное сохранено: та же проверка продолжится с этого места.`
           : `${label}: остановлено`,
       );
-    else if (job.error) toast.error(`${label}: не удалось. ${job.error}`);
+    else if (news.error) toast.error(`${label}: не удалось. ${reason}`);
     else if (!info || here.current !== info.to.split("?")[0])
       toast.notify(
         `${label}: готово`,
         info
           ? {
-              label: "Открыть",
+              label: `Открыть ${info.open}`,
               run: () => {
                 void navigate(info.to);
               },
             }
           : undefined,
       );
-  }, [job, toast, navigate]);
+  }, [news, reason, toast, navigate]);
   return null;
 }
 
@@ -110,6 +115,7 @@ export function TaskCard({ bar }: { bar?: boolean }) {
   const navigate = useNavigate();
   const [hidden, setHidden] = useState<string | null>(null);
   const job = state?.job;
+  const reason = useFailure(job);
   if (!job?.kind) return null;
   const info = jobOf(job);
   const label = info?.label ?? "Задача";
@@ -179,7 +185,7 @@ export function TaskCard({ bar }: { bar?: boolean }) {
             {message}
           </div>
         )}
-        <div className="mt-1 text-small text-fg-4">
+        <div className="mt-1 text-small text-fg-3">
           {job.resumed
             ? "Продолжена после перезапуска Lab: сделанное раньше сохранено."
             : "Страницу можно закрыть, результат сохранится."}
@@ -212,16 +218,18 @@ export function TaskCard({ bar }: { bar?: boolean }) {
         </button>
       </div>
       {/* Room for a whole sentence: what happened and what to do («…проверьте её в разделе «Настройки»»). */}
-      <p className={cn("mt-1 text-small text-fg-2", bar ? "line-clamp-3" : "line-clamp-6")} title={job.error}>
-        {job.error}
-      </p>
+      {reason && (
+        <p className={cn("mt-1 text-small text-fg-2", bar ? "line-clamp-3" : "line-clamp-6")} title={reason}>
+          {reason}
+        </p>
+      )}
       {info && (
         <button
           type="button"
           onClick={() => navigate(info.to)}
           className="mt-2 min-h-6 text-small text-fg underline decoration-line-strong underline-offset-2"
         >
-          Открыть раздел
+          Открыть {info.open}
         </button>
       )}
     </div>
