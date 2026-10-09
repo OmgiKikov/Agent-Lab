@@ -8,7 +8,7 @@ from unittest.mock import patch
 import support
 
 from lab import config, storage
-from lab.flows import answers, inputs
+from lab.flows import answers, datasets, inputs
 from lab.migrate import migrate
 from lab.storage import legacy as legacy_import
 
@@ -312,6 +312,43 @@ class StoreTests(unittest.TestCase):
             legacy_import.insert({'logs-meta.json': meta, 'logs.json': [talk]}, []), {'documents': 2, 'runs': 0}
         )
         self.assertEqual((storage.dialogues.read(), storage.dialogues.meta()), ([talk], meta))
+
+    def test_quoted_verdicts_judged_before_get_the_customer_s_words_their_replies_answered(self) -> None:
+        """A result judged before verdicts kept the customer's words a quoted reply answered gets them when its
+        database is set up again: the result in force from the export's conversations, the one kept with another
+        dataset from that dataset's. Words a verdict has stay; a verdict without a quote gets none."""
+
+        def talk(question: str) -> dict:
+            return {
+                'id': 'd1',
+                'messages': [
+                    {'role': 'user', 'content': 'Терминал не печатает чек'},
+                    {'role': 'assistant', 'content': 'Проверьте бумагу в терминале.'},
+                    {'role': 'user', 'content': question},
+                    {'role': 'assistant', 'content': 'Нажмите на кнопку «Чат с поддержкой».'},
+                ],
+            }
+
+        rows = [
+            {'ruleId': 'r1', 'status': 'FAIL', 'agentQuote': 'Нажмите на кнопку «Чат с поддержкой»'},
+            {'ruleId': 'r2', 'status': 'PASS', 'agentQuote': 'Проверьте бумагу', 'asked': 'как записано'},
+            {'ruleId': 'r3', 'status': 'UNKNOWN', 'agentQuote': ''},
+        ]
+        result = {'checkId': 'c1', 'results': [{'dialogueId': 'd1', 'status': 'FAIL', 'rules': rows}]}
+        first = datasets.add([talk('код авторизации где взять')], 'first.jsonl')
+        storage.documents.save('tone-result.json', result)
+        datasets.add([talk('а где сверка итогов')], 'second.jsonl')  # the first one's result is kept with it
+        storage.documents.save('tone-result.json', result)
+        with sqlite3.connect(storage.db.default_database()) as connection:
+            connection.execute('PRAGMA user_version = 11')
+        connection.close()
+
+        def asked() -> list:
+            return [row.get('asked') for row in storage.documents.load('tone-result.json')['results'][0]['rules']]
+
+        self.assertEqual(asked(), ['а где сверка итогов', 'как записано', None])
+        datasets.select(first['id'])
+        self.assertEqual(asked(), ['код авторизации где взять', 'как записано', None])
 
     def test_repeated_import_cannot_restore_invalidated_audit_or_scenarios(self) -> None:
         legacy = self.path / 'legacy'

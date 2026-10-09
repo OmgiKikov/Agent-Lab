@@ -22,6 +22,7 @@ from ..agents import knowledge, world
 from ..domain import checks, personas
 from ..domain import world as scenario_world
 from ..domain.transcript import for_judge, tool_calls, with_buttons
+from ..domain.verdicts import with_asked
 from ..roles import customer, judge
 from . import Progress, agent_context, connection, error_text, provenance, same_work, scenarios
 
@@ -441,7 +442,8 @@ async def run_verdict(card: dict, conversation: list[dict], model: models.Endpoi
 
 
 async def evaluate(card: dict, item: dict) -> None:
-    """Judge a run's conversation in place: rows, verdict and the second judge's verdict."""
+    """Judge a run's conversation in place: rows, each quoted one with the customer's words its reply answered
+    (verdicts.with_asked), verdict and the second judge's verdict."""
     prepared = await evidence(card, item['conversation'])
     if agent_context.current()['idpIndex']:
         item.update(knowledge=prepared.payload['knowledge'], contextError=prepared.payload['contextWarning'])
@@ -452,5 +454,6 @@ async def evaluate(card: dict, item: dict) -> None:
     except* models.ModelError as errors:
         raise models.ModelError(str(errors.exceptions[0])) from errors
     result = primary.result()
-    item.update(rules=result.rows, status=result.status, model=result.model, judgeVersion=result.version)
+    rows = with_asked(result.rows, prepared.payload['conversation'])
+    item.update(rules=rows, status=result.status, model=result.model, judgeVersion=result.version)
     item['second'] = secondary.result()

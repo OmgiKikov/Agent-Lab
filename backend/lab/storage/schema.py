@@ -9,22 +9,25 @@ Schema 8: long work is kept as it goes (tasks, steps), never only in memory.
 Schema 9: immutable datasets alongside the selected working export.
 Schema 10: grouped launches and recorded-question runs.
 Schema 11: a dataset keeps how many conversations its upload left out.
+Schema 12: a quoted verdict keeps the customer's words its reply answered.
 """
 
 import json
 import sqlite3
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any
 
-from ..domain import accuracy, answers, checks
+from ..domain import accuracy, answers, checks, export, verdicts
 from ..domain.comparison import dataset_fingerprint
 from ..domain.metric import metric
 
 # The database's user_version once these tables are in place. Raise it with every change here: a database is set up
 # again only when its user_version differs.
-SCHEMA = 11
+SCHEMA = 12
 EXPORT = 'logs.json'  # where a database before schema 7 kept the export's conversations, as one document
 EXPORT_META = 'logs-meta.json'  # the name of the export's file and when it was uploaded
 PERSON, LAB = 'person', 'lab'  # who gave an answer: a person on a screen, or the Lab (storage.reviews)
@@ -97,6 +100,7 @@ def upgrade(connection: sqlite3.Connection) -> None:
     _one_history(connection)
     _accuracy_history(connection)
     _answers_to_rows(connection)
+    _asked_on_verdicts(connection)
     # The number of uploaded dialogues was kept beside them before they were rows.
     connection.execute('DROP TRIGGER IF EXISTS length_on_insert')
     connection.execute('DROP TRIGGER IF EXISTS length_on_update')
@@ -249,6 +253,50 @@ def _answers_to_rows(connection: sqlite3.Connection) -> None:
         at = record.get('updatedAt') or record.get('finishedAt') or record.get('startedAt')
         _answer(connection, answers.SIM, run_id, taken, PERSON, at)
         connection.execute('UPDATE runs SET value = ?, summary = ? WHERE id = ?', (_dump(kept), _summary(kept), run_id))
+
+
+def _asked_on_verdicts(connection: sqlite3.Connection) -> None:
+    """The quoted verdicts of a result an earlier Lab made get the customer's words their replies answered
+    (verdicts.with_asked), from the conversations the result was judged on: a result in force from the export's, one
+    kept with a dataset for when it is selected again from that dataset's. A verdict that has them keeps them."""
+    in_export = partial(_dialogue, connection, 'SELECT value FROM dialogues WHERE id = ?')
+    for name in checks.RESULTS.values():
+        result = _document(connection, name)
+        asked = _with_asked(result, in_export)
+        if asked != result:
+            _put(connection, name, asked)
+    in_dataset = 'SELECT value FROM dataset_dialogues WHERE dataset_id = ? AND id = ?'
+    kept = connection.execute('SELECT id, context FROM datasets WHERE context IS NOT NULL').fetchall()
+    for dataset_id, context in kept:
+        stashed = json.loads(context)
+        read = partial(_dialogue, connection, in_dataset, dataset_id)
+        documents = stashed.get('documents') or {}
+        asked = {
+            name: _with_asked(value, read) if name in checks.RESULTS.values() else value
+            for name, value in documents.items()
+        }
+        if asked != documents:
+            connection.execute(
+                'UPDATE datasets SET context = ? WHERE id = ?', (_dump(stashed | {'documents': asked}), dataset_id)
+            )
+
+
+def _with_asked(result: Any, read: Callable[[str], dict | None]) -> Any:
+    """A result with the customer's words on its quoted verdicts, each conversation read by its id (read): one no
+    longer there gives none. No result, or a record of another shape, stays as it is."""
+    if not isinstance(result, dict) or not isinstance(result.get('results'), list):
+        return result
+    judged = []
+    for item in result['results']:
+        dialogue = read(str(item['dialogueId']))
+        shown = export.conversation(dialogue) if dialogue else []
+        judged.append(item | {'rules': verdicts.with_asked(item['rules'], shown)} if item.get('rules') else item)
+    return result | {'results': judged}
+
+
+def _dialogue(connection: sqlite3.Connection, query: str, *key: str) -> dict | None:
+    row = connection.execute(query, key).fetchone()
+    return json.loads(row[0]) if row else None
 
 
 def _answer(

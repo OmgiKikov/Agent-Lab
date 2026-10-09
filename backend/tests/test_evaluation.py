@@ -130,6 +130,41 @@ class EvaluationTests(unittest.TestCase):
         # The key decisions are stored by does not change with this.
         self.assertEqual(quotes.normalized('Время — по «Москве»'), 'время — по москве')
 
+    def test_a_quoted_reply_is_paired_with_the_customer_s_words_it_answered(self):
+        """«Клиент: #. # / * в терминал… → Агент: «Нажмите на кнопку…»» glued the first message to a reply to the
+        third: a quote goes with the customer's message right before the reply that holds it, found as a verdict's
+        quote is (case, spaces and quotation marks aside, the export's button code left out); none when no reply
+        holds it, and the screens fall back to the first message."""
+        shown = export.conversation(
+            {
+                'id': 'd1',
+                'messages': [
+                    {'role': 'user', 'content': '#. # / * в #. # # # # терминал'},
+                    {'role': 'assistant', 'content': 'Отмените операцию в СберБизнес.'},
+                    {'role': 'user', 'content': 'код авторизации где взять'},
+                    {
+                        'role': 'assistant',
+                        'content': 'С этим поможет оператор. Нажмите на кнопку «Чат с поддержкой», и я передам '
+                        'ваш вопрос ` ` ` transition-code TRANSFER_INTO_CHAT ` ` `',
+                    },
+                ],
+            }
+        )
+        for quote, asked in (
+            ('нажмите  НА кнопку "Чат с поддержкой"', 'код авторизации где взять'),
+            ('Отмените операцию в СберБизнес', '#. # / * в #. # # # # терминал'),  # in the first reply
+            ('Позвоните на горячую линию банка', ''),
+        ):
+            with self.subTest(quote=quote):
+                self.assertEqual(verdicts.asked(shown, quote), asked)
+        rows = [
+            verdict(quote='С этим поможет оператор'),
+            verdict('r2', 'UNKNOWN', ''),
+            verdict('r3', quote='Отмените операцию') | {'asked': 'как записано'},
+        ]
+        found = verdicts.with_asked(rows, shown)
+        self.assertEqual([row.get('asked') for row in found], ['код авторизации где взять', None, 'как записано'])
+
     def test_grounding_never_substitutes_an_unrelated_source(self):
         topics = [{'title': 'Возврат', 'rules': [dict(criterion(), sourceId='missing', quote='Вернуть терминал')]}]
         grounded, dropped = ground(topics, [{'id': 's1', 'content': 'Вернуть терминал в банк'}])

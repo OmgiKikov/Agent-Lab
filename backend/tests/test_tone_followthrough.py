@@ -195,6 +195,57 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         result = storage.documents.load(tone.RESULT)
         self.assertEqual((result['summary']['measured'], result['summary']['unmeasured']), (2, 0))
 
+    async def test_a_quoted_verdict_keeps_the_customer_s_words_its_reply_answered(self):
+        """The reply an error quotes answered the customer's second question, not the first: the verdict keeps those
+        words when the conversation is judged, and the problems show them beside the quote."""
+        talk = {
+            'id': 'd1',
+            'messages': [
+                {'role': 'user', 'content': 'Как принести документы?'},
+                {'role': 'assistant', 'content': 'Принесите их в отделение банка.'},
+                {'role': 'user', 'content': 'А код авторизации где взять?'},
+                {'role': 'assistant', 'content': 'Нажмите на кнопку «Чат с поддержкой».'},
+            ],
+        }
+        await self.upload(talk)
+
+        async def verdict(rules, shown, tools='', model=None):
+            rows = [
+                {
+                    'ruleId': rule['id'],
+                    'rule': rule['text'],
+                    'status': 'FAIL',
+                    'reason': 'Лишний предлог.',
+                    'agentQuote': 'Нажмите на кнопку «Чат с поддержкой»',
+                    'title': 'Пишет «нажмите на кнопку»',
+                }
+                for rule in rules
+            ]
+            return judging.Verdict(rows, 'FAIL', 'model-a', 'v1')
+
+        request = {'ruleIds': ['pronouns'], 'count': 1, 'revision': storage.documents.load(tone.DRAFT)['revision']}
+        with patch.object(judging, 'log_verdict', side_effect=verdict):
+            await self.client.post('/api/tone-of-voice/check', json=request)
+            await self.wait_job()
+        self.assertIsNone(self.jobs.state['error'])
+        self.assertEqual(
+            storage.documents.load(tone.RESULT)['results'][0]['rules'][0]['asked'], talk['messages'][2]['content']
+        )
+        example = (await self.client.get('/api/problems?check=tone')).json()['rules'][0]['log']['examples'][0]
+        self.assertEqual(
+            (example['asked'], example['opening']), ('А код авторизации где взять?', 'Как принести документы?')
+        )
+
+    async def test_a_verdict_kept_before_quotes_were_paired_gets_the_customer_s_words_when_its_check_goes_on(self):
+        """A check stopped by a Lab that did not keep the customer's words of a quoted verdict yet, continued by this
+        one: the verdict it kept gets them as the check goes on."""
+        topic = {'id': 't1', 'rules': storage.documents.load(tone.DRAFT)['criteria'][:1]}
+        kept = await judged()(self.dialogue, topic)
+        self.assertNotIn('asked', kept['rules'][0])
+        found = []
+        await conversations.judge_each([(self.dialogue, topic)], found.append, {conversations.step('d1'): kept})
+        self.assertEqual(found[0]['rules'][0]['asked'], 'Как принести документы?')
+
     async def test_an_answer_survives_a_check_that_could_not_decide_its_conversation(self):
         await self.upload(self.dialogue, self.other)
         first = await self.check(count=2)
