@@ -49,9 +49,9 @@ export function BriefSheet({ open, onClose, brief }: { open: boolean; onClose: (
   }, [copied]);
   const failed =
     findings.isError && agent.failed
-      ? "Не удалось загрузить находки и имя агента."
+      ? "Не удалось загрузить проблемы и имя агента."
       : findings.isError
-        ? "Не удалось загрузить находки."
+        ? "Не удалось загрузить проблемы."
         : agent.failed
           ? "Не удалось загрузить имя агента."
           : null;

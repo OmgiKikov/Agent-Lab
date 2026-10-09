@@ -38,7 +38,7 @@ const byFrequency = (list: Criterion[], side: SideKey) =>
 
 /**
  * «Критерии» of a check: what the agent must do, where it is written and how it went — in the check's conversations
- * («Диалоги») and in the last run of its scenarios («Симуляции»). Accuracy shows the agent's prompt as code with each
+ * («Разговоры») and in the last run of its scenarios («Симуляции»). Accuracy shows the agent's prompt as code with each
  * criterion lit in place; tone of voice, the person's rules of communication the same way. The chosen criterion opens
  * with its conversations. Here a person decides whether a criterion's errors are serious (in its row and in its panel)
  * or confirms all the automatic check proposed; until a person decided every criterion, one quiet line says where it
@@ -121,7 +121,7 @@ export function CriteriaPage({ check }: { check: Check }) {
 
   const sideOptions = (
     [
-      ["log", "Диалоги"],
+      ["log", "Разговоры"],
       ["sim", "Симуляции"],
     ] as const
   ).filter(([k]) => (k === "log" ? !!data?.log : SIMULATIONS && !!data?.sim));
@@ -228,7 +228,7 @@ export function CriteriaPage({ check }: { check: Check }) {
               {"\u00a0"}
               {plural(list.length, "критерий", "критерия", "критериев")}{" "}
               {judges.selected
-                ? `из «${judges.selected.name}»`
+                ? `из набора «${judges.selected.name}»`
                 : tone
                   ? "из правил общения"
                   : customAccuracy(state)
@@ -245,7 +245,7 @@ export function CriteriaPage({ check }: { check: Check }) {
                 {" "}
                 · две модели совпали в {second.agree}
                 {"\u00a0"}из{"\u00a0"}
-                {second.checked} ошибок в диалогах
+                {second.checked} ошибок в разговорах
               </>
             )}
             {people.agree + people.disagree > 0 && (

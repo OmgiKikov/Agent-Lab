@@ -6,6 +6,7 @@ import { criterionLink, launchLink, SECTIONS } from "../../app/links";
 import { SIMULATIONS } from "../../app/product";
 import { api, textFile } from "../../lab/api";
 import { nameFromText, type Criterion } from "../../lab/criteria";
+import { useDatasets } from "../../lab/datasets";
 import { count, longDay, pct } from "../../lab/format";
 import { useJudges, type JudgeVersion } from "../../lab/judges";
 import { useLabState } from "../../lab/LabProvider";
@@ -24,6 +25,7 @@ import { Menu, type MenuItem } from "../../ui/Menu";
 import { Modal } from "../../ui/Modal";
 import { Sheet } from "../../ui/Sheet";
 import { useToast } from "../../ui/toast";
+import { shownName } from "../data/DatasetInfo";
 import { RuleEditor } from "../judges/RuleEditor";
 import { AddRules } from "./AddRules";
 import { CriterionPanel, type Shown } from "./CriterionPanel";
@@ -159,7 +161,10 @@ function CriterionDetails({ card, onEdit }: { card: Card; onEdit: () => void }) 
 function FirstSteps({ criteria, collecting, line }: { criteria: number; collecting?: boolean; line?: boolean }) {
   const { state } = useLabState();
   const total = state?.logs.total ?? 0;
-  const name = state?.logs.name || state?.logs.file;
+  // The dataset the check goes by, as people call it.
+  const datasets = useDatasets();
+  const dataset = datasets.data?.datasets.find((d) => d.id === state?.logs.datasetId);
+  const name = dataset && shownName(dataset);
   const ready = criteria > 0;
   if (line) return <FirstStepsLine criteria={criteria} collecting={collecting} className="mt-5" />;
   return (
@@ -173,7 +178,7 @@ function FirstSteps({ criteria, collecting, line }: { criteria: number; collecti
         action={
           !total && (
             <Link to={SECTIONS.data} className={STEP_NEXT}>
-              Добавить датасет
+              Загрузить датасет
             </Link>
           )
         }
