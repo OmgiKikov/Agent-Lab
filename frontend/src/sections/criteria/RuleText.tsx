@@ -1,28 +1,14 @@
-import { cn } from "@/lib/utils";
+import { ruleLines, ruleParts } from "../../lab/quote";
+import { RuleList } from "../../product/Duty";
 
-/** The bullets the rules were written with («* …») in one line of a card: as dots, not stars. */
-export const plainRule = (text: string) => text.replace(/(^|\s+)\*\s+/g, "$1• ");
+/** A criterion's words on one line of a card (lab/quote, ruleLines): its points after «•», its headings gone. */
+export const plainRule = (text: string) => ruleLines(text).join(" ");
 
 /**
- * A criterion's words as a person reads them: the bullets the bank's rules were written with («* Стиль — …
- * * Одна реплика — …») as a list, what comes before them as its lead; a text without them as it is.
+ * A criterion's words as a person reads them (lab/quote, ruleParts): the points the bank's rules were written with
+ * («* Стиль — … * Одна реплика — …») as a list, the words around them as paragraphs, the rules' headings and codes
+ * gone — the same text as the summary, its PDF and the reports.
  */
 export function RuleText({ text, className }: { text: string; className?: string }) {
-  const bulleted = /^\s*\*\s+/.test(text);
-  const parts = text
-    .split(/(?:^|\s+)\*\s+/)
-    .map((part) => part.trim())
-    .filter(Boolean);
-  if (parts.length < 2 && !bulleted) return <p className={cn("whitespace-pre-wrap", className)}>{text}</p>;
-  const [lead, ...items] = bulleted ? ["", ...parts] : parts;
-  return (
-    <div className={className}>
-      {lead && <p className="whitespace-pre-wrap">{lead}</p>}
-      <ul className={cn("list-disc space-y-1 pl-5 marker:text-fg-4", lead && "mt-1.5")}>
-        {items.map((item, i) => (
-          <li key={i}>{item}</li>
-        ))}
-      </ul>
-    </div>
-  );
+  return <RuleList parts={ruleParts(text)} className={className} />;
 }

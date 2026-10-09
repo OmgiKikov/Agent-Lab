@@ -1,19 +1,43 @@
 import { useState } from "react";
-import { duty } from "../lab/criteria";
+import { cn } from "@/lib/utils";
+import { ruleParts, type RulePart } from "../lab/quote";
 
 const LEAD = 180;
 
-/** A criterion as its intro and its points: rules often come as «* …» points, sometimes run together on one line. */
-function parts(text: string): { intro: string; points: string[] } {
-  const pieces = text.split(/(?:^|\s)[*•]\s+/);
-  if (pieces.length < 2) return { intro: text.trim(), points: [] };
-  return {
-    intro: pieces[0].trim(),
-    points: pieces
-      .slice(1)
-      .map((p) => p.trim())
-      .filter(Boolean),
-  };
+/** The parts in runs: a paragraph alone, the points next to each other as one list. */
+function runs(parts: RulePart[]): RulePart[][] {
+  const out: RulePart[][] = [];
+  for (const part of parts) {
+    const last = out[out.length - 1];
+    if (part.point && last?.[0].point) last.push(part);
+    else out.push([part]);
+  }
+  return out;
+}
+
+/**
+ * A criterion's words as a list (lab/quote, ruleParts), the same on every screen, on paper and in the texts that leave
+ * the product: the points the rules were written with, the paragraphs between them.
+ */
+export function RuleList({ parts, className }: { parts: RulePart[]; className?: string }) {
+  return (
+    <div className={cn("space-y-1.5", className)}>
+      {runs(parts).map((run, i) =>
+        run[0].point ? (
+          <ul key={i} className="list-disc space-y-1 pl-5 marker:text-fg-4">
+            {run.map((part, j) => (
+              // On paper a point stays on one sheet.
+              <li key={j} className="print:break-inside-avoid">
+                {part.text}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p key={i}>{run[0].text}</p>
+        ),
+      )}
+    </div>
+  );
 }
 
 /**
@@ -41,16 +65,19 @@ function lead(text: string): string {
 
 /**
  * «Агент должен: …» — what the agent must do, as the criterion says it. A long criterion reads as its first sentence
- * (an intro ending in a colon takes its first point along); «Полностью» opens the whole text with its points as a list.
+ * (a paragraph ending in a colon takes its first point along); «Полностью» opens the whole text as its list (RuleList).
  * Plain language first, the rest on demand (NN/g, progressive disclosure).
  */
 export function Duty({ text, className }: { text: string; className?: string }) {
   const [open, setOpen] = useState(false);
-  const full = duty(text);
-  const { intro, points } = parts(full);
-  const opening = intro && intro.endsWith(":") && points[0] ? `${intro} ${points[0]}` : intro || points[0] || full;
+  const parts = ruleParts(text);
+  const intro = parts.length > 1 && !parts[0].point && parts[0].text.endsWith(":");
+  const opening = parts
+    .slice(0, intro ? 2 : 1)
+    .map((part) => part.text)
+    .join(" ");
   const short = lead(opening);
-  const long = short !== full;
+  const long = parts.length > (intro ? 2 : 1) || short !== opening;
   const toggle = (
     <button
       type="button"
@@ -65,16 +92,10 @@ export function Duty({ text, className }: { text: string; className?: string }) 
     <div className={className}>
       <p>
         <span className="text-fg-3">Агент должен: </span>
-        {open ? intro : short}
+        {!open && short}
         {long && !open && <> {toggle}</>}
       </p>
-      {open && points.length > 0 && (
-        <ul className="mt-2 list-disc space-y-1 pl-5 text-read">
-          {points.map((p, i) => (
-            <li key={i}>{p}</li>
-          ))}
-        </ul>
-      )}
+      {open && <RuleList parts={parts} className="mt-2 text-read" />}
       {open && <div className="mt-2">{toggle}</div>}
     </div>
   );
