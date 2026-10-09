@@ -19,6 +19,7 @@ import { StageTabs } from "../../app/StageTabs";
 import { criterionLink, historyLink, launchLink, SECTIONS } from "../../app/links";
 import { api } from "../../lab/api";
 import { CHECK_NAME, resultOf } from "../../lab/checks";
+import { useFirstRun } from "../../lab/compare";
 import { datasetFacts, useDatasets } from "../../lab/datasets";
 import { count, longDay, plural } from "../../lab/format";
 import { useJudges, type JudgeVersion } from "../../lab/judges";
@@ -27,12 +28,14 @@ import { MODE_NAME, type Mode } from "../../lab/launches";
 import { codeSources } from "../../lab/tone";
 import type { Check } from "../../lab/types";
 import { Button, buttonClass } from "../../ui/Button";
+import { FirstStepsLine } from "../../product/FirstSteps";
 import { MarkNo } from "../../product/MarkNo";
 import { PAPER, SimulationPicture } from "../../product/Pictures";
 import { SIMULATIONS } from "../../app/product";
 import { UploadButton } from "../../product/UploadLogs";
 import { shownName } from "../data/DatasetInfo";
 import { useConnectionMemory, waysOf } from "../agent/Connection";
+import { NoModels } from "../settings/NoModels";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
 import { Menu } from "../../ui/Menu";
@@ -110,13 +113,13 @@ const WAY_PICTURE: Record<Mode, () => ReactNode> = {
  * What the form remembers between visits, per agent and check: how to check, not what. The dataset and the rules are
  * always the ones in force (or the dataset its page opened the form with), and all the criteria: a dataset, rules or
  * a part of the criteria chosen once would come back after a new export or new rules, and the launch would put them
- * back in force.
+ * back in force. Nor the agent's version: it is the chosen dataset's own (lab/datasets).
  */
-type Draft = { modes: Mode[]; version: string; size: number; target: string };
+type Draft = { modes: Mode[]; size: number; target: string };
 /** The ways a launch can check; the simulations' only while they are shown (app/product). */
 const MODES: Mode[] = SIMULATIONS ? ["dataset", "questions", "simulations"] : ["dataset", "questions"];
 function readDraft(check: Check): Draft {
-  const fallback: Draft = { modes: ["dataset"], version: "", size: 100, target: "" };
+  const fallback: Draft = { modes: ["dataset"], size: 100, target: "" };
   try {
     const value = JSON.parse(localStorage.getItem(agentKey(`launch-draft-${check}`)) ?? "null");
     if (!value || !Array.isArray(value.modes)) return fallback;
@@ -125,7 +128,6 @@ function readDraft(check: Check): Draft {
     );
     return {
       modes: modes.length ? [...new Set<Mode>(modes)] : fallback.modes,
-      version: typeof value.version === "string" ? value.version : "",
       size: Number.isFinite(value.size) ? Math.max(1, Math.min(MAX, value.size)) : 100,
       target: typeof value.target === "string" ? value.target : "",
     };
@@ -147,9 +149,8 @@ function ruleChoices(versions: JudgeVersion[], selectedId: string | null): Judge
 const versionWord = (v: JudgeVersion, all: JudgeVersion[]) =>
   all.some((other) => other.setId === v.setId && other.id !== v.id) ? ` · версия ${v.version}` : "";
 
-/** The number typed in on its dotted line, inside a sentence of a card. */
-const NUMBER =
-  "inline-block border-b-[1.5px] border-dotted border-fg-4 bg-transparent text-center font-semibold tabular-nums text-fg transition-colors hover:border-fg-3 focus:border-solid focus:border-fg focus:outline-none";
+/** The count of conversations inside the sentence that says it: a small field, plainly one to change. */
+const NUMBER = "h-8 w-16 px-2 py-0 text-center font-semibold tabular-nums";
 
 /**
  * A step done before the launch, as a soft card: a tick or a ring, what the step is, what it gave, one line under it.
@@ -188,8 +189,9 @@ function StepCard({
 }
 
 /**
- * One way to check as a card, as the checks of a dataset are drawn: a picture of what it gives, its name, what it does,
- * a button that takes it into the check or leaves it out. A way that cannot run says what it needs.
+ * One way to check as a card: a picture of what it gives, its name, what it does, a grey button that takes it into the
+ * check or leaves it out — the form's one black button is «Запустить проверку». A way that cannot run says what it
+ * needs.
  */
 function WayCard({
   id,
@@ -232,14 +234,7 @@ function WayCard({
           Подключить агента
         </Link>
       ) : (
-        <Button
-          size="sm"
-          variant={on ? "primary" : "outline"}
-          icon={on ? Tick : Plus}
-          aria-pressed={on}
-          onClick={onToggle}
-          className="shrink-0"
-        >
+        <Button size="sm" icon={on ? Tick : Plus} aria-pressed={on} onClick={onToggle} className="shrink-0">
           {on ? "Выбрано" : "Добавить"}
         </Button>
       )}
@@ -250,17 +245,21 @@ function WayCard({
 /**
  * «Новая проверка»: which conversations, by which rules, and what to check — the recorded answers, the same questions
  * asked of the live agent, the simulations. The fields are only the launch's: nothing in the product changes until
- * «Запустить» (the service makes the dataset and the rules current then, api/launches.py). A way that cannot run now
- * is shown greyed with what it needs, not offered and then refused.
+ * «Запустить» (the service makes the dataset and the rules current then, and keeps the version typed here as the
+ * dataset's, api/launches.py). A way that cannot run now is shown greyed with what it needs, not offered and then
+ * refused; without models nothing starts, and the line beside the button says so. Before the first check the three
+ * first steps lead the form, as on «Обзор» and «Критерии».
  */
 export function LaunchPage({ check }: { check: Check }) {
   const { state, offline, refresh } = useLabState();
   const datasets = useDatasets();
   const judges = useJudges(check);
   const navigate = useNavigate();
+  const first = useFirstRun(check) === true && check === "tone";
   const [draft] = useState(() => readDraft(check));
   const [modes, setModes] = useState<Mode[]>(draft.modes);
-  const [version, setVersion] = useState(draft.version);
+  // The version of the agent in the chosen dataset as typed here; until then the dataset's own.
+  const [version, setVersion] = useState<string | null>(null);
   // The count as typed, so the field can be emptied on the way to another number; it settles when the field is left.
   const [size, setSize] = useState(String(draft.size));
   const [target, setTarget] = useState(draft.target);
@@ -280,6 +279,7 @@ export function LaunchPage({ check }: { check: Check }) {
     library?.datasets.find((d) => d.id === datasetId && !d.archivedAt) ??
     library?.datasets.find((d) => d.id === library.activeId) ??
     null;
+  const agentVersion = version ?? dataset?.agentVersion ?? "";
   const versions = judges.data?.versions ?? [];
   // «» is accuracy by the criteria from the agent's code; tone of voice always needs a rule set.
   const remembered =
@@ -316,14 +316,16 @@ export function LaunchPage({ check }: { check: Check }) {
     try {
       localStorage.setItem(
         agentKey(`launch-draft-${check}`),
-        JSON.stringify({ modes, version, size: wanted > 0 ? wanted : draft.size, target } satisfies Draft),
+        JSON.stringify({ modes, size: wanted > 0 ? wanted : draft.size, target } satisfies Draft),
       );
     } catch {
       /* Drafts are optional when browser storage is unavailable. */
     }
-  }, [check, modes, version, wanted, target, draft.size]);
+  }, [check, modes, wanted, target, draft.size]);
 
   const blocked = busy || !!state?.job.running;
+  // Without models a check would start and fail at its first conversation (api/launches.py refuses it too).
+  const noModels = !!state?.models.problem;
   // What the last check found, beside the next one: the way into its history.
   const last = resultOf(state, check);
   const loading = !library || !judges.data;
@@ -362,7 +364,7 @@ export function LaunchPage({ check }: { check: Check }) {
                   ? "Сценарии собираются из ошибок в записанных ответах: чтобы сыграть их по выбранным критериям, отметьте и «Ответы в датасете»."
                   : null;
   const start = async () => {
-    if (blocked || !ready || !dataset) return;
+    if (blocked || !ready || noModels || !dataset) return;
     setBusy(true);
     setError("");
     try {
@@ -370,7 +372,7 @@ export function LaunchPage({ check }: { check: Check }) {
         check,
         datasetId: dataset.id,
         judgeId: rules?.id ?? null,
-        agentVersion: version.trim(),
+        agentVersion: agentVersion.trim(),
         modes: chosen,
         count: conversations,
         ...(subset ? { ruleIds: subset } : {}),
@@ -390,7 +392,7 @@ export function LaunchPage({ check }: { check: Check }) {
   const why = state?.job.running ? "Сейчас идёт другая задача этого агента." : ready ? null : missing;
   const plan =
     dataset && conversations && rulesReady
-      ? `Проверим ${count(conversations, "разговор", "разговора", "разговоров")} из «${shownName(dataset)}» ${
+      ? `Проверим ${count(conversations, "разговор", "разговора", "разговоров")} из датасета «${shownName(dataset)}» ${
           rules
             ? `по ${subset ? `${subset.length} из ${criteria.length}` : criteria.length} ${plural(
                 subset ? subset.length : criteria.length,
@@ -459,6 +461,13 @@ export function LaunchPage({ check }: { check: Check }) {
       ) : (
         <div className="max-w-[920px] px-4 pb-16 pt-8 lg:px-10">
           <h2 className="text-page font-semibold text-fg">Новая проверка</h2>
+          {first && !loading && (
+            <FirstStepsLine
+              criteria={criteria.length}
+              collecting={state?.job.running && state.job.kind === "tone-criteria"}
+              className="mt-4"
+            />
+          )}
           {failed && (
             <div className="mt-6">
               <LoadFailed
@@ -490,7 +499,11 @@ export function LaunchPage({ check }: { check: Check }) {
                         label: shownName(d),
                         sub: datasetFacts(d).join(" · "),
                         on: d.id === dataset.id,
-                        run: () => setDatasetId(d.id),
+                        run: () => {
+                          setDatasetId(d.id);
+                          // Another dataset holds another agent's answers: its own version comes with it.
+                          setVersion(null);
+                        },
                       }))}
                       trigger={
                         <span className="flex min-w-0 items-center gap-1 text-left">
@@ -505,24 +518,31 @@ export function LaunchPage({ check }: { check: Check }) {
                 }
               >
                 {!library ? null : !dataset ? (
+                  // The first step not done: loading the dataset is the form's black button until it is.
                   <span className="flex flex-wrap items-center gap-3">
                     Проверка идёт по датасету разговоров.
-                    <UploadButton variant="outline" label="Загрузить" />
+                    <UploadButton size="sm" />
                   </span>
                 ) : (
                   <>
-                    Проверим{" "}
-                    <input
-                      aria-label="Сколько разговоров проверить"
-                      inputMode="numeric"
-                      value={wanted > most && most > 0 ? String(most) : size}
-                      onChange={(e) => setSize(e.target.value.replace(/\D/g, "").slice(0, 3))}
-                      onBlur={() => setSize(String(conversations || Math.min(100, most) || draft.size))}
-                      style={{ width: `${Math.max(2, (wanted > most ? String(most) : size).length) + 0.6}ch` }}
-                      className={NUMBER}
-                    />{" "}
-                    из {total}
-                    {total > MAX ? ` · за раз до ${MAX}` : ""}
+                    {/* The sample as a field, and why its number matters: the same number takes the same
+                        conversations (domain/sampling.py), so the checks of the dataset compare. */}
+                    <label className="flex flex-wrap items-center gap-x-2 gap-y-1 text-read text-fg-2">
+                      Проверим
+                      <Input
+                        aria-label="Сколько разговоров проверить"
+                        inputMode="numeric"
+                        value={wanted > most && most > 0 ? String(most) : size}
+                        onChange={(e) => setSize(e.target.value.replace(/\D/g, "").slice(0, 3))}
+                        onBlur={() => setSize(String(conversations || Math.min(100, most) || draft.size))}
+                        className={NUMBER}
+                      />
+                      из {count(total, "разговора", "разговоров", "разговоров")}
+                    </label>
+                    <span className="mt-2 block text-small text-fg-3">
+                      При том же числе это всегда те же разговоры датасета, поэтому проверки можно сравнивать.
+                      {total > MAX ? ` За раз — не больше ${MAX}.` : ""}
+                    </span>
                   </>
                 )}
               </StepCard>
@@ -550,7 +570,7 @@ export function LaunchPage({ check }: { check: Check }) {
               >
                 {!judges.data ? null : rules ? (
                   <>
-                    из «{rules.name}
+                    из правил «{rules.name}
                     {versionWord(rules, versions)}» ·{" "}
                     <Link to={criteriaPage} className="text-run hover:underline">
                       открыть
@@ -572,9 +592,10 @@ export function LaunchPage({ check }: { check: Check }) {
                 ) : (
                   <span className="flex flex-wrap items-center gap-3">
                     {check === "tone" ? "Критерии соберутся из правил." : "Критерии соберутся из кода."}
+                    {/* The step after the dataset: black once the dataset is here, quiet before. */}
                     <Link
                       to={check === "tone" ? criterionLink("tone") : criteriaPage}
-                      className={buttonClass({ variant: "primary", size: "sm" })}
+                      className={buttonClass({ variant: dataset ? "primary" : "outline", size: "sm" })}
                     >
                       {check === "tone" ? "Добавить правила" : "К критериям"}
                     </Link>
@@ -625,21 +646,26 @@ export function LaunchPage({ check }: { check: Check }) {
               </p>
             )}
 
-            {/* The version the check measures: a field of its own, so that checks of versions can be told apart. */}
-            <label className="mt-10 block max-w-sm">
-              <span className="block text-read font-medium text-fg">Версия агента</span>
-              <Input
-                name="agent-version"
-                value={version}
-                onChange={(e) => setVersion(e.target.value)}
-                maxLength={80}
-                placeholder="Например, v2.4"
-                className="mt-2"
-              />
-              <span className="mt-1.5 block text-small text-fg-3">
-                Необязательно. Видна в итоге и в истории, чтобы сравнивать проверки разных версий.
-              </span>
-            </label>
+            {/* The version whose answers the dataset holds: the dataset's own, and a check of it keeps the one typed
+                here as the dataset's (api/launches.py), so the checks of versions can be told apart. */}
+            {dataset && (
+              <label className="mt-10 block max-w-sm">
+                <span className="block text-read font-medium text-fg">
+                  Версия агента в этом датасете <span className="font-normal text-fg-3">· по желанию</span>
+                </span>
+                <Input
+                  name="agent-version"
+                  value={agentVersion}
+                  onChange={(e) => setVersion(e.target.value)}
+                  maxLength={80}
+                  placeholder="Например, v2.4"
+                  className="mt-2"
+                />
+                <span className="mt-1.5 block text-small text-fg-3">
+                  Какая версия агента дала ответы этого датасета. Сохранится у датасета, видна в итоге и в истории.
+                </span>
+              </label>
+            )}
 
             <div className="mt-8 flex flex-wrap items-center gap-x-5 gap-y-3">
               <Button
@@ -647,12 +673,16 @@ export function LaunchPage({ check }: { check: Check }) {
                 variant="primary"
                 icon={Play}
                 loading={busy}
-                disabled={!ready || blocked}
+                disabled={!ready || blocked || noModels}
                 onClick={start}
               >
                 Запустить проверку
               </Button>
-              {(why ?? plan) && <p className="min-w-0 basis-full text-body text-fg-3">{why ?? plan}</p>}
+              {noModels ? (
+                <NoModels className="basis-full" />
+              ) : (
+                (why ?? plan) && <p className="min-w-0 basis-full text-body text-fg-3">{why ?? plan}</p>
+              )}
             </div>
             {error && (
               <p role="alert" className="mt-3 text-body text-bad">
