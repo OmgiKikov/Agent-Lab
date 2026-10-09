@@ -7,7 +7,7 @@ from zipfile import ZipFile
 
 import support
 
-from lab import config, models, storage
+from lab import models, storage
 from lab.domain import checks, policy_files, quotes
 from lab.domain import tone as tone_rules
 from lab.flows import accuracy, conversations, inputs, tone
@@ -116,10 +116,10 @@ class JudgingOrderTests(unittest.IsolatedAsyncioTestCase):
             active -= 1
             return {'dialogueId': dialogue['id'], 'status': 'PASS', 'rules': [], 'second': None}
 
-        dialogues = [{'id': str(i)} for i in range(config.current().concurrency * 4)]
+        dialogues = [{'id': str(i)} for i in range(models.concurrency() * 4)]
         with patch.object(conversations, 'judge_dialogue', judged):
             results = await tone.judge(dialogues, {'id': 't', 'rules': []}, lambda **values: done.append(values))
-        self.assertLessEqual(most, config.current().concurrency)
+        self.assertLessEqual(most, models.concurrency())
         self.assertEqual([r['dialogueId'] for r in results], [d['id'] for d in dialogues])
         self.assertEqual(done[-1]['done'], len(dialogues))
 
