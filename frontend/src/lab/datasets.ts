@@ -14,6 +14,8 @@ export type Dataset = {
   archivedAt: string | null;
   /** The conversations its upload left out (the agent wrote first, or never answered); null when not known. */
   skipped?: number | null;
+  /** The version of the agent whose answers the dataset holds, as a person named it; empty when nobody did. */
+  agentVersion?: string;
 };
 export type DatasetLibrary = { activeId: string | null; datasets: Dataset[] };
 export function useDatasets(archived = false) {

@@ -16,6 +16,11 @@ export type Example = {
   ruleId: string;
   status: "FAIL" | "PASS" | "UNKNOWN";
   opening: string;
+  /**
+   * The customer's words the quoted reply answered: the customer's message right before the agent's message that holds
+   * the quote. Empty when the quote is not found in the conversation; a screen then falls back to `opening`.
+   */
+  asked?: string;
   topic: string;
   name?: string;
   persona?: string;
@@ -36,8 +41,20 @@ export type Example = {
    */
   check?: Check;
 };
-/** One stage of a rule: its counts, its verdicts, and the ids the checks gave the rule in this stage. */
-export type Side = { failed: number; passed: number; unknown: number; examples: Example[]; ruleIds: string[] };
+/**
+ * One stage of a rule: its counts, its verdicts, and the ids the checks gave the rule in this stage. The counts are of
+ * the conversations the stage's line counts as checked (`assessed`), so a criterion never has more than its check:
+ * `failed + passed` are the ones the criterion applied to and was decided in, `unknown` the ones it applied to and
+ * could not be decided in, `notApplicable` the rest. The examples keep every verdict.
+ */
+export type Side = {
+  failed: number;
+  passed: number;
+  unknown: number;
+  notApplicable?: number;
+  examples: Example[];
+  ruleIds: string[];
+};
 /** What the automatic check proposed for a criterion: whether its errors are serious, and why. */
 export type Proposal = { serious: boolean; reason: string };
 /**
