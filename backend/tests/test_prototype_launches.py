@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import support
 from test_prototype_library import criterion, dialogue
+from test_tone import POLICY
 
 from lab import models, storage
 from lab.agents import idp
@@ -796,6 +797,58 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
         storage.tasks.end(task['id'], storage.tasks.STOPPED)
         shown = (await self.client.get('/api/questions/l9-questions?brief=1')).json()
         self.assertEqual(shown['status'], 'stopped')
+
+
+class ModelsNotSetUpTests(unittest.IsolatedAsyncioTestCase):
+    """OpenRouter without its key: a check that would fail on its first conversation is refused before it starts, in
+    words that say why and where to look; so is collecting criteria the model would write. A rubric that defines its
+    criteria in code needs no model."""
+
+    REFUSAL = (
+        'Модели не настроены: Нет ключа OpenRouter. Задайте OPENROUTER_API_KEY и перезапустите Agent Lab. '
+        'Подробности в «Настройках».'
+    )
+
+    async def asyncSetUp(self):
+        support.serve(self, model_url=None)
+        self.dataset = datasets.add([dialogue()], 'dialogs.json')
+
+    async def wait_job(self):
+        for _ in range(100):
+            if not self.jobs.state['running']:
+                return
+            await asyncio.sleep(0.002)
+        self.fail('background job did not finish')
+
+    async def test_no_check_starts_while_the_models_are_not_set_up(self):
+        rules = judges.save('tone', 'Правила', 'Всегда обращайтесь к клиенту на вы.', [criterion()], None, None)
+        given = {
+            'check': 'tone',
+            'datasetId': self.dataset['id'],
+            'judgeId': rules['id'],
+            'count': 1,
+            'agentVersion': 'v1.0',
+            'modes': ['dataset'],
+        }
+        response = await self.client.post('/api/launches', json=given)
+        self.assertEqual((response.status_code, response.json()['detail']), (400, self.REFUSAL))
+        self.assertEqual((storage.launches.listed('launch'), storage.tasks.latest('launch')), ([], None))
+        self.assertEqual(storage.datasets.get(self.dataset['id'])['agentVersion'], '')
+
+    async def test_criteria_the_model_would_write_wait_for_it_and_a_coded_rubric_does_not(self):
+        policy = {'text': 'Обращайтесь к клиенту на вы и отвечайте вежливо.', 'name': 'Правила'}
+        await self.client.post('/api/tone-of-voice/policy', json=policy)
+        response = await self.client.post('/api/tone-of-voice/criteria')
+        self.assertEqual((response.status_code, response.json()['detail']), (400, self.REFUSAL))
+        self.assertIsNone(storage.tasks.latest('tone-criteria'))
+        await self.client.post('/api/tone-of-voice/policy', json={'text': POLICY, 'name': 'ToV.docx'})
+        response = await self.client.post('/api/tone-of-voice/criteria')
+        self.assertEqual(response.status_code, 200, response.text)
+        await self.wait_job()
+        self.assertIsNone(self.jobs.state['error'])
+        self.assertEqual(
+            [rule['id'] for rule in storage.documents.load(tone.DRAFT)['criteria']], ['pronouns', 'simple_language']
+        )
 
 
 class IdpTests(unittest.TestCase):

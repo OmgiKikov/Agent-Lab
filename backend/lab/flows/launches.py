@@ -4,7 +4,7 @@ import asyncio
 import uuid
 from functools import partial
 
-from .. import storage
+from .. import models, storage
 from ..domain import checks
 from . import (
     Progress,
@@ -30,7 +30,8 @@ STOPPED = 'Остановлено пользователем.'
 def prepare(given: dict) -> dict:
     """A launch's choices, checked (_chosen), and what it is made of put in force: its dataset, the version of the agent
     whose answers the dataset holds when the launch checks them and names one («Версия агента в этом датасете»), its
-    rules. A ValueError says what to choose."""
+    rules. A ValueError says what to choose, or that the models every way of checking asks are not set up."""
+    models.ensure_set_up()
     dataset = _chosen(given)
     with storage.transaction():
         datasets.select(dataset['id'])

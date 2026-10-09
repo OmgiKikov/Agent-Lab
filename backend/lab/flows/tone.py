@@ -81,6 +81,14 @@ async def collect_criteria(progress: Progress) -> dict:
     return draft
 
 
+def ensure_collectable() -> None:
+    """Criteria can be collected from the rules in force now: the rules define them in code
+    (domain.tone.coded_criteria), or the model that collects them can be asked (models.ensure_set_up). A ValueError
+    says what is missing before any work starts."""
+    if not tone.coded_criteria(current_policy()):
+        models.ensure_set_up()
+
+
 async def prepare(progress: Progress) -> dict:
     """New criteria from the current rules, not saved yet: from their code when they define it, else from the model."""
     source = current_policy()

@@ -48,6 +48,8 @@ MAX_PAUSE = 60  # a longer Retry-After is cut to this, and so is a pause that do
 # (RateLimited), whatever it did kept.
 LIMIT_ATTEMPTS = 8
 LIMIT_PAUSE = 5
+# Work refused before it starts, while the models cannot be asked (ensure_set_up).
+NOT_SET_UP = 'Модели не настроены: {}. Подробности в «Настройках».'
 RATE_LIMITED = (
     'Модель не принимает запросы: превышен лимит (HTTP 429). Lab подождал и повторил запрос {} раз, но лимит не снят. '
     'Подождите несколько минут и продолжите: сделанное сохранено.'
@@ -350,16 +352,24 @@ def describe() -> dict:
         'main': main,
         'second': second if judge else None,
         'secondVia': second_via if second_via != via else None,
-        'problem': _problem(),
+        'problem': problem(),
     }
 
 
-def _problem() -> str | None:
+def problem() -> str | None:
     """Why no conversation can be checked now: the bank's gateway, set up, does not work, or OpenRouter has no key."""
     found = endpoints()
     if found.main[0] == GATEWAY:
         return gateway.problem()
     return NO_KEY if found.main[0] == OPENROUTER and not found.main_key else None
+
+
+def ensure_set_up() -> None:
+    """Work that asks the models starts only while they can be asked: before any of it is done, a ValueError says
+    why they cannot (problem) and where to look (NOT_SET_UP)."""
+    found = problem()
+    if found:
+        raise ValueError(NOT_SET_UP.format(found.rstrip('.')))
 
 
 def _via(base: str) -> str:
@@ -409,9 +419,11 @@ __all__ = [
     'describe',
     'detail',
     'endpoints',
+    'ensure_set_up',
     'gateway',
     'main_model',
     'models_used',
+    'problem',
     'refused',
     'second_judge',
     'unusable',
