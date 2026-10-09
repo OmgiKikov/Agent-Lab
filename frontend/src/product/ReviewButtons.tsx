@@ -14,13 +14,11 @@ export function ReviewButtons({
   example,
   onDecide,
   onSkip,
-  emphasis,
   size = "lg",
 }: {
   example: Example;
   onDecide: (d: Decision) => void;
   onSkip?: () => void;
-  emphasis?: boolean;
   size?: "lg" | "sm";
 }) {
   const { state } = useLabState();
@@ -65,7 +63,6 @@ export function ReviewButtons({
         </Button>
         <Button
           size={big ? "lg" : "md"}
-          variant={emphasis && !yes ? "primary" : "outline"}
           icon={Check}
           kbd="V"
           aria-pressed={yes}

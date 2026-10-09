@@ -120,7 +120,7 @@ export function ExampleCard({
             emphasis && "sticky bottom-0 z-10 border-t border-line bg-list/90 pb-4 pt-4 backdrop-blur-md",
           )}
         >
-          <ReviewButtons example={example} onDecide={onDecide} onSkip={onSkip} emphasis={emphasis} />
+          <ReviewButtons example={example} onDecide={onDecide} onSkip={onSkip} />
           {actions}
         </div>
       )}
