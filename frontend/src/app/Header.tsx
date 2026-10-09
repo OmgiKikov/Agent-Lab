@@ -51,14 +51,7 @@ export function Header({
           </div>
           {sub && <div className="truncate text-small text-fg-3 lg:hidden">{sub}</div>}
         </div>
-        <Button
-          variant="ghost"
-          icon={Search}
-          aria-label="Поиск"
-          title="Поиск (⌘K)"
-          onClick={shell.openPalette}
-          className="lg:hidden"
-        />
+        <Button variant="ghost" icon={Search} aria-label="Поиск" onClick={shell.openPalette} className="lg:hidden" />
         {actions && (
           <div className={cn("flex flex-wrap items-center gap-2 sm:w-auto", !actionsInline && "w-full")}>{actions}</div>
         )}

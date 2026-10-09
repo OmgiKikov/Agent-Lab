@@ -19,9 +19,13 @@ export type JudgeVersion = {
 export function useJudges(kind: Check) {
   const { state, refresh } = useLabState();
   const cache = useQueryClient();
+  // Asked once the state is here: its key changes with the criteria and the sources, and asking before would ask twice
+  // on every first look. While the key changes the library before stays on screen (placeholderData).
   const query = useQuery({
     queryKey: ["judges", AGENT, kind, state?.toneOfVoice?.revision, state?.sources.map((s) => s.sha256).join(",")],
     queryFn: () => api<{ versions: JudgeVersion[]; selectedId: string | null }>(`/api/judges/${kind}`),
+    enabled: !!state,
+    placeholderData: (previous) => previous,
   });
   const reload = async () => {
     await refresh();

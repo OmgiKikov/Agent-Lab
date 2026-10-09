@@ -10,7 +10,10 @@ import type { LabState } from "../../lab/types";
 import { UploadButton } from "../../product/UploadLogs";
 import { buttonClass } from "../../ui/Button";
 import { previousOf } from "../../lab/compare";
+import { useDatasets } from "../../lab/datasets";
+import { shownName } from "../data/DatasetInfo";
 import { PreviousCheck, useComparison } from "./Compare";
+import { PastCheck } from "./RunPage";
 
 export type Need = { label: string; value: string | null; later: string };
 
@@ -20,7 +23,7 @@ export function needsOf(check: Check, state: LabState | null): Need[] {
   const dialogs = {
     label: "Разговоры",
     value: total ? count(total, "разговор", "разговора", "разговоров") : null,
-    later: "выберите датасет или загрузите выгрузку чата",
+    later: "выберите или загрузите датасет",
   };
   if (check === "tone") {
     const policy = state?.sources.find((s) => s.id === TONE_ID);
@@ -98,19 +101,23 @@ function usePrevious(check: Check) {
 }
 
 /**
- * Tone of voice before its result: the check under way, a new export not checked yet beside the previous check, the
- * check begun, or how to begin it.
+ * Tone of voice before its result: the check under way; a new dataset not checked yet, with the previous check in full
+ * under it — «Итог» never goes blank because new conversations came; the check begun, or how to begin it.
  */
 export function ToneStart() {
   const { state } = useLabState();
   const previous = usePrevious("tone");
+  const library = useDatasets();
+  const fresh = library.data?.datasets.find((d) => d.id === library.data?.activeId);
   const job = state?.job;
   // A launch of this check is a check under way too: its report shows how far it got.
   const launch = job?.running && job.kind === "launch" && job.input?.check === "tone" ? job.progress.launch : null;
+  // A launch that only asks the agent again makes no «Итог»: its answers are on its own page.
+  const asking = !!launch && !job?.input?.modes?.includes("dataset");
   if (job?.running && (job.kind === "tone-check" || launch))
     return (
       <Empty
-        title="Проверяем разговоры"
+        title={asking ? "Задаём агенту вопросы клиентов" : "Проверяем разговоры"}
         action={
           <Link to={launch ? launchLink("tone", launch) : SECTIONS.tone} className={primary}>
             Открыть проверку
@@ -118,24 +125,28 @@ export function ToneStart() {
           </Link>
         }
       >
-        Итог появится здесь, когда модель проверит разговоры. Страницу можно закрыть, итог сохранится.
+        {asking
+          ? "Новые ответы агента и их оценка будут на странице запуска. Итог проверки разговоров здесь не изменится."
+          : "Итог появится здесь, когда модель проверит разговоры. Страницу можно закрыть, итог сохранится."}
       </Empty>
     );
   if (previous?.newExport)
     return (
-      <Empty
-        title="Новая выгрузка ещё не проверена"
-        needs={needsOf("tone", state)}
-        action={
-          <Link to={launchLink("tone")} className={primary}>
-            Проверить новую выгрузку
-            <ArrowRight aria-hidden className="size-4" />
-          </Link>
+      <PastCheck
+        check="tone"
+        id={previous.line.id}
+        lead={
+          <div className="flex max-w-[760px] flex-wrap items-center gap-x-4 gap-y-2 rounded-block bg-inset px-4 py-3">
+            <p className="min-w-[min(100%,18rem)] flex-1 text-body text-fg-2">
+              {fresh ? `Новый датасет «${shownName(fresh)}» ещё не проверен.` : "Новый датасет ещё не проверен."} Ниже —
+              итог прошлой проверки.
+            </p>
+            <Link to={launchLink("tone")} className={buttonClass({ variant: "primary", size: "sm" })}>
+              Проверить новый датасет
+            </Link>
+          </div>
         }
-      >
-        <PreviousCheck check="tone" line={previous.line} />
-        <p className="mt-2">Чтобы сравнить итог с прошлой проверкой, проверьте новые разговоры по тем же критериям.</p>
-      </Empty>
+      />
     );
   return (
     <Empty
@@ -150,7 +161,7 @@ export function ToneStart() {
     >
       {needsOf("tone", state).every((need) => need.value)
         ? "Разговоры и критерии готовы. В «Новой проверке» выберите, сколько разговоров проверить и что именно."
-        : "Загрузите выгрузку чата и правила общения. Из правил соберём критерии и проверим по ним настоящие разговоры. Подключать агента не нужно."}
+        : "Загрузите датасет разговоров и правила общения. Из правил соберём критерии и проверим по ним настоящие разговоры. Подключать агента не нужно."}
       {previous && <PreviousCheck check="tone" line={previous.line} className="mt-3" />}
     </Empty>
   );
@@ -190,13 +201,13 @@ export function AccuracyStart() {
   const total = state?.logs.total ?? 0;
   if (!total)
     return (
-      <Empty title="Нужна выгрузка чата" needs={needsOf("code", state)} action={<UploadButton check="code" />}>
-        Критерии точности готовы. Проверку проводят на настоящих разговорах клиентов из выгрузки.
+      <Empty title="Нужен датасет" needs={needsOf("code", state)} action={<UploadButton check="code" />}>
+        Критерии точности готовы. Проверку проводят на настоящих разговорах клиентов из датасета.
       </Empty>
     );
   return (
     <Empty
-      title={previous?.newExport ? "Новая выгрузка ещё не проверена" : "Здесь появится итог точности"}
+      title={previous?.newExport ? "Новый датасет ещё не проверен" : "Здесь появится итог точности"}
       needs={needsOf("code", state)}
       action={
         <Link to={launchLink("code")} className={primary}>

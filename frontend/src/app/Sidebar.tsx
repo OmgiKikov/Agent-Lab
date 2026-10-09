@@ -34,7 +34,7 @@ export const GROUPS: { label?: string; items: NavItem[] }[] = [
     ],
   },
   {
-    label: "Проверки разговоров",
+    label: "Проверки",
     items: [
       { to: SECTIONS.tone, label: CHECK_NAME.tone, mobileLabel: "Tone", icon: MessageSquareQuote },
       // Hidden in the first release (app/product), not removed.
@@ -97,7 +97,6 @@ export function Sidebar() {
       >
         <Search aria-hidden className="size-[18px]" strokeWidth={1.6} />
         <span className="flex-1 text-left">Поиск</span>
-        <span className="text-small text-fg-4">⌘K</span>
       </button>
       <div className="mt-0.5 flex flex-col">
         {GROUPS.map((group, i) => {

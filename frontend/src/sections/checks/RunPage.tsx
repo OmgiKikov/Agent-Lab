@@ -8,7 +8,7 @@ import { useWide } from "../../app/useWide";
 import { resultOf } from "../../lab/checks";
 import { logKey, logRows } from "../../lab/dialogs";
 import { count, longDay, time } from "../../lab/format";
-import { loadHistory } from "../../lab/history";
+import { loadHistory, notComparedText } from "../../lab/history";
 import { useLaunches } from "../../lab/launches";
 import { useLabState } from "../../lab/LabProvider";
 import { StageResult } from "../../product/StageResult";
@@ -21,7 +21,9 @@ import { queueOf } from "../problems/model";
 import { ProblemRow } from "../problems/ProblemRow";
 import { CheckHeader } from "./CheckHeader";
 import { Delta } from "./Compare";
-import { savedCriteria, useSaved } from "./saved";
+import { savedCriteria, useSaved, type SavedCriterion } from "./saved";
+import { duty } from "../../lab/criteria";
+import { plainRule, RuleText } from "../criteria/RuleText";
 
 const PART = { bad: "fail", ok: "pass", none: "none" } as const;
 const NONE = new Set<string>();
@@ -34,6 +36,16 @@ const NONE = new Set<string>();
  */
 export function RunPage({ check }: { check: Check }) {
   const { id = "" } = useParams();
+  // Another past check is another page: what was searched or filtered on the one before does not come along.
+  return <PastCheck key={id} check={check} id={id} />;
+}
+
+/**
+ * A past check read as «Итог» is. On «Итог» itself (`lead`), while a new dataset waits for its first check, it stands in
+ * for the result under the line that says so (checks/Start): its parts and «Все разговоры» open its own page.
+ */
+export function PastCheck({ check, id, lead }: { check: Check; id: string; lead?: ReactNode }) {
+  const embedded = lead !== undefined;
   const { state, offline } = useLabState();
   const [params, setParams] = useSearchParams();
   const location = useLocation();
@@ -66,21 +78,22 @@ export function RunPage({ check }: { check: Check }) {
   const asked = params.get("d");
   const key = asked ?? (wide ? (rows[0]?.key ?? null) : null);
   const selected = key ? all.find((r) => r.key === key) : undefined;
-  const set = (edit: (n: URLSearchParams) => void) =>
+  const set = (edit: (n: URLSearchParams) => void, replace = true) =>
     setParams(
       (prev) => {
         const n = new URLSearchParams(prev);
         edit(n);
         return n;
       },
-      { replace: true },
+      { replace },
     );
-  const open = (k: string | null) =>
+  // On a narrow screen a conversation opened from the list is a step of its own: «Назад» goes back to the list.
+  const open = (k: string | null, step = false) =>
     set((n) => {
       if (k) n.set("d", k);
       else n.delete("d");
       n.delete("dt");
-    });
+    }, !step);
   const step = (d: 1 | -1) => {
     if (!rows.length) return;
     const i = rows.findIndex((r) => r.key === key);
@@ -103,16 +116,20 @@ export function RunPage({ check }: { check: Check }) {
   });
 
   const header = <CheckHeader check={check} />;
-  const frame = (body: ReactNode) => (
-    <div className="flex h-full flex-col">
-      {header}
-      <div ref={box} className="min-h-0 flex-1 overflow-auto">
-        {body}
+  // On «Итог» the page around it has the head and the scroll.
+  const frame = (body: ReactNode) =>
+    embedded ? (
+      body
+    ) : (
+      <div className="flex h-full flex-col">
+        {header}
+        <div ref={box} className="min-h-0 flex-1 overflow-auto">
+          {body}
+        </div>
       </div>
-    </div>
-  );
+    );
   // The latest check is the result itself, with the answers that can still be given on it.
-  if (result?.checkId && result.checkId === id) return <Navigate to={stageRoot(check)} replace />;
+  if (!embedded && result?.checkId && result.checkId === id) return <Navigate to={stageRoot(check)} replace />;
   if (offline && !state) return frame(<ServiceDown />);
   if (error)
     return frame(
@@ -144,8 +161,11 @@ export function RunPage({ check }: { check: Check }) {
 
   const line = saved.check;
   const { failed, measured, unmeasured } = line.summary;
-  const previous = history.data?.checks.find((c) => c.id === line.comparison.previousId);
-  const comparable = (line.comparison.kind === "new-data" || line.comparison.kind === "same-data") && previous;
+  // The history's line of the check says how its difference reads (direction, verdict); its own record only how it
+  // stands to the one before it.
+  const comparison = history.data?.checks.find((c) => c.id === line.id)?.comparison ?? line.comparison;
+  const previous = history.data?.checks.find((c) => c.id === comparison.previousId);
+  const comparable = (comparison.kind === "new-data" || comparison.kind === "same-data") && previous;
   const problems = queueOf(criteria, "log");
   const self = historyLink(check, line.id);
   const dialogue = selected ? saved.dialogues.find((d) => d.id === selected.dialogueId) : undefined;
@@ -153,18 +173,22 @@ export function RunPage({ check }: { check: Check }) {
   return frame(
     <div className="px-4 pb-24 pt-6 lg:px-10 lg:pt-8">
       <div className="max-w-[1040px]">
-        <Link
-          to={historyLink(check)}
-          className="inline-flex items-center gap-1.5 rounded-sm text-body text-fg-3 transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
-        >
-          <ArrowLeft aria-hidden className="size-4" />
-          История проверок
-        </Link>
+        {embedded ? (
+          lead
+        ) : (
+          <Link
+            to={historyLink(check)}
+            className="inline-flex items-center gap-1.5 rounded-sm text-body text-fg-3 transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
+          >
+            <ArrowLeft aria-hidden className="size-4" />
+            История проверок
+          </Link>
+        )}
         <p className="mt-6 break-words text-read text-fg-3">
           {line.file ? `«${line.file}» · ` : ""}проверено {longDay(line.finishedAt)}, {time(line.finishedAt)}
           {line.sampled < line.total ? ` · выборка ${line.sampled} из ${line.total}` : ""}
           {launch?.judge ? ` · правила «${launch.judge.name}», версия ${launch.judge.version}` : ""}
-          {launch?.agentVersion ? ` · ${launch.agentVersion}` : ""}
+          {launch?.agentVersion ? ` · версия агента ${launch.agentVersion}` : ""}
           {launch && (
             <>
               {" · "}
@@ -188,24 +212,29 @@ export function RunPage({ check }: { check: Check }) {
                 to={historyLink(check, previous.id)}
                 at={previous.finishedAt}
                 before={previous.summary}
-                direction={line.comparison.direction}
-                verdict={line.comparison.verdict}
-                again={line.comparison.kind === "same-data"}
+                direction={comparison.direction}
+                verdict={comparison.verdict}
+                again={comparison.kind === "same-data"}
                 label={`${previous.summary.failed} из ${previous.summary.measured} → ${failed} из ${measured}`}
               />
             )
           }
         />
-        <div className="mt-6 flex max-w-[760px] flex-wrap items-center gap-x-4 gap-y-2 rounded-block bg-inset px-4 py-3">
-          <p className="min-w-0 flex-1 text-body text-fg-2">
-            Это прошлая проверка: разговоры и оценки сохранены такими, какими были. Ответить «ошибка или нет» можно в
-            последней.
-          </p>
-          <Link to={stageRoot(check)} className={buttonClass({ size: "sm" })}>
-            К итогу
-            <ArrowRight aria-hidden className="size-3.5" />
-          </Link>
-        </div>
+        {!embedded && (
+          <div className="mt-6 flex max-w-[760px] flex-wrap items-center gap-x-4 gap-y-2 rounded-block bg-inset px-4 py-3">
+            <p className="min-w-[min(100%,18rem)] flex-1 text-body text-fg-2">
+              Это прошлая проверка: разговоры и оценки сохранены такими, какими были. Ответить «ошибка или нет» можно в
+              последней.
+            </p>
+            <Link to={stageRoot(check)} className={buttonClass({ size: "sm" })}>
+              К итогу
+              <ArrowRight aria-hidden className="size-3.5" />
+            </Link>
+          </div>
+        )}
+        {comparison.kind === "incompatible" && comparison.previousId && (
+          <p className="mt-3 max-w-[760px] text-body text-fg-3">{notComparedText(comparison.reason)}</p>
+        )}
 
         <section aria-label="Проблемы" className="mt-16">
           <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 border-b border-line pb-3">
@@ -260,7 +289,7 @@ export function RunPage({ check }: { check: Check }) {
             query={query}
             onQuery={setQuery}
             selected={key}
-            onOpen={(k) => open(k)}
+            onOpen={(k) => open(k, !wide)}
             criteria={criteria}
             personas={state?.personas ?? []}
           />
@@ -296,13 +325,14 @@ export function RunPage({ check }: { check: Check }) {
           <summary className="cursor-pointer text-read font-medium text-fg">
             Критерии этой проверки · {saved.criteria.length}
           </summary>
-          <ol className="mt-4 space-y-3 text-body text-fg-2">
+          <ol className="mt-4 space-y-5 text-body text-fg-2">
             {saved.criteria.map((criterion, index) => (
               <li key={criterion.id}>
                 <span className="font-medium text-fg">
                   {index + 1}. {criterion.name}
                 </span>
-                <p className="mt-1 whitespace-pre-wrap">{criterion.text}</p>
+                <RuleText text={criterion.text} className="mt-1" />
+                <CriterionFacts criterion={criterion} />
               </li>
             ))}
           </ol>
@@ -314,5 +344,41 @@ export function RunPage({ check }: { check: Check }) {
         <p className="border-t border-line pt-5 text-small text-fg-3">{saved.note}</p>
       </div>
     </div>,
+  );
+}
+
+/** What a criterion of a past check said besides its text: when it applied, what was acceptable, what people
+ * clarified, and the words of the rules it came from. */
+function CriterionFacts({ criterion }: { criterion: SavedCriterion }) {
+  const facts: [string, ReactNode][] = [
+    ["Когда применяется", criterion.condition],
+    ["Исключения и допустимое", criterion.acceptable ? <RuleText text={criterion.acceptable} /> : null],
+    [
+      "Уточнения команды",
+      criterion.clarifications?.length ? (
+        <ul className="list-disc space-y-0.5 pl-5">
+          {criterion.clarifications.map((note) => (
+            <li key={note}>{note}</li>
+          ))}
+        </ul>
+      ) : null,
+    ],
+    // The rules' words without their headings («## Объём: text_volume»), as the criterion's card says them.
+    [
+      "Основание в правилах",
+      criterion.quote && criterion.quote !== criterion.text ? `«${plainRule(duty(criterion.quote))}»` : null,
+    ],
+  ];
+  const shown = facts.filter(([, value]) => !!value);
+  if (!shown.length) return null;
+  return (
+    <dl className="mt-2 space-y-1.5 text-small text-fg-3">
+      {shown.map(([label, value]) => (
+        <div key={label}>
+          <dt className="font-medium text-fg-2">{label}</dt>
+          <dd className="mt-0.5 whitespace-pre-wrap">{value}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }

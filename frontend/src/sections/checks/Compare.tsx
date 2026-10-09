@@ -21,8 +21,8 @@ import {
   type Verdict,
 } from "../../lab/compare";
 import { nameFromText } from "../../lab/criteria";
-import { longDay, pct } from "../../lab/format";
-import { shareText, type Counts } from "../../lab/history";
+import { longDay } from "../../lab/format";
+import { cleanPct, resultText, type Counts } from "../../lab/history";
 import { useLabState } from "../../lab/LabProvider";
 import type { RuleEntry } from "../../lab/problems";
 import { seriousFirst } from "../../lab/severity";
@@ -44,7 +44,7 @@ const link = "font-medium text-run hover:underline";
  * «Стало лучше?» beside the number itself, as Braintrust sets a run beside its baseline: an arrow and the previous share,
  * «↑ было 42% · 3 октября», opening that check, then what may be read into the difference. Red when the errors grew
  * beyond chance, green when they fell; grey when the difference may be chance, the conversations are few, or the same
- * ones were judged again. The serious comparison is in its tooltip. Nothing when there is nothing to compare with; when
+ * ones were judged again. The serious comparison follows on a line of its own. Nothing when there is nothing to compare with; when
  * the service did not answer, a quiet «Повторить».
  */
 export function CompareDelta({
@@ -76,23 +76,29 @@ export function CompareDelta({
   if (!compare?.previous || !parts || !overall?.before.measured) return null;
   const grave = serious ? seriousCompareText(compare, serious) : null;
   return (
-    <Delta
-      to={historyLink(check, compare.previous.id)}
-      at={compare.previous.finishedAt}
-      before={overall.before}
-      direction={overall.direction}
-      verdict={overall.verdict}
-      again={compare.kind === "same-data"}
-      label={parts.value}
-      title={[parts.value, brief && parts.note, grave].filter(Boolean).join("\n")}
-      brief={brief}
-    />
+    <>
+      <Delta
+        to={historyLink(check, compare.previous.id)}
+        at={compare.previous.finishedAt}
+        before={overall.before}
+        direction={overall.direction}
+        verdict={overall.verdict}
+        again={compare.kind === "same-data"}
+        label={parts.value}
+        title={[parts.value, brief && parts.note, grave].filter(Boolean).join("\n")}
+        brief={brief}
+      />
+      {/* The serious errors beside the number in words, on a touch screen too: a tooltip alone is never read there. */}
+      {grave && !brief && <span className="basis-full whitespace-pre-line">{grave}</span>}
+    </>
   );
 }
 
 /**
- * The previous check beside a number: «↑ было 42% · 3 октября», opening it, and what may be read into the difference
- * (lab/compare, VERDICT). Coloured only beyond chance on other conversations; the same ones judged again say so.
+ * The previous check beside a number: «↑ было 58% · 3 октября» — its share without an error found, as the number says
+ * the current one (lab/history, cleanPct), the arrow up when that share grew — opening it, and what may be read into
+ * the difference (lab/compare, VERDICT). Coloured only beyond chance on other conversations: green when the errors
+ * fell, red when they grew; the same ones judged again say so.
  */
 export function Delta({
   to,
@@ -120,7 +126,8 @@ export function Delta({
   brief?: boolean;
 }) {
   const telling = !again && verdict === "beyond-chance";
-  const Icon = direction === "more" ? ArrowUp : direction === "fewer" ? ArrowDown : Equal;
+  // `direction` is the errors': more of them is less of the conversations without one.
+  const Icon = direction === "more" ? ArrowDown : direction === "fewer" ? ArrowUp : Equal;
   const note = again ? "Повторная оценка тех же разговоров." : verdict && verdict !== "same" ? VERDICT[verdict] : "";
   return (
     <>
@@ -138,7 +145,7 @@ export function Delta({
         )}
       >
         <Icon aria-hidden className="size-3.5" />
-        было {pct(before.failed, before.measured)}% · {longDay(at)}
+        было {cleanPct(before)}% · {longDay(at)}
       </Link>
       {note && !brief && <span>{note}</span>}
     </>
@@ -153,7 +160,7 @@ export function PreviousCheck({ check, line, className }: { check: Check; line: 
       <Link to={historyLink(check, line.id)} className={link}>
         Прошлая проверка
       </Link>
-      : {summary.measured ? shareText(summary) : "ни один разговор не удалось проверить"}
+      : {summary.measured ? resultText(summary) : "ни один разговор не удалось проверить"}
       {line.file ? ` · «${line.file}»` : ""} · {longDay(line.finishedAt)}
     </p>
   );
@@ -187,7 +194,7 @@ export function wasOf(compare: Compare | null): ((id: string) => ReactNode) | un
  * denominator says what it rests on, and the service's verdict always stands beside it — «мало разговоров, чтобы
  * судить», beyond chance or within it — so that «0 из 12» is never read as a conclusion about the agent. Each opens
  * the conversations of this result it was checked in. The serious criteria (`serious`, by their keys) come first and
- * say «серьёзная», as the problems above.
+ * say «важный», as the problems above.
  */
 export function NoLongerFound({
   check,
@@ -206,7 +213,7 @@ export function NoLongerFound({
   return (
     <section aria-labelledby={`gone-${check}`} className="mt-12">
       <h3 id={`gone-${check}`} className="text-lead font-semibold text-fg">
-        {repeat ? "При повторной оценке ошибок не нашли" : "Ошибок в этой выгрузке не нашли"}
+        {repeat ? "При повторной оценке ошибок не нашли" : "Ошибок в этом датасете не нашли"}
       </h3>
       <p className="mt-1 text-body text-fg-3">
         {repeat ? "В прошлой оценке тех же разговоров ошибки по ним были." : "В прошлой проверке ошибки по ним были."}

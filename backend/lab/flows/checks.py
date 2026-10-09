@@ -4,7 +4,7 @@ conversation with its evaluation. Reads stored records only: no model is called.
 """
 
 from .. import agents, storage
-from ..domain import answers, checks, metric, results, statistics, was_is
+from ..domain import answers, checks, judges, metric, results, statistics, was_is
 from ..domain import problems as problem_book
 from . import inputs
 
@@ -35,6 +35,8 @@ def head(check: str) -> dict | None:
         return None
     summary = {key: value for key, value in _counted(result).items() if key != 'patterns'}
     brief = {key: value for key, value in result.items() if key != 'results'}
+    if brief.get('judge'):  # the rules by their set and version: their text stays in the result
+        brief['judge'] = judges.brief(brief['judge'])
     return brief | {
         'summary': summary,
         'conversations': len(result.get('results') or []),

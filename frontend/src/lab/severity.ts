@@ -13,13 +13,13 @@ import type { Check, Job } from "./types";
  * the criteria, on the problem's page, or all at once («Подтвердить все») — and a person's decision always wins: no new
  * proposal changes it. Without either an error is minor. Both live in the service by the criterion's key (the
  * problem's id), apart from the criteria: they change neither what is checked nor how. Serious problems come first
- * everywhere, carry «серьёзная», and the conversations with a serious error are counted beside the check's number —
+ * everywhere, carry «важный», and the conversations with a serious error are counted beside the check's number —
  * never instead of it, never added to it; every screen says whose decision it is.
  */
 export type Mark = { check: Check; rule: string; serious: boolean };
 
 /** What the service says while the automatic check proposes (backend/lab/flows/severity.py), and the name of its task. */
-export const PROPOSING = "Отмечаем серьёзные ошибки";
+export const PROPOSING = "Отмечаем важные критерии";
 
 /** The person reading («вы») or, on a page someone else reads (the summary, a report, a letter), people («люди»). */
 type Who = "you" | "people";
@@ -91,14 +91,14 @@ export function standingOf(data: Problems | null | undefined): Standing | null {
 export function pendingOf(st: Standing): { text: string; again: boolean } | null {
   if (!st.pending) return null;
   return st.error
-    ? { text: `Не удалось отметить серьёзные ошибки. ${sentence(st.error)}`, again: true }
-    : { text: "Серьёзные ошибки ещё не отмечены.", again: false };
+    ? { text: `Не удалось отметить важные критерии. ${sentence(st.error)}`, again: true }
+    : { text: "Важные критерии ещё не отмечены.", again: false };
 }
 
 /**
- * Which criteria are serious and whose decision it is, in one line: «Серьёзные критерии — 2 из 8. Их отметила модель,
+ * Which criteria are serious and whose decision it is, in one line: «Важные критерии — 2 из 8. Их отметила модель,
  * вы проверили 0 из 8.» Once a person decided every serious one, «Их отметили вы.», with how many criteria they checked
- * in all while some proposals wait. With no serious criterion: «Серьёзных критериев нет. Так решили вы.» On a page
+ * in all while some proposals wait. With no serious criterion: «Важных критериев нет. Так решили вы.» On a page
  * someone else reads, the automatic check and people.
  */
 export function whoseText(st: Standing, who: Who = "you"): string {
@@ -106,9 +106,9 @@ export function whoseText(st: Standing, who: Who = "you"): string {
   const checked = `${person} проверили ${st.decided}\u00a0из\u00a0${st.criteria}`;
   if (!st.serious)
     return st.proposed
-      ? `Серьёзных критериев нет. Так считает ${MODEL[who]}, ${checked}.`
-      : `Серьёзных критериев нет. Так решили ${person}.`;
-  const head = `Серьёзных критериев ${st.serious}\u00a0из\u00a0${st.criteria}.`;
+      ? `Важных критериев нет. Так считает ${MODEL[who]}, ${checked}.`
+      : `Важных критериев нет. Так решили ${person}.`;
+  const head = `Важных критериев ${st.serious}\u00a0из\u00a0${st.criteria}.`;
   const them = st.serious === 1 ? "Его" : "Их";
   if (!st.yours) return `${head} ${them} отметила ${MODEL[who]}, ${checked}.`;
   return `${head} ${them} отметили ${person}.${st.proposed ? ` Всего ${checked}.` : ""}`;
@@ -168,7 +168,7 @@ export function whereText(s: Serious): string | null {
 }
 
 /**
- * One line about serious errors under a check's number: the count, «С серьёзными ошибками — 6 из 53 (11%).», which a
+ * One line about serious errors under a check's number: the count, «С нарушением важных критериев — 6 из 53 (11%).», which a
  * screen sets apart and opens; or a sentence, with the action a screen puts after it — «Проверить» the proposals,
  * «Отметить автоматически» or «Отметить снова».
  */
@@ -189,7 +189,10 @@ export function severityLines(st: Standing, serious: Serious | null, who: Who = 
   const whose: SeverityLine = { kind: "text", text: whoseText(st, who), action: st.proposed ? "check" : undefined };
   if (serious) {
     const where = whereText(serious);
-    const lines: SeverityLine[] = [{ kind: "count", head: "С серьёзными ошибками", share: shareText(serious) }, whose];
+    const lines: SeverityLine[] = [
+      { kind: "count", head: "С нарушением важных критериев", share: shareText(serious) },
+      whose,
+    ];
     if (where) lines.push({ kind: "text", text: where });
     if (pending)
       lines.push({
@@ -205,7 +208,7 @@ export function severityLines(st: Standing, serious: Serious | null, who: Who = 
   return [whose];
 }
 
-/** A line as text, for a letter: «С серьёзными ошибками — 6 из 53 (11%).» */
+/** A line as text, for a letter: «С нарушением важных критериев — 6 из 53 (11%).» */
 export const lineText = (line: SeverityLine) => (line.kind === "count" ? `${line.head} — ${line.share}.` : line.text);
 
 /**

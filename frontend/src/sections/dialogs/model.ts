@@ -6,11 +6,11 @@ export type Verdict = "all" | "fail" | "serious" | "pass" | "none" | "disputed";
 export const toVerdict = (raw: string | null): Verdict =>
   raw === "fail" || raw === "serious" || raw === "pass" || raw === "none" || raw === "disputed" ? raw : "all";
 
-/** «С серьёзной ошибкой» is offered once a criterion is serious (lab/severity); the rest always. */
+/** «Нарушен важный критерий» is offered once a criterion is important (lab/severity); the rest always. */
 export const VERDICTS: { value: Verdict; label: string }[] = [
   { value: "all", label: "Все разговоры" },
   { value: "fail", label: "С ошибкой" },
-  { value: "serious", label: "С серьёзной ошибкой" },
+  { value: "serious", label: "Нарушен важный критерий" },
   { value: "pass", label: "Без ошибок" },
   { value: "none", label: "Не удалось проверить" },
   { value: "disputed", label: "Модели разошлись" },
@@ -48,7 +48,7 @@ export function criteriaByRule(list: Criterion[]) {
 
 /**
  * The checked conversations with an error by a serious criterion, as the service counts them beside the check's number
- * (problems.serious_counts): the conversations «С серьёзными ошибками — 6 из 53» opens.
+ * (problems.serious_counts): the conversations «С нарушением важных критериев — 6 из 53» opens.
  */
 export function seriousRows(rows: DialogRow[], list: Criterion[]): Set<string> {
   const find = criteriaByRule(list);

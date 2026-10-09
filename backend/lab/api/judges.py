@@ -18,8 +18,9 @@ class Criterion(BaseModel):
     id: str = Field(min_length=1, max_length=100)
     name: str = Field(min_length=1, max_length=200)
     text: str = Field(min_length=1, max_length=50000)
-    condition: str = Field(default='', max_length=5000)
-    acceptable: str = Field(default='', max_length=5000)
+    # As long as the text: a bank's rubric puts a whole section of principles into what is acceptable.
+    condition: str = Field(default='', max_length=50000)
+    acceptable: str = Field(default='', max_length=50000)
     quote: str = Field(default='', max_length=50000)
     sourceId: str = ''
     clarifications: list[str] = Field(default_factory=list, max_length=20)

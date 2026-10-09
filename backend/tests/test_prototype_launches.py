@@ -127,9 +127,9 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
             agent_context.save({'tools': tools})
             for events in ([], [{'tool': 'Система банка · getLkkTariff'}]):
                 with self.subTest(tools=tools, events=events):
-                    item = questions._item(dialogue(), {'title': 'Тариф', 'rules': rules})
+                    item = questions._item(dialogue(), {'id': 'tariffs', 'title': 'Тариф', 'rules': rules})
                     with patch.object(models, 'chat', AsyncMock(return_value=reply)) as chat:
-                        await questions._play(Calling(events), item)
+                        await questions._play(Calling(events), item, rules)
                     shown = json.loads(chat.await_args.args[1])['conversation']
                     self.assertEqual('[вызовы систем: getLkkTariff]' in shown[1]['text'], bool(events))
                     found = {row['ruleId']: row for row in item['rules']}
@@ -635,9 +635,13 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(set(line) & {'agentContext', 'inputs'}, set())
         counted = {'failed': 1, 'measured': 1, 'unmeasured': 0, 'passed': 0}
         self.assertEqual(line['modes']['dataset']['metric'], counted)
-        self.assertEqual(whole['judge']['policy'], self.rules['policy'])
+        # The whole launch is asked again every 1.5 s while it runs: the rules by name, the result in counts.
+        self.assertEqual(whole['judge'], named)
+        self.assertEqual(whole['modes']['dataset']['metric'], counted)
         self.assertEqual(whole['agentContext']['tools'], ['getLkkTariff'])
-        self.assertTrue(whole['modes']['dataset']['metric']['patterns'])
+        kept = storage.launches.get('launch', response.json()['id'])
+        self.assertEqual(kept['judge']['policy'], self.rules['policy'])
+        self.assertTrue(kept['modes']['dataset']['metric']['patterns'])
         check_id = whole['modes']['dataset']['checkId']
         saved = (await self.client.get('/api/history/tone')).json()['checks'][0]
         self.assertEqual(saved['id'], check_id)
@@ -647,6 +651,138 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
         opened = (await self.client.get(f'/api/history/tone/{check_id}')).json()
         self.assertEqual(opened['result']['judge']['criteria'], self.rules['criteria'])
         self.assertEqual(opened['result']['agentContext']['tools'], ['getLkkTariff'])
+
+    def given(self, **values):
+        return {
+            'check': 'tone',
+            'datasetId': self.dataset['id'],
+            'judgeId': self.rules['id'],
+            'count': 1,
+            'target': 'local-http',
+            'agentVersion': '',
+            'modes': ['questions'],
+        } | values
+
+    async def test_a_launch_goes_on_or_starts_again_only_by_the_rules_in_force(self):
+        """A stopped launch is offered to go on while its dataset and rules are the ones in force. Other rules taken
+        since make it other work: it is no longer offered to go on, and starting it again is refused instead of
+        putting its old rules back in force."""
+        from lab.api import work
+
+        entered = asyncio.Event()
+
+        async def slow(*args):
+            storage.tasks.keep('question:0', True)
+            entered.set()
+            await asyncio.Event().wait()
+
+        with patch('lab.flows.launches._mode', new=AsyncMock(side_effect=slow)):
+            first = work.start(self.jobs, 'launch', launches.prepare(self.given()))
+            await asyncio.wait_for(entered.wait(), 1)
+            await self.jobs.stop()
+        shown = (await self.client.get(f'/api/launches/{first["task"]}')).json()
+        self.assertEqual((shown['status'], shown['current'], shown['continuable']), ('stopped', True, True))
+        self.assertEqual(work.paused()['launch']['id'], first['task'])
+        policy = 'Всегда обращайтесь к клиенту на вы. Не используйте жаргон.'
+        newer = judges.save(
+            'tone', 'Правила', policy, [criterion('Не используйте жаргон.')], self.rules['setId'], self.rules['id']
+        )
+        shown = (await self.client.get(f'/api/launches/{first["task"]}')).json()
+        self.assertEqual((shown['current'], shown['continuable']), (False, False))
+        self.assertNotIn('launch', work.paused())
+        response = await self.client.post(f'/api/launches/{first["task"]}/retry')
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(storage.judges.active('tone')['id'], newer['id'])
+
+    async def test_a_launch_is_made_of_what_is_in_force_by_its_rules_or_by_none_named(self):
+        """A tone launch that named no rules goes by the ones in force: starting it again puts nothing back. One of
+        Точность that named none goes by the agent's code, so with a set of Точность in force it is not current."""
+        self.assertTrue(launches.current({'check': 'tone', 'inputs': self.given(judgeId=None)}))
+        self.assertTrue(launches.current({'check': 'tone', 'inputs': self.given()}))
+        other = datasets.add([dialogue('d2', 'Другой вопрос')], 'other.json')
+        self.assertFalse(launches.current({'check': 'tone', 'inputs': self.given()}))
+        datasets.select(self.dataset['id'])
+        policy = 'Отвечайте только по статьям базы знаний банка.'
+        judges.save('code', 'Точность команды', policy, [criterion()], None, None)
+        self.assertFalse(launches.current({'check': 'code', 'inputs': self.given(check='code', judgeId=None)}))
+        self.assertNotEqual(other['id'], self.dataset['id'])
+
+    async def test_a_check_published_before_a_stop_is_not_made_again(self):
+        """A launch stopped after its check was published (while serious errors were marked), then continued when the
+        result in force is another one: its mode is done with the check of the history, never «не сформировала
+        результат» at every try."""
+        summary = {'failed': 1, 'measured': 2, 'passed': 1, 'unmeasured': 0}
+        storage.history.save('tone', {'check': {'id': 'launch-1', 'summary': summary}})
+        storage.documents.save(tone.RESULT, None)
+        token = storage.tasks.CURRENT.set(storage.tasks.Current('launch-1'))
+        try:
+            with (
+                patch('lab.flows.tone.check', new=AsyncMock()),
+                patch('lab.flows.severity.propose', new=AsyncMock()) as propose,
+            ):
+                found = await launches._check({'check': 'tone', 'count': 1}, lambda **_: None)
+        finally:
+            storage.tasks.CURRENT.reset(token)
+        self.assertEqual(found, {'checkId': 'launch-1', 'summary': summary})
+        propose.assert_not_awaited()
+
+    async def test_a_stopped_launch_keeps_what_it_did_while_a_launch_of_another_line_runs(self):
+        """A check of the recorded answers stopped half way keeps its verdicts while a launch that only asks the agent
+        again runs, and is still offered to go on; another check of the recorded answers lets them go, as before."""
+        from lab.api import work
+
+        checking = self.given(modes=['dataset'])
+        stopped = storage.tasks.begin('launch', checking, launches.fingerprint(checking), line=work._launch_line)
+        token = storage.tasks.CURRENT.set(storage.tasks.Current(stopped['id']))
+        storage.tasks.keep('judged:d1', {'status': 'PASS'})
+        storage.tasks.CURRENT.reset(token)
+        storage.tasks.end(stopped['id'], storage.tasks.STOPPED)
+        asking = self.given()
+        other = storage.tasks.begin('launch', asking, launches.fingerprint(asking), line=work._launch_line)
+        storage.tasks.end(other['id'], storage.tasks.DONE)
+        self.assertEqual(storage.tasks.get(stopped['id'])['kept'], 1)
+        self.assertTrue(work.continuable(storage.tasks.get(stopped['id'])))
+        self.assertEqual(work.paused()['launch']['id'], stopped['id'])
+        recount = self.given(modes=['dataset'], count=2)
+        storage.tasks.begin('launch', recount, launches.fingerprint(recount), line=work._launch_line)
+        self.assertEqual(storage.tasks.get(stopped['id'])['kept'], 0)
+
+    async def test_questions_keep_the_criteria_once_and_judge_them_with_their_clarifications(self):
+        """A run of recorded questions keeps its criteria once, not in every question, and judges the new answers as the
+        check of the recorded answers does: with the clarifications people confirmed. Its list is light, for the page
+        that asks it again every 1.5 s while it runs; a question comes whole by itself."""
+        draft = storage.documents.load(tone.DRAFT)
+        clarified = [draft['criteria'][0] | {'clarifications': ['«Вы» со строчной буквы — тоже вежливо.']}]
+        storage.documents.save(tone.DRAFT, draft | {'criteria': clarified})
+        seen = []
+
+        async def judged(transcript, topic):
+            seen.append(topic['rules'])
+            return verdict(transcript, topic)
+
+        with (
+            patch('lab.flows.connection.connect', return_value=Agent()),
+            patch('lab.flows.conversations.judge_dialogue', new=AsyncMock(side_effect=judged)),
+        ):
+            result = await questions.run('tone', 'prod', 10, lambda **_: None, 'clarified')
+        self.assertIn('Уточнения, подтверждённые человеком', seen[0][0]['text'])
+        self.assertEqual(result['topics'][0]['rules'], clarified)
+        self.assertNotIn('criteria', result['items'][0])
+        brief = (await self.client.get('/api/questions/clarified?brief=1')).json()
+        self.assertEqual(brief['status'], 'done')
+        self.assertEqual(set(brief['items'][0]), {'dialogueId', 'name', 'asked', 'status', 'comparable', 'baseline'})
+        self.assertEqual(brief['items'][0]['asked'], 1)
+        one = (await self.client.get('/api/questions/clarified/items/d1')).json()
+        self.assertEqual(one['conversation'], result['items'][0]['conversation'])
+        self.assertEqual((await self.client.get('/api/questions/clarified/items/nope')).status_code, 404)
+
+    async def test_a_run_whose_launch_ended_never_says_it_runs(self):
+        """The Lab closed under a run of questions and its launch ended since: the run ended as its launch did."""
+        storage.launches.save('questions', {'id': 'l9-questions', 'status': 'running', 'items': [], 'metric': None})
+        task = storage.tasks.begin('launch', self.given(), task_id='l9')
+        storage.tasks.end(task['id'], storage.tasks.STOPPED)
+        shown = (await self.client.get('/api/questions/l9-questions?brief=1')).json()
+        self.assertEqual(shown['status'], 'stopped')
 
 
 class IdpTests(unittest.TestCase):

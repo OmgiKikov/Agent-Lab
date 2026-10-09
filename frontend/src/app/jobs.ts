@@ -1,6 +1,6 @@
 import { PROPOSING, proposalCheck } from "../lab/severity";
 import type { Job } from "../lab/types";
-import { criterionLink, judgesLink, launchLink, scenariosLink, SECTIONS } from "./links";
+import { criterionLink, launchLink, scenariosLink, SECTIONS } from "./links";
 
 /** A task of the service: how it is called and the section where its result lives. */
 export const JOBS: Record<string, { label: string; to: string }> = {
@@ -9,11 +9,11 @@ export const JOBS: Record<string, { label: string; to: string }> = {
   "judge-rules": { label: "Правила", to: SECTIONS.overview },
   datasets: { label: "Датасеты", to: "/data" },
   "agent-context": { label: "Контекст агента", to: "/agent" },
-  logs: { label: "Загрузка диалогов", to: SECTIONS.data },
+  logs: { label: "Загрузка датасета", to: SECTIONS.data },
   "tone-criteria": { label: "Критерии tone of voice", to: criterionLink("tone") },
   "tone-check": { label: "Проверка tone of voice", to: SECTIONS.tone },
   "tone-advice": { label: "Предложение по находке", to: SECTIONS.tone },
-  "tone-clarification": { label: "Уточнение критерия", to: judgesLink("tone") },
+  "tone-clarification": { label: "Уточнение критерия", to: criterionLink("tone") },
   sources: { label: "Чтение кода агента", to: SECTIONS.agent },
   discover: { label: "Проверка точности", to: SECTIONS.accuracy },
   cards: { label: "Сборка сценариев", to: scenariosLink() },

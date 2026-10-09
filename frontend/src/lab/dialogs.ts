@@ -9,6 +9,10 @@ export type Source = "log" | "sim";
 export type DialogRow = {
   knowledge?: KnowledgePassage[];
   contextError?: string | null;
+  /** Why the check could not judge it, when it could not. */
+  error?: string | null;
+  /** Of a recorded conversation: when the result it comes from was finished, the result an answer on it names. */
+  finishedAt?: string;
   key: string;
   source: Source;
   /** The check whose result judged it; of a simulated one, the check of its run. */
@@ -70,6 +74,8 @@ export function logRows(d: Discover | null | undefined, check: Check): DialogRow
     key: logKey(String(r.dialogueId)),
     knowledge: r.knowledge,
     contextError: r.contextError,
+    error: r.error,
+    finishedAt: d.finishedAt,
     source: "log" as const,
     check,
     title: r.opening,

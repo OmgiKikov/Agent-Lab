@@ -10,6 +10,7 @@ import { secondOf } from "../../lab/problemStats";
 import { decisions } from "../../lab/verdicts";
 import { useKeys } from "../../app/keys";
 import { useLabState } from "../../lab/LabProvider";
+import { useFirstRun } from "../../lab/compare";
 import { accuracySources, customAccuracy, TONE_ID } from "../../lab/tone";
 import { SeverityHint } from "../../product/Severity";
 import { Button, buttonClass } from "../../ui/Button";
@@ -50,6 +51,7 @@ export function CriteriaPage({ check }: { check: Check }) {
   const { data, list, error, retry } = useCriteria(check);
   const judges = useJudges(check);
   const tone = check === "tone";
+  const firstRun = useFirstRun("tone");
   const rulesOpen = params.get("rules") === "1";
   const set = (edit: (n: URLSearchParams) => void, replace = true) =>
     setParams(
@@ -108,11 +110,12 @@ export function CriteriaPage({ check }: { check: Check }) {
     const i = ordered.findIndex((c) => c.r.id === chosen?.r.id);
     select(ordered[Math.max(0, Math.min(ordered.length - 1, (i < 0 ? -1 : i) + d))].r.id);
   };
+  // The list of Точность walks with J and K; the cards of tone of voice open one by one (ToneCriteria).
   useKeys({
-    KeyJ: () => step(1),
-    KeyK: () => step(-1),
+    KeyJ: () => !tone && step(1),
+    KeyK: () => !tone && step(-1),
     Escape: () => {
-      if (!wide && asked) set((n) => n.delete("c"), false);
+      if (!tone && !wide && asked) set((n) => n.delete("c"), false);
     },
   });
 
@@ -126,6 +129,8 @@ export function CriteriaPage({ check }: { check: Check }) {
     <>
       <CheckHeader
         check={check}
+        // Before the first check of tone of voice its page leads to it with steps of its own (ToneCriteria, FirstSteps).
+        quiet={tone && firstRun === true}
         actions={
           // Read anew only once criteria were read: before the first check they come from the code anyway.
           !tone && !customAccuracy(state) && list.length > 0 ? (

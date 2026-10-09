@@ -10,7 +10,7 @@ import { checked, errorIn, violationsOf, type SideKey } from "./model";
 
 /**
  * One problem in a list, on the page itself, no box: its rank (serious first, then by frequency), the agent's behaviour
- * as a sentence with «серьёзная» when its errors are serious, one real exchange (the customer's words and the agent's,
+ * as a sentence with «важный» when its errors are serious, one real exchange (the customer's words and the agent's,
  * marked), and «N из M» with a quiet bar. Red stays in the result above and in that quiet word.
  * Under the count (on a phone, under the text): the person's answers on its errors, once there are any, and `was` —
  * what the criterion had in the previous check of this check.

@@ -53,9 +53,10 @@ def serve(test: unittest.IsolatedAsyncioTestCase, jobs: Jobs | PerAgent | None =
 
 
 @contextmanager
-def running(kind: str) -> Iterator[dict]:
-    """A task of this kind kept running while the block runs, as the screens and the guards see one (storage.tasks)."""
-    task = tasks.begin(kind, {})
+def running(kind: str, given: dict | None = None) -> Iterator[dict]:
+    """A task of this kind, started with given, kept running while the block runs, as the screens and the guards see
+    one (storage.tasks)."""
+    task = tasks.begin(kind, given or {})
     try:
         yield task
     finally:

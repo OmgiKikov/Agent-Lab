@@ -70,6 +70,11 @@ def capture_tone(draft: dict, policy: dict, *, adopted: bool = False) -> dict:
         return current
     name = policy.get('origin') or 'Правила общения'
     own = current and (current['policy'] == policy['content'] or current['name'] == name)
+    if not own:
+        # New rules deselect the set in force (flows.inputs.replace_sources): the document updated under the same name
+        # is found by its name among the sets people made.
+        current = next((v for v in reversed(_made()) if v['kind'] == 'tone' and v['name'] == name), None)
+        own = current is not None
     value = save(
         'tone',
         current['name'] if own else name,

@@ -1,5 +1,5 @@
 import { count, plural } from "./format";
-import { shareText } from "./history";
+import { resultText } from "./history";
 import { MISSES_FROM } from "./verdicts";
 import type { Answers, ResultBrief } from "./types";
 
@@ -37,7 +37,8 @@ export function answersSentence(
   const checked = `${who === "you" ? "Вы" : "Люди"} проверили ${count(answered, "оценку", "оценки", "оценок")}`;
   return {
     head: who === "you" ? "С учётом ваших ответов" : "С учётом ответов людей",
-    share: shareText({ failed: a.counted, measured: a.measured }),
+    // As under a check's number: the errors counted, the share without an error found beside (lab/history, cleanPct).
+    share: resultText({ failed: a.counted, measured: a.measured }),
     rest: `. ${checked}, ${parts.join(" и ")}.`,
   };
 }

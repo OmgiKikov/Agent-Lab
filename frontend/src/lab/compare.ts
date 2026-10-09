@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
 import { resultOf } from "./checks";
 import { longDay, plural } from "./format";
-import { FEW, shareText, shiftText, type Counts, type Summary } from "./history";
+import { cleanOf, FEW, shareText, shiftText, type Counts, type Summary } from "./history";
 import { useLabState } from "./LabProvider";
 import type { Check, ResultHead } from "./types";
 
@@ -72,6 +72,17 @@ export function useCompare(check: Check | null) {
 }
 
 /**
+ * Whether the check was never made for the agent: no result and no saved check, on any export. Its first run is ahead
+ * of the person then (sections/criteria/ToneCriteria, FirstSteps); null until the service has said.
+ */
+export function useFirstRun(check: Check): boolean | null {
+  const { state } = useLabState();
+  const { data } = useCompare(check);
+  if (resultOf(state, check)) return false;
+  return data ? !data.previous && !data.current : null;
+}
+
+/**
  * The comparison of the result on the screen, or nothing: an answer about another result (one replaced meanwhile)
  * says nothing about it, and a result is compared only once the service has it in the history.
  */
@@ -106,8 +117,20 @@ export const VERDICT: Record<Exclude<Verdict, "same">, string> = {
 const sideText = (counts: Counts) => (counts.measured ? shareText(counts) : "ни один разговор не удалось проверить");
 
 /**
+ * Two whole results side by side, as their share without an error found (lab/history, cleanPct): «без найденных
+ * ошибок 31 из 53 (58%) → сейчас 8 из 12 (67%)». The serious errors keep their own counts (seriousCompareText).
+ */
+const wholeText = (before: Counts, now: Counts, same: boolean) =>
+  `без найденных ошибок ${
+    before.measured && now.measured
+      ? shiftText(cleanOf(before), cleanOf(now), same, "сейчас")
+      : `${sideText(cleanOf(before))}, сейчас ${sideText(cleanOf(now))}`
+  }`;
+
+/**
  * The line under a check's number, in two parts: its first words (`head`, the way to the previous check) and the
- * rest. «Прошлая проверка, 3 октября: 22 из 53 (42%) → сейчас 4 из 12 (33%). Мало разговоров, чтобы судить.» The
+ * rest. «Прошлая проверка, 3 октября: без найденных ошибок 31 из 53 (58%) → сейчас 8 из 12 (67%). Мало разговоров,
+ * чтобы судить.» The
  * export of the previous check is not in the line: its link says it. A re-evaluation of the same conversations says
  * the difference is the evaluation's. Nothing before the first comparison, without a current result, or when the
  * checks are not comparable: that they are not compared is nothing to act on, and the history says why.
@@ -118,7 +141,7 @@ export function compareSentence(compare: Compare): { head: string; rest: string 
   const { before, now, verdict, direction } = overall;
   const same = direction === "same";
   const both = !!before.measured && !!now.measured;
-  const counts = both ? shiftText(before, now, same, "сейчас") : `${sideText(before)}, сейчас ${sideText(now)}`;
+  const counts = wholeText(before, now, same);
   if (compare.kind === "same-data")
     return {
       head: "Повторная оценка тех же разговоров",
@@ -139,7 +162,7 @@ export function compareParts(compare: Compare): { value: string; note: string } 
   const { before, now, verdict, direction } = overall;
   const same = direction === "same";
   const both = !!before.measured && !!now.measured;
-  const value = both ? shiftText(before, now, same, "сейчас") : `${sideText(before)}, сейчас ${sideText(now)}`;
+  const value = wholeText(before, now, same);
   if (compare.kind === "same-data")
     return {
       value,
@@ -150,11 +173,11 @@ export function compareParts(compare: Compare): { value: string; note: string } 
 }
 
 /**
- * «С серьёзными ошибками: 6 из 53 (11%) → сейчас 0 из 71 (0%). Мало разговоров, чтобы судить.» — the line under the
+ * «С нарушением важных критериев: 6 из 53 (11%) → сейчас 0 из 71 (0%). Мало разговоров, чтобы судить.» — the line under the
  * comparison of the whole check, in its words: the same counts and arrow, the same verdict (few, beyond chance or
  * within it), and for a re-evaluation of the same conversations — that the difference is the evaluation's. Both sides
  * by the serious criteria as they are now (`marked` of them in the current result). The share rests on the
- * conversations where a serious criterion could be checked: with few of them a second line says how few, «Серьёзные
+ * conversations where a serious criterion could be checked: with few of them a second line says how few, «Важные
  * критерии удалось проверить в 16 разговорах в прошлый раз и в 4 сейчас.» Null when nothing is marked or the checks
  * are not compared.
  */
@@ -166,15 +189,15 @@ export function seriousCompareText(compare: Compare, marked = 2): string | null 
   const both = !!before.measured && !!now.measured;
   const counts = both ? shiftText(before, now, same, "сейчас") : `${sideText(before)}, сейчас ${sideText(now)}`;
   if (compare.kind === "same-data")
-    return `С серьёзными ошибками: ${counts}.${both && !same ? " Разница показывает только разброс оценки." : ""}`;
-  const criteria = marked === 1 ? "Серьёзный критерий" : "Серьёзные критерии";
+    return `С нарушением важных критериев: ${counts}.${both && !same ? " Разница показывает только разброс оценки." : ""}`;
+  const criteria = marked === 1 ? "Важный критерий" : "Важные критерии";
   const said =
     verdict === "few" && checked && Math.min(checked.before, checked.now) < FEW
       ? ` ${VERDICT.few}\n${criteria} удалось проверить в\u00a0${checked.before}\u00a0${plural(checked.before, "разговоре", "разговорах", "разговорах")} в прошлый раз и в\u00a0${checked.now} сейчас.`
       : verdict && verdict !== "same"
         ? ` ${VERDICT[verdict]}`
         : "";
-  return `С серьёзными ошибками: ${counts}.${said}`;
+  return `С нарушением важных критериев: ${counts}.${said}`;
 }
 
 /** «было 6 из 52», or «было 0 из 52»: what a criterion with errors now had in the previous check, beside its count. */

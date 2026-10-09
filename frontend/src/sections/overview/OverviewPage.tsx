@@ -6,6 +6,7 @@ import { Header } from "../../app/Header";
 import { SectionJob } from "../../app/SectionJob";
 import {
   criterionLink,
+  datasetLink,
   launchLink,
   problemLink,
   reviewLink,
@@ -30,8 +31,6 @@ import type { LabState } from "../../lab/types";
 import { runAnswersPending } from "../../lab/verdicts";
 import { CheckResult } from "../../product/CheckResult";
 import { AccuracyPicture, PAPER, SimulationPicture, TonePicture } from "../../product/Pictures";
-import { seriousStep } from "../../product/Severity";
-import { answersPending } from "../../product/Trust";
 import { UploadButton } from "../../product/UploadLogs";
 import { buttonClass } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
@@ -63,13 +62,14 @@ type Model = {
   status?: string;
   note?: ReactNode;
   problem?: { title: string; failed: number; of: number; to: string };
-  step: Step;
+  /** None while something else comes first (the dataset, above the cards). */
+  step?: Step;
 };
 
 /**
- * One check on the card: with a result, its line, the chip of its previous check, its main problem, and the step after
- * it in the order «Итог» takes them (the model's answers, the serious errors, the main problem). Without one, what it
- * lacks and the way to it, as «Критерии» and «Новая проверка» say it; after a new export, its previous check beside.
+ * One check on the card: with a result, its line, the chip of its previous check, its main problem, and the way to its
+ * «Итог», which has no steps to take: it is a measurement. Without one, what it lacks and the way to it, as «Критерии»
+ * and «Новая проверка» say it; after a new dataset, its previous check beside.
  */
 function useCheckModel(check: Check, state: LabState | null): Model | null {
   const result = resultOf(state, check);
@@ -81,13 +81,6 @@ function useCheckModel(check: Check, state: LabState | null): Model | null {
   if (result) {
     const { failed, measured, unmeasured } = result.summary;
     const top = queueOf(list, "log")[0];
-    const step: Step = answersPending(result)
-      ? { label: "Проверьте оценки модели", to: reviewLink(check, { queue: "unchecked" }), todo: true }
-      : seriousStep(data) === "todo"
-        ? { label: "Подтвердите серьёзные ошибки", to: stageRoot(check), todo: true }
-        : top
-          ? { label: "Разберите главную проблему", to: problemLink(top.r.id, check), todo: false }
-          : { label: "Открыть итог", to: stageRoot(check), todo: false };
     return {
       line: { failed, measured, unmeasured, finishedAt: result.finishedAt },
       delta: <CompareDelta check={check} compare={compare} serious={seriousOf(data)?.marked} brief />,
@@ -97,37 +90,57 @@ function useCheckModel(check: Check, state: LabState | null): Model | null {
         of: checked(top.r.log),
         to: problemLink(top.r.id, check),
       },
-      step,
+      step: { label: "Открыть итог", to: stageRoot(check), todo: false },
     };
   }
   const job = state.job;
   const own = check === "tone" ? ["tone-check", "tone-criteria"] : ["discover"];
-  if (job.running && (own.includes(job.kind ?? "") || (job.kind === "launch" && job.input?.check === check)))
+  if (job.running && (own.includes(job.kind ?? "") || (job.kind === "launch" && job.input?.check === check))) {
+    // A launch is followed on its own page; one that only asks the agent again makes no «Итог» of the check.
+    const launch = job.kind === "launch" ? (job.progress.launch ?? job.id) : undefined;
+    const asking = job.kind === "launch" && !job.input?.modes?.includes("dataset");
     return {
-      status: job.kind === "tone-criteria" ? "Собираем критерии из правил общения." : "Идёт проверка разговоров.",
+      status:
+        job.kind === "tone-criteria"
+          ? "Собираем критерии из правил общения."
+          : asking
+            ? "Задаём агенту вопросы клиентов."
+            : "Идёт проверка разговоров.",
       step: {
         label: "Открыть",
-        to: job.kind === "tone-criteria" ? criterionLink("tone") : stageRoot(check),
+        to:
+          job.kind === "tone-criteria" ? criterionLink("tone") : launch ? launchLink(check, launch) : stageRoot(check),
         todo: false,
       },
     };
+  }
   const previous = previousOf(compare, state.logs.updatedAt);
   if (previous?.newExport)
     return {
-      status: "Новая выгрузка ещё не проверена.",
+      status: "Новый датасет ещё не проверен.",
       note: <PreviousCheck check={check} line={previous.line} className="mt-1 text-small" />,
-      step: { label: "Проверить новую выгрузку", to: launchLink(check), todo: true },
+      step: { label: "Проверить новый датасет", to: launchLink(check), todo: true },
     };
   // Ready as «Новая проверка» counts it: the chosen rules have criteria, or Точность reads them from the agent's code.
   const rules = judges.data?.versions.find((v) => v.id === judges.data?.selectedId);
   const code = check === "code" && codeSources(state).length > 0;
-  if (rules?.criteria.length || code)
+  const ready = rules?.criteria.length
+    ? `${count(rules.criteria.length, "критерий", "критерия", "критериев")} из «${rules.name}» готовы.`
+    : code
+      ? "Критерии соберутся из кода агента при первой проверке."
+      : null;
+  // Without conversations the one thing to do is the dataset, above the cards: a check's own step comes after it.
+  if (!state.logs.total && (ready || judges.data || judges.isError))
     return {
-      status: rules?.criteria.length
-        ? `${count(rules.criteria.length, "критерий", "критерия", "критериев")} из «${rules.name}» готовы.`
-        : "Критерии соберутся из кода агента при первой проверке.",
-      step: { label: "Новая проверка", to: launchLink(check), todo: true },
+      status: ready
+        ? `${ready} Проверка — после датасета.`
+        : check === "tone"
+          ? "После датасета добавьте правила общения: из них соберутся критерии."
+          : "После датасета добавьте код агента: из него соберутся критерии.",
     };
+  if (ready) return { status: ready, step: { label: "Новая проверка", to: launchLink(check), todo: true } };
+  // The rules not here yet: no step until they are, rather than «Добавить правила» to an agent that has them.
+  if (!judges.data && !judges.isError) return null;
   return check === "tone"
     ? {
         status: "Нужны правила общения: из них соберутся критерии.",
@@ -181,6 +194,13 @@ function useSimModel(state: LabState | null): Model | null {
     };
   const top = queueOf(criteria.list, "sim")[0];
   const answering = !!criteria.data?.sim && runAnswersPending(criteria.data);
+  // The newest run gave no number (it failed, or is not judged yet): the one before it is shown, and the card says so.
+  const later =
+    newest && newest.id !== run.id
+      ? newest.status === "failed"
+        ? `Последний прогон прервался${newest.error ? `: ${newest.error}` : ""}. Ниже — прогон перед ним.`
+        : "Последний прогон ещё не оценён. Ниже — прогон перед ним."
+      : null;
   return {
     line: {
       failed: m.failed,
@@ -188,7 +208,8 @@ function useSimModel(state: LabState | null): Model | null {
       unmeasured: Math.max(0, (m.total ?? 0) - m.measured),
       finishedAt: run.startedAt,
     },
-    sub: `Последний прогон ${BY_CRITERIA[run.check]}`,
+    sub: later ? `Прогон ${BY_CRITERIA[run.check]}` : `Последний прогон ${BY_CRITERIA[run.check]}`,
+    note: later && <p className="mt-1 text-small text-fg-3">{later}</p>,
     problem: top && {
       title: top.r.title,
       failed: top.r.sim.failed,
@@ -266,17 +287,19 @@ function Card({
             </span>
           </Link>
         )}
-        <div className="mt-auto pt-4">
-          <Link to={model.step.to} className={buttonClass({ variant: main ? "primary" : "outline", size: "sm" })}>
-            {model.step.label}
-          </Link>
-        </div>
+        {model.step && (
+          <div className="mt-auto pt-4">
+            <Link to={model.step.to} className={buttonClass({ variant: main ? "primary" : "outline", size: "sm" })}>
+              {model.step.label}
+            </Link>
+          </div>
+        )}
       </div>
     </section>
   );
 }
 
-/** The export the checks read, in a line leading to «Датасеты»; without one, the way to load it — then the first step. */
+/** The dataset the checks read, in a line leading to its page; without one, the way to load it — the first step. */
 function DatasetLine() {
   const library = useDatasets();
   if (!library.data) return <Skeleton className="mt-6 h-6 w-80" />;
@@ -285,13 +308,13 @@ function DatasetLine() {
   if (!d)
     return (
       <div className="mt-6 flex flex-wrap items-center gap-x-4 gap-y-3">
-        <p className="text-read text-fg-2">Разговоров ещё нет: проверки читают выгрузку чата.</p>
-        <UploadButton label="Загрузить выгрузку" />
+        <p className="text-read text-fg-2">Разговоров ещё нет: проверки читают датасет разговоров.</p>
+        <UploadButton label="Загрузить датасет" />
       </div>
     );
   return (
     <Link
-      to={SECTIONS.data}
+      to={datasetLink(d.id)}
       className="group mt-6 inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 rounded-control text-read text-fg-3 transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
     >
       <Database aria-hidden className="size-4 shrink-0" />
@@ -321,7 +344,10 @@ export function OverviewPage() {
   // ?report=tone|code opens that check's report; an older ?report=1 the check that has a result.
   const asked = params.get("report");
   useEffect(() => {
-    if (asked && state) setReport(asked === "tone" || asked === "code" ? asked : checkOfOld(state));
+    if (!asked || !state) return;
+    const check = asked === "tone" || asked === "code" ? asked : checkOfOld(state);
+    // A check hidden in this release (app/product) has no report to open.
+    setReport(CHECKS.includes(check) ? check : null);
   }, [asked, state]);
   const closeReport = () => {
     setReport(null);
@@ -380,7 +406,7 @@ export function OverviewPage() {
   // The first step not done, in the order of the work; without conversations, loading them is that step. Точность and
   // the simulations hidden in this release (app/product) have no step on the screen.
   const order = [tone, ...(ACCURACY ? [code] : []), ...(SIMULATIONS ? [sim] : [])];
-  const first = !state.logs.total ? null : (order.find((m) => m.step.todo) ?? null);
+  const first = !state.logs.total ? null : (order.find((m) => m.step?.todo) ?? null);
   return (
     <div className="flex h-full flex-col">
       {header}
@@ -397,7 +423,7 @@ export function OverviewPage() {
           </p>
           <DatasetLine />
           <section aria-labelledby="overview-checks" className="mt-12">
-            <Label id="overview-checks">Проверки разговоров</Label>
+            <Label id="overview-checks">Проверки</Label>
             <div className="mt-4 grid gap-3 md:grid-cols-2">
               <Card
                 name={CHECK_NAME.tone}

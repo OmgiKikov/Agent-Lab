@@ -13,7 +13,7 @@ from . import Progress
 # Criteria asked about in one call: the reply stays short enough to answer for each.
 CHUNK = 30
 # What the task says while the model proposes, with the check it proposes for (the screens lead to its criteria).
-PROPOSING = 'Отмечаем серьёзные ошибки'
+PROPOSING = 'Отмечаем важные критерии'
 
 
 def criteria(check: str) -> dict[str, dict]:

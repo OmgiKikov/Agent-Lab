@@ -1,39 +1,35 @@
-import { Link } from "react-router-dom";
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { conversationsLink, criterionLink } from "../app/links";
 import { JOB_OF } from "../lab/checks";
 import { useLabState } from "../lab/LabProvider";
-import { count, pct, plural } from "../lab/format";
 import type { Problems, RuleEntry } from "../lab/problems";
 import {
   hintOf,
-  pendingOf,
   PROPOSING,
   proposalCheck,
   reasonText,
-  seriousOf,
   standingOf,
   useConfirmSeverity,
   useProposeSeverity,
   useSeverity,
   useSeverityBusy,
-  whereText,
-  whoseText,
 } from "../lab/severity";
 import type { Check } from "../lab/types";
 import { Switch } from "../ui/Switch";
 import { Tag } from "../ui/Tag";
-import { Step, STEP_ACTION, STEP_NEXT } from "./Checklist";
 
 /** A quiet action inside a line of text, as «Проверить ещё» under a check's number. */
 const ACTION =
   "inline-flex items-center gap-1 whitespace-nowrap rounded-sm font-medium text-run hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60 disabled:cursor-default disabled:no-underline disabled:opacity-50";
 
+/** What an important criterion is, and what marking one changes: said beside the switch and the tag. */
+export const IMPORTANT =
+  "Важный критерий — одно его нарушение может навредить клиенту или банку. Такие проблемы идут первыми, а «Итог» отдельно считает разговоры, где нарушен важный критерий.";
+
 /**
- * «серьёзная» beside a serious problem: a quiet red word in the colour of errors, never a badge that shouts. It says
- * whose decision it is: the model's, which no person has checked yet, with its reason, or the person's. On the paper of
- * a report (`paper`) in the ink of the paper.
+ * «важный» beside the problem of an important criterion: a quiet red word in the colour of errors, never a badge that
+ * shouts. It says whose decision it is: the model's, which no person has checked yet, with its reason, or the person's.
+ * On the paper of a report (`paper`) in the ink of the paper.
  */
 export function SeriousTag({
   rule,
@@ -50,20 +46,20 @@ export function SeriousTag({
       tone="bad"
       title={
         proposed
-          ? `Отметила модель. ${reasonText(proposed.reason)} Вы ещё не проверили.`
+          ? `Важный критерий, так считает модель. ${reasonText(proposed.reason)} Вы ещё не проверили.`
           : rule?.severity.by === "person"
-            ? "Отметили вы. Серьёзные ошибки идут первыми и считаются отдельно."
-            : "Серьёзные ошибки идут первыми и считаются отдельно."
+            ? `Отметили вы. ${IMPORTANT}`
+            : IMPORTANT
       }
       className={cn(paper && "border-ink-bad/35 text-ink-bad", className)}
     >
-      серьёзная
+      важный
     </Tag>
   );
 }
 
 /**
- * «Серьёзная ошибка» on one criterion of a check: on its criteria and on its problem's page. Off, its errors are minor.
+ * «Важный критерий» on one criterion of a check: on its criteria and on its problem's page. Off, it is an ordinary one.
  * Pressed, it is the person's decision, whatever the automatic check proposed. In a row of a table (`name`) the words
  * go to a screen reader with the criterion's name.
  */
@@ -86,13 +82,9 @@ export function SeveritySwitch({
       onChange={(serious) => {
         if (!busy) mark.mutate({ check, rule: rule.id, serious });
       }}
-      label={name ? `Серьёзная ошибка: ${name}` : "Серьёзная ошибка"}
+      label={name ? `Важный критерий: ${name}` : "Важный критерий"}
       hideLabel={!!name}
-      title={
-        rule.serious
-          ? "Серьёзная ошибка. Такие идут первыми и считаются отдельно."
-          : "Незначительная ошибка. Серьёзные идут первыми и считаются отдельно."
-      }
+      title={IMPORTANT}
       className={className}
     />
   );
@@ -139,7 +131,7 @@ export function SeverityNote({
         {proposed && proposed.serious !== rule.serious && <> Модель считала иначе. {reasonText(proposed.reason)}</>}
       </p>
     );
-  return <p className={cls}>Ещё не решено. Пока ошибка незначительная.</p>;
+  return <p className={cls}>Ещё не решено. Пока критерий обычный.</p>;
 }
 
 /** A criterion's switch with its line of whose decision it is: in the criterion's panel and on its problem's page. */
@@ -242,119 +234,5 @@ export function SeverityHint({
         <Propose check={check} again={hint.action === "again"} />
       )}
     </p>
-  );
-}
-
-/**
- * Where the step of serious errors stands: done once nothing waits for a proposal and a person decided — on every
- * serious criterion, or, with none serious, on every criterion; else to do. Null while there is no step: no result, or
- * its serious criteria not counted yet.
- */
-export function seriousStep(data: Problems | null | undefined): "todo" | "done" | null {
-  const st = standingOf(data);
-  if (!st || !data?.log?.assessed) return null;
-  const serious = seriousOf(data);
-  // Serious criteria the service has not counted yet: the row comes with their count a moment later.
-  if (st.serious && !serious) return null;
-  return !pendingOf(st) && (serious ? st.yours : !st.proposed) ? "done" : "todo";
-}
-
-/**
- * The step about serious errors under a check's number (product/Checklist) — «Итог» of both checks, «Обзор», the
- * step-by-step result of tone of voice. Nothing marked: «Отметьте серьёзные ошибки», what that gives, «Отметить
- * автоматически»; failed: why, «Отметить снова». Marked: «Серьёзные ошибки — 6 из 53 (11%)», opening those
- * conversations, with whose decision it is and where the criteria could be checked, and «Проверить отметки» while the
- * model's proposals wait for a person. «Серьёзных ошибок нет» with whose decision that is. Done once a person decided
- * every serious criterion. It never stands in for the number above and is never added to it.
- */
-export function SeverityStatus({
-  data,
-  check,
-  next,
-}: {
-  data: Problems | null | undefined;
-  check: Check;
-  /** The step to take next on the page: its button is the black one. */
-  next?: boolean;
-}) {
-  const state = seriousStep(data);
-  const st = standingOf(data);
-  if (!state || !st) return null;
-  const serious = seriousOf(data);
-  const pending = pendingOf(st);
-  const act = next && state === "todo" ? STEP_NEXT : STEP_ACTION;
-  const propose = pending && (
-    <Propose
-      check={check}
-      again={pending.again}
-      why={serious && st.error && `Прошлая попытка не удалась. ${st.error}`}
-      className={act}
-    />
-  );
-  const review = st.proposed > 0 && (
-    <Link to={criterionLink(check)} className={act}>
-      Проверить отметки
-    </Link>
-  );
-  // While the model's proposals wait for a person, the step asks to confirm them; done, it says what came of it.
-  const ask = pending ? "Отметьте серьёзные ошибки" : "Подтвердите серьёзные ошибки";
-  if (serious) {
-    // «Серьёзная ошибка есть в 46 из 295 разговоров (16%)»: the count opens those conversations.
-    const found = (
-      <>
-        Серьёзная ошибка есть в{" "}
-        <Link
-          to={conversationsLink(check, { v: "serious" })}
-          title="Разговоры с серьёзной ошибкой"
-          className="whitespace-nowrap rounded-sm font-semibold underline decoration-line-strong underline-offset-4 transition-colors hover:decoration-fg-3"
-        >
-          {`${serious.failed}\u00a0из\u00a0${serious.measured}`}
-        </Link>{" "}
-        {plural(serious.measured, "разговора", "разговоров", "разговоров")} ({pct(serious.failed, serious.measured)}%)
-      </>
-    );
-    const rest = [
-      whoseText(st),
-      whereText(serious),
-      pending && `Ещё не решено по\u00a0${count(st.pending, "критерию", "критериям", "критериям")}.`,
-    ]
-      .filter(Boolean)
-      .join("\n");
-    return state === "done" ? (
-      <Step state="done" title={found} text={rest} />
-    ) : (
-      <Step
-        state="todo"
-        title={ask}
-        text={
-          <>
-            {found}.{"\n"}
-            {rest}
-          </>
-        }
-        action={propose || review}
-      />
-    );
-  }
-  if (pending)
-    return pending.again ? (
-      <Step
-        state="todo"
-        title="Не удалось отметить серьёзные ошибки"
-        text={pending.text.replace(/^Не удалось отметить серьёзные ошибки\.\s*/, "")}
-        action={propose}
-      />
-    ) : (
-      <Step
-        state="todo"
-        title="Отметьте серьёзные ошибки"
-        text="Модель предложит, какие критерии серьёзные, а вы подтвердите. Серьёзные проблемы встанут в начало списка и посчитаются отдельно."
-        action={propose}
-      />
-    );
-  return state === "done" ? (
-    <Step state="done" title="Серьёзных ошибок нет" text={whoseText(st)} />
-  ) : (
-    <Step state="todo" title={ask} text={whoseText(st)} action={review} />
   );
 }

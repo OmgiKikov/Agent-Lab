@@ -16,8 +16,8 @@ const ACCEPT = ".xlsx,.jsonl,.json,.csv";
 /** The export reader takes the chat's Excel or a prepared .jsonl: anything else is refused before a question is asked. */
 export const exportFileError = (file: File) => {
   if (!/\.(xlsx|jsonl|json|csv)$/i.test(file.name))
-    return "Этот файл не подходит. Загрузите выгрузку чата в XLSX, JSONL, JSON или CSV.";
-  if (!file.size) return "Файл пустой. Выберите выгрузку с разговорами.";
+    return "Этот файл не подходит. Загрузите датасет в XLSX, JSONL, JSON или CSV.";
+  if (!file.size) return "Файл пустой. Выберите файл с разговорами.";
   if (file.size > 50_000_000) return "Файл больше 50 МБ. Выгрузите разговоры за меньший срок.";
   return null;
 };
@@ -38,7 +38,7 @@ function whatHappens(): [string, string] {
 /** One upload flow wherever conversations are added: pick, inspect the file and its consequences, upload. */
 export function UploadButton({
   variant = "primary",
-  label = "Загрузить диалоги",
+  label = "Загрузить датасет",
   check,
   disabled = false,
   compact = false,
@@ -68,7 +68,7 @@ export function UploadButton({
   const pick = (files: File[]) => {
     if (lock.current || running) return;
     if (files.length !== 1) {
-      setError("Выберите один файл выгрузки.");
+      setError("Выберите один файл датасета.");
       return;
     }
     const wrong = exportFileError(files[0]);
@@ -134,7 +134,7 @@ export function UploadButton({
         onClose={() => {
           if (!lock.current) setOpen(false);
         }}
-        title="Загрузить диалоги"
+        title="Загрузить датасет"
         onCloseAutoFocus={(event) => {
           if (trigger.current?.isConnected) {
             event.preventDefault();
@@ -171,7 +171,7 @@ export function UploadButton({
           type="file"
           accept={ACCEPT}
           className="hidden"
-          aria-label="Файл выгрузки диалогов"
+          aria-label="Файл датасета"
           onChange={(e) => {
             const files = Array.from(e.target.files ?? []);
             e.target.value = "";
@@ -211,7 +211,7 @@ export function UploadButton({
           ) : (
             <>
               <Upload aria-hidden className="mx-auto mb-3 size-6 text-fg-3" />
-              <p className="text-read font-medium text-fg">Перетащите выгрузку сюда</p>
+              <p className="text-read font-medium text-fg">Перетащите файл датасета сюда</p>
               <p className="mt-1 text-small text-fg-3">XLSX, JSONL, JSON или CSV · до 50 МБ</p>
               <Button className="mt-4" disabled={busy || running} onClick={() => input.current?.click()}>
                 Выбрать файл

@@ -31,6 +31,7 @@ import { useLabState } from "../../lab/LabProvider";
 import { answersWait, useReview, type Decision, type Example } from "../../lab/problems";
 import { humansOf, rightOf, rightText, secondOf } from "../../lab/problemStats";
 import { yesNoText } from "../../lab/answers";
+import { toneJudgedByOther } from "../../lab/tone";
 import { conversationKey, exampleAt } from "../../lab/verdicts";
 import { ExampleCard } from "../../product/ExampleCard";
 import { SeverityControl } from "../../product/Severity";
@@ -50,7 +51,7 @@ import { SIMULATIONS } from "../../app/product";
 
 /**
  * One problem, read top to bottom: what the agent does wrong, what it must do instead, whether its errors are serious
- * («Серьёзная ошибка» on its criterion, with whose decision it is: the automatic check's proposal with its reason and
+ * («Важный критерий» on its criterion, with whose decision it is: the automatic check's proposal with its reason and
  * «Подтвердить», or the person's), how often (one line of numbers), then the case itself — the conversation as the
  * customer saw it — and the person's answer. One stage at a time: in a check, its conversations; in the simulation,
  * one run of that check's scenarios. The other is one link away. Another problem of the same stage opens afresh: the
@@ -84,7 +85,10 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
   const examples = c ? violationsOf(c, here) : [];
   const toneDraft = state?.toneOfVoice ?? null;
   const toneResult = state?.checks.tone ?? null;
-  const toneNow = stage === "tone" && !!toneDraft && !!toneResult && toneResult.criteriaRevision === toneDraft.revision;
+  // A criterion is clarified, and asked how to answer, on the result judged by the criteria in force: one judged by
+  // other criteria says so instead (toneJudgedByOther).
+  const otherCriteria = stage === "tone" && toneJudgedByOther(state);
+  const toneNow = stage === "tone" && !!toneDraft && !!toneResult && !otherCriteria;
   const { at, missing: lostExample } = exampleAt(examples, params.get("e"));
   const example = examples[at];
   /** The example in the address by its conversation: «Нет» sends it to the end of the order, it stays on screen. */
@@ -378,6 +382,11 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
                             Как ответить правильно
                           </Button>
                         </div>
+                      ) : otherCriteria && example.status === "FAIL" ? (
+                        <p className="mt-3 text-body text-fg-3">
+                          Критерии изменились после этой проверки. Уточнить критерий и спросить, как ответить правильно,
+                          можно на итоге новой проверки.
+                        </p>
                       ) : undefined
                     }
                   />

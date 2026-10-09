@@ -93,7 +93,7 @@ function Section({ c, i, side }: { c: Criterion; i: number; side: SideKey }) {
 
 /**
  * «Отчёт»: a check's assessment as a protocol to send, a white sheet inside the product. Its conversations and its
- * simulation are never in one report. The serious problems come first, marked «серьёзная», and the conversations with
+ * simulation are never in one report. The serious problems come first, marked «важный», and the conversations with
  * a serious error stand under the numbers of the conversations, with whose decision that is: while some criteria are
  * the automatic check's proposals, how many of them people checked. «Скопировать для письма» puts the same on the
  * clipboard formatted and as plain text without Markdown marks, each problem with its link; the downloaded file is

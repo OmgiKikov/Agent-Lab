@@ -58,6 +58,23 @@ export function RuleEditor({
       /* Editing still works when storage is unavailable. */
     }
   }, [draftKey, name, policy, rules, expectedBase]);
+  // The edits kept in this browser, put away: the version as it is saved, and no draft left to come back.
+  const edited =
+    !!version &&
+    JSON.stringify([name, policy, rules]) !== JSON.stringify([version.name, version.policy, version.criteria]);
+  const discard = () => {
+    if (!version) return;
+    setName(version.name);
+    setPolicy(version.policy);
+    setRules(version.criteria);
+    setExpectedBase(baseId ?? version.id);
+    setConflict(null);
+    try {
+      localStorage.removeItem(draftKey);
+    } catch {
+      /* Nothing kept to put away. */
+    }
+  };
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   // Why a save did not go through is said above the form and brought into view: «Сохранить» sits in the header, and
@@ -76,7 +93,7 @@ export function RuleEditor({
       const value = await upload<{ name: string; text: string }>("/api/tone-of-voice/read-file", file);
       setPolicy(value.text);
       if (!name) setName(file.name.replace(/\.[^.]+$/, ""));
-      setRules([{ ...fresh(), name: "Правила документа", text: value.text, quote: value.text }]);
+      setRules((all) => [...all, { ...fresh(), name: "Правила документа", text: value.text, quote: value.text }]);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -126,9 +143,16 @@ export function RuleEditor({
           : "После сохранения эти правила станут текущими. Прошлые версии и проверки сохранятся. Черновик хранится в этом браузере."
       }
       actions={
-        <Button variant="primary" loading={busy} disabled={!valid || state?.job.running} onClick={() => save()}>
-          Сохранить
-        </Button>
+        <>
+          {edited && (
+            <Button variant="ghost" disabled={busy} onClick={discard}>
+              Сбросить правки
+            </Button>
+          )}
+          <Button variant="primary" loading={busy} disabled={!valid || state?.job.running} onClick={() => save()}>
+            Сохранить
+          </Button>
+        </>
       }
       width="lg"
     >
@@ -172,23 +196,34 @@ export function RuleEditor({
               className="mt-1"
             />
           </label>
-          <label className="mt-2 inline-flex cursor-pointer items-center gap-2 text-body font-medium text-fg">
-            <Upload className="size-4" />
-            Загрузить MD, TXT или Word
-            <input
-              type="file"
-              accept=".md,.txt,.docx"
-              className="sr-only"
-              onChange={(e) => {
-                void read(e.target.files?.[0]);
-                e.target.value = "";
-              }}
-            />
-          </label>
-          <p className="mt-2 text-small text-fg-3">
-            Из файла сначала добавляется один критерий со всем текстом. Разделите его на отдельные требования.
-            {check === "tone" && " Для автоматической сборки используйте «Собрать из документа» в библиотеке правил."}
-          </p>
+          {/* Tone of voice collects its criteria from a document on «Критерии» («Заменить правила»); here a file of
+              rules only adds one criterion with all of its text, beside the others, to be split by hand. */}
+          {check === "tone" ? (
+            <p className="mt-2 text-small text-fg-3">
+              Новый документ правил дайте через «Заменить правила» на странице «Критерии»: модель соберёт из него
+              критерии.
+            </p>
+          ) : (
+            <>
+              <label className="mt-2 inline-flex cursor-pointer items-center gap-2 text-body font-medium text-fg">
+                <Upload className="size-4" />
+                Загрузить MD, TXT или Word
+                <input
+                  type="file"
+                  accept=".md,.txt,.docx"
+                  className="sr-only"
+                  onChange={(e) => {
+                    void read(e.target.files?.[0]);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+              <p className="mt-2 text-small text-fg-3">
+                Из файла добавляется один критерий со всем текстом, рядом с остальными. Разделите его на отдельные
+                требования.
+              </p>
+            </>
+          )}
         </div>
         <section>
           <h2 className="text-read font-semibold text-fg">Критерии · {rules.length}</h2>

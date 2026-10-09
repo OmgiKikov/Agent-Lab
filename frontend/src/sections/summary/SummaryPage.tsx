@@ -269,7 +269,7 @@ export function SummaryPage() {
         <Skeleton className="h-10 w-72 max-w-full" />
       )}
       <p className="mt-2 break-words text-read text-fg-2">
-        {summary.file ? `Выгрузка «${summary.file}» · ` : ""}
+        {summary.file ? `Датасет «${summary.file}» · ` : ""}
         {daysText(summary.days)}
       </p>
 
@@ -284,7 +284,7 @@ export function SummaryPage() {
         <p className="mt-1 max-w-[68ch] text-body text-fg-3 print:hidden">
           В PDF и письмо войдут только отмеченные проблемы.{" "}
           {summary.checks.some((c) => c.problems.some((p) => p.serious))
-            ? "Сразу отмечены серьёзные, а где их нет, три самые частые."
+            ? "Сразу отмечены проблемы по важным критериям, а где их нет, три самые частые."
             : "Сразу отмечены три самые частые проблемы каждой проверки."}
         </p>
         {summary.checks.map((c) => (

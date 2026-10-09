@@ -1,4 +1,4 @@
-import { Select } from "../../ui/Field";
+import { Input, Select } from "../../ui/Field";
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
@@ -32,7 +32,7 @@ import { PAPER, SimulationPicture } from "../../product/Pictures";
 import { SIMULATIONS } from "../../app/product";
 import { UploadButton } from "../../product/UploadLogs";
 import { shownName } from "../data/DatasetInfo";
-import { useConnectionMemory } from "../agent/Connection";
+import { useConnectionMemory, waysOf } from "../agent/Connection";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
 import { Menu } from "../../ui/Menu";
@@ -106,37 +106,28 @@ const WAY_PICTURE: Record<Mode, () => ReactNode> = {
   simulations: SimulationPicture,
 };
 
-/** What the form remembers between visits, per agent and check: a choice that is gone falls back to the current one. */
-type Draft = {
-  modes: Mode[];
-  version: string;
-  size: number;
-  target: string;
-  datasetId?: string;
-  judgeId?: string;
-  /** Some of the criteria of tone of voice, chosen for these rules. */
-  picked?: { rulesId: string; ids: string[] };
-};
+/**
+ * What the form remembers between visits, per agent and check: how to check, not what. The dataset and the rules are
+ * always the ones in force (or the dataset its page opened the form with), and all the criteria: a dataset, rules or
+ * a part of the criteria chosen once would come back after a new export or new rules, and the launch would put them
+ * back in force.
+ */
+type Draft = { modes: Mode[]; version: string; size: number; target: string };
+/** The ways a launch can check; the simulations' only while they are shown (app/product). */
+const MODES: Mode[] = SIMULATIONS ? ["dataset", "questions", "simulations"] : ["dataset", "questions"];
 function readDraft(check: Check): Draft {
   const fallback: Draft = { modes: ["dataset"], version: "", size: 100, target: "" };
   try {
     const value = JSON.parse(localStorage.getItem(agentKey(`launch-draft-${check}`)) ?? "null");
     if (!value || !Array.isArray(value.modes)) return fallback;
     const modes = value.modes.filter(
-      (mode: unknown): mode is Mode =>
-        typeof mode === "string" && ["dataset", "questions", "simulations"].includes(mode),
+      (mode: unknown): mode is Mode => typeof mode === "string" && MODES.includes(mode as Mode),
     );
     return {
-      modes: [...new Set<Mode>(modes)],
+      modes: modes.length ? [...new Set<Mode>(modes)] : fallback.modes,
       version: typeof value.version === "string" ? value.version : "",
       size: Number.isFinite(value.size) ? Math.max(1, Math.min(MAX, value.size)) : 100,
       target: typeof value.target === "string" ? value.target : "",
-      datasetId: typeof value.datasetId === "string" ? value.datasetId : undefined,
-      judgeId: typeof value.judgeId === "string" ? value.judgeId : undefined,
-      picked:
-        value.picked && typeof value.picked.rulesId === "string" && Array.isArray(value.picked.ids)
-          ? { rulesId: value.picked.rulesId, ids: value.picked.ids.filter((id: unknown) => typeof id === "string") }
-          : undefined,
     };
   } catch {
     return fallback;
@@ -276,9 +267,9 @@ export function LaunchPage({ check }: { check: Check }) {
   // «Проверить» on a dataset's page opens this form with it chosen (?dataset=); «Извлечь заново» of Точность, with its
   // criteria to be read from the code anew (?replan=1).
   const [query] = useSearchParams();
-  const [datasetId, setDatasetId] = useState(query.get("dataset") ?? draft.datasetId);
-  const [judgeId, setJudgeId] = useState(draft.judgeId);
-  const [picked, setPicked] = useState(draft.picked);
+  const [datasetId, setDatasetId] = useState(query.get("dataset") ?? undefined);
+  const [judgeId, setJudgeId] = useState<string | undefined>(undefined);
+  const [picked, setPicked] = useState<{ rulesId: string; ids: string[] } | undefined>(undefined);
   const [picking, setPicking] = useState(false);
   const [replan, setReplan] = useState(query.get("replan") === "1");
   const [busy, setBusy] = useState(false);
@@ -312,11 +303,12 @@ export function LaunchPage({ check }: { check: Check }) {
   const most = Math.min(MAX, total);
   const wanted = Number.parseInt(size, 10);
   const conversations = total && wanted > 0 ? Math.min(wanted, most) : 0;
-  // A way the agent can be asked on: set up, and for «На этом компьютере» (whose address is there by default) only when
-  // the person chose it in «Агент» — otherwise a launch would ask an address nobody may answer on.
+  // A way the agent can be asked on: offered (the test stand alone in the first release), set up, and for «На этом
+  // компьютере» (whose address is there by default) only when the person chose it in «Агент» — otherwise a launch
+  // would ask an address nobody may answer on.
   const chosenWay = useConnectionMemory().way;
-  const reachable = state?.targets.filter((t) => t.ready && (t.id !== "local-http" || chosenWay === t.id)) ?? [];
-  const chosen = modes.filter((m) => m === "dataset" || reachable.length > 0);
+  const reachable = state ? waysOf(state).filter((t) => t.ready && (t.id !== "local-http" || chosenWay === t.id)) : [];
+  const chosen = modes.filter((m) => MODES.includes(m) && (m === "dataset" || reachable.length > 0));
   const live = chosen.some((m) => m !== "dataset");
   const way = reachable.find((t) => t.id === target) ?? reachable.find((t) => t.id === chosenWay) ?? reachable[0];
 
@@ -324,20 +316,12 @@ export function LaunchPage({ check }: { check: Check }) {
     try {
       localStorage.setItem(
         agentKey(`launch-draft-${check}`),
-        JSON.stringify({
-          modes,
-          version,
-          size: wanted > 0 ? wanted : draft.size,
-          target,
-          datasetId,
-          judgeId,
-          picked,
-        }),
+        JSON.stringify({ modes, version, size: wanted > 0 ? wanted : draft.size, target } satisfies Draft),
       );
     } catch {
       /* Drafts are optional when browser storage is unavailable. */
     }
-  }, [check, modes, version, wanted, target, datasetId, judgeId, picked, draft.size]);
+  }, [check, modes, version, wanted, target, draft.size]);
 
   const blocked = busy || !!state?.job.running;
   // What the last check found, beside the next one: the way into its history.
@@ -363,7 +347,7 @@ export function LaunchPage({ check }: { check: Check }) {
       ? "Загружаем датасеты и правила…"
       : !dataset
         ? // The lines above say what is missing and give the way to it; here, only that the launch waits for it.
-          "Сначала загрузите выгрузку чата."
+          "Сначала загрузите датасет."
         : !rulesReady
           ? check === "tone"
             ? "Сначала нужны правила общения."
@@ -402,7 +386,6 @@ export function LaunchPage({ check }: { check: Check }) {
     }
   };
 
-  const [versioning, setVersioning] = useState(!!draft.version);
   // What the launch waits for, said beside its button; the step that is missing gives the way to it above.
   const why = state?.job.running ? "Сейчас идёт другая задача этого агента." : ready ? null : missing;
   const plan =
@@ -498,7 +481,7 @@ export function LaunchPage({ check }: { check: Check }) {
                   !library ? (
                     <Skeleton className="h-7 w-48" />
                   ) : !dataset ? (
-                    "Нет выгрузки"
+                    "Нет датасета"
                   ) : library.datasets.length > 1 ? (
                     <Menu
                       className="max-w-full"
@@ -523,7 +506,7 @@ export function LaunchPage({ check }: { check: Check }) {
               >
                 {!library ? null : !dataset ? (
                   <span className="flex flex-wrap items-center gap-3">
-                    Проверка идёт по выгрузке чата.
+                    Проверка идёт по датасету разговоров.
                     <UploadButton variant="outline" label="Загрузить" />
                   </span>
                 ) : (
@@ -579,6 +562,12 @@ export function LaunchPage({ check }: { check: Check }) {
                     <Link to={criteriaPage} className="text-run hover:underline">
                       открыть
                     </Link>
+                    {extractedBefore && replan && (
+                      <span className="mt-1 block text-small text-fg-3">
+                        Счёт, ссылки на проблемы и ответы людей Точности начнутся с нуля, сценарии из неё сбросятся.
+                        Итог Tone of voice не изменится.
+                      </span>
+                    )}
                   </>
                 ) : (
                   <span className="flex flex-wrap items-center gap-3">
@@ -636,7 +625,23 @@ export function LaunchPage({ check }: { check: Check }) {
               </p>
             )}
 
-            <div className="mt-10 flex flex-wrap items-center gap-x-5 gap-y-3">
+            {/* The version the check measures: a field of its own, so that checks of versions can be told apart. */}
+            <label className="mt-10 block max-w-sm">
+              <span className="block text-read font-medium text-fg">Версия агента</span>
+              <Input
+                name="agent-version"
+                value={version}
+                onChange={(e) => setVersion(e.target.value)}
+                maxLength={80}
+                placeholder="Например, v2.4"
+                className="mt-2"
+              />
+              <span className="mt-1.5 block text-small text-fg-3">
+                Необязательно. Видна в итоге и в истории, чтобы сравнивать проверки разных версий.
+              </span>
+            </label>
+
+            <div className="mt-8 flex flex-wrap items-center gap-x-5 gap-y-3">
               <Button
                 size="lg"
                 variant="primary"
@@ -647,28 +652,6 @@ export function LaunchPage({ check }: { check: Check }) {
               >
                 Запустить проверку
               </Button>
-              {versioning ? (
-                <label className="flex items-center gap-2 text-body text-fg-3">
-                  версия агента
-                  <input
-                    autoFocus={!version}
-                    value={version}
-                    onChange={(e) => setVersion(e.target.value)}
-                    maxLength={80}
-                    placeholder="например, v2.4"
-                    className="w-40 border-b border-line-strong bg-transparent pb-0.5 text-body text-fg placeholder:text-fg-4 focus:border-fg focus:outline-none"
-                  />
-                </label>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setVersioning(true)}
-                  className="inline-flex items-center gap-1 text-body text-fg-3 hover:text-fg"
-                >
-                  <Plus aria-hidden className="size-3.5" />
-                  версия агента
-                </button>
-              )}
               {(why ?? plan) && <p className="min-w-0 basis-full text-body text-fg-3">{why ?? plan}</p>}
             </div>
             {error && (

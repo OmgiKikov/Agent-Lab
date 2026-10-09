@@ -29,6 +29,10 @@ def save(values: dict) -> dict:
                 raise ValueError(
                     'Укажите HTTP(S)-адрес без встроенных учётных данных. Для Git также поддерживается ssh://.'
                 )
+            # The key and the certificate of the knowledge base go with every request to it: never in the clear,
+            # but to this computer.
+            if key == 'idpUrl' and url.scheme == 'http' and url.hostname not in ('localhost', '127.0.0.1', '::1'):
+                raise ValueError('Адрес базы знаний должен начинаться с https://: с запросом к ней уходит ключ.')
     value['tools'] = list(dict.fromkeys(tool.strip() for tool in value['tools'] if tool.strip()))
     storage.documents.save(FILE, value)
     return value
@@ -68,11 +72,15 @@ async def checkout() -> Path | None:
 
 
 async def _git(args: list[str]) -> None:
+    # Never a question in the Lab's terminal: no password or passphrase is asked, an unknown host is refused, and the
+    # error says why (ssh in batch mode, unless the person set their own ssh command for git).
+    quiet = {'GIT_TERMINAL_PROMPT': '0', 'GIT_SSH_COMMAND': os.environ.get('GIT_SSH_COMMAND', 'ssh -o BatchMode=yes')}
     process = await asyncio.create_subprocess_exec(
         *args,
+        stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.PIPE,
-        env=os.environ | {'GIT_TERMINAL_PROMPT': '0'},
+        env=os.environ | quiet,
     )
     try:
         _, _error = await asyncio.wait_for(process.communicate(), 120)

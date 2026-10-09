@@ -25,13 +25,24 @@ def from_json(data: bytes) -> list[dict]:
     return value
 
 
+# A conversation the bank writes in one cell of a CSV can be longer than the 131 072 characters csv takes by default.
+FIELD = 50_000_000
+
+
 def from_csv(data: bytes, parse_turns: Callable[[str], list[dict]]) -> list[dict]:
     content = text(data)
+    csv.field_size_limit(max(csv.field_size_limit(), FIELD))
     try:
         dialect = csv.Sniffer().sniff(content[:4096], delimiters=',;\t')
     except csv.Error:
         dialect = csv.excel
-    reader = csv.DictReader(io.StringIO(content), dialect=dialect)
+    try:
+        return _rows(csv.DictReader(io.StringIO(content), dialect=dialect), parse_turns)
+    except csv.Error as error:
+        raise ValueError(f'CSV не читается: {error}. Проверьте кавычки и разделители.') from error
+
+
+def _rows(reader: csv.DictReader, parse_turns: Callable[[str], list[dict]]) -> list[dict]:
     names = {str(key).strip() for key in reader.fieldnames or []}
     grouped: dict[str, dict] = {}
     found = []

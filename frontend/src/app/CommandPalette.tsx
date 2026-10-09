@@ -90,7 +90,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         id: "s-overview",
         group: "Разделы",
         label: "Обзор",
-        sub: "Итоги проверок и последнего прогона",
+        sub: SIMULATIONS ? "Итоги проверок и последнего прогона" : "Итоги проверок и что делать дальше",
         icon: LayoutDashboard,
         run: go(SECTIONS.overview),
       },
@@ -118,7 +118,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           id: `s-${c}-talks`,
           group: "Разделы",
           label: `${CHECK_NAME[c]} · Разговоры`,
-          sub: "Разговоры выгрузки с оценкой этой проверки",
+          sub: "Разговоры датасета с оценкой этой проверки",
           icon: MessagesSquare,
           run: go(conversationsLink(c)),
         },
@@ -138,14 +138,19 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           icon: ListChecks,
           run: go(criterionLink(c)),
         },
-        {
-          id: `s-${c}-rules`,
-          group: "Разделы",
-          label: `${CHECK_NAME[c]} · Правила`,
-          sub: "Наборы правил и их версии, новый набор",
-          icon: BookOpen,
-          run: go(criterionLink(c, null, { rules: "1" })),
-        },
+        // Tone of voice keeps its rules on «Критерии» itself (sections/criteria/ToneCriteria): no entry of its own.
+        ...(c === "tone"
+          ? []
+          : [
+              {
+                id: `s-${c}-rules`,
+                group: "Разделы",
+                label: `${CHECK_NAME[c]} · Правила`,
+                sub: "Наборы правил и их версии, новый набор",
+                icon: BookOpen,
+                run: go(criterionLink(c, null, { rules: "1" })),
+              },
+            ]),
         {
           id: `s-${c}-history`,
           group: "Разделы",
@@ -235,7 +240,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         id: "a-upload",
         group: "Действия",
         label: "Добавить датасет",
-        sub: ACCURACY ? "Выгрузка чата, общая для обеих проверок" : "Выгрузка чата для проверки",
+        sub: ACCURACY ? "Разговоры, общие для обеих проверок" : "Разговоры для проверки",
         icon: Upload,
         run: go(SECTIONS.data),
       },
@@ -282,7 +287,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
             id: `v-${c}-${id}`,
             group: `Проблемы · ${CHECK_NAME[c]}`,
             label: p.title,
-            sub: `${p.serious ? "серьёзная · " : ""}ошибка в ${p.log.failed}\u00a0из ${count(p.log.failed + p.log.passed, "разговора", "разговоров", "разговоров")}`,
+            sub: `${p.serious ? "важный · " : ""}ошибка в ${p.log.failed}\u00a0из ${count(p.log.failed + p.log.passed, "разговора", "разговоров", "разговоров")}`,
             icon: TriangleAlert,
             run: go(problemLink(id, c)),
           });
@@ -405,7 +410,11 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
                 setQuery(e.target.value);
                 setAt(0);
               }}
-              placeholder="Раздел, проблема, критерий, прогон или действие"
+              placeholder={
+                SIMULATIONS
+                  ? "Раздел, проблема, критерий, прогон или действие"
+                  : "Раздел, проблема, критерий или действие"
+              }
               className="h-12 w-full bg-transparent text-body text-fg outline-none placeholder:text-fg-4"
             />
           </div>

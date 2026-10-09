@@ -5,8 +5,8 @@ import { cn } from "@/lib/utils";
 import { historyLink, launchLink, type Check } from "../../app/links";
 import { SIMULATIONS } from "../../app/product";
 import { resultOf } from "../../lab/checks";
-import { count, longDay, pct, time } from "../../lab/format";
-import { comparisonText, loadHistory, type SavedCheck } from "../../lab/history";
+import { count, longDay, plural, time } from "../../lab/format";
+import { cleanPct, comparisonText, loadHistory, type SavedCheck } from "../../lab/history";
 import { MODE_NAME, useLaunches, type Launch, type Mode, type Outcome } from "../../lab/launches";
 import { useLabState } from "../../lab/LabProvider";
 import { Button } from "../../ui/Button";
@@ -19,18 +19,21 @@ const finished = (iso: string) => `${longDay(iso)}, ${time(iso)}`;
 
 /** What each history keeps, said above its list. */
 const KEEPS: Record<Check, string> = {
-  tone: "Каждая завершённая проверка сохраняется со своими разговорами, критериями и правилами общения. Ваши ответы остаются и после новой выгрузки.",
-  code: "Каждая завершённая проверка сохраняется со своими разговорами, критериями из кода агента и итогом. Новая выгрузка её не стирает.",
+  tone: "Каждая завершённая проверка сохраняется со своими разговорами, критериями и правилами общения. Ваши ответы остаются и после нового датасета.",
+  code: "Каждая завершённая проверка сохраняется со своими разговорами, критериями из кода агента и итогом. Новый датасет её не стирает.",
 };
 
-/** «22 из 53 проверенных разговоров — с ошибкой агента · 42%»: the number every row of the history starts with. */
+/** «58% без найденных ошибок · 22 из 53 проверенных — с ошибкой агента»: what every row starts with, as «Итог». */
 function CountLine({ failed, measured }: { failed: number; measured: number }) {
   if (!measured) return <>Ни один разговор не удалось проверить</>;
   return (
     <>
-      <span className={cn("font-semibold tabular-nums", failed ? "text-bad" : "text-fg")}>{failed}</span> из{" "}
-      {count(measured, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} — с ошибкой агента
-      <span className="text-fg-3"> · {pct(failed, measured)}%</span>
+      <span className="font-semibold tabular-nums text-fg">{cleanPct({ failed, measured })}%</span> без найденных ошибок
+      <span className="text-fg-3">
+        {" · "}
+        <span className={cn("font-semibold tabular-nums", failed ? "text-bad" : "text-fg-2")}>{failed}</span>
+        {`\u00a0из\u00a0${measured} ${plural(measured, "проверенного", "проверенных", "проверенных")} — с ошибкой агента`}
+      </span>
     </>
   );
 }
@@ -126,7 +129,7 @@ function LaunchRow({
           {launch.judge ? ` · правила «${launch.judge.name}»` : launch.check === "code" ? " · критерии из кода" : ""}
           {launch.ruleIds?.length ? ` · ${count(launch.ruleIds.length, "критерий", "критерия", "критериев")}` : ""}
           {launch.replan ? " · критерии извлечены заново" : ""}
-          {launch.agentVersion ? ` · ${launch.agentVersion}` : ""}
+          {launch.agentVersion ? ` · версия агента ${launch.agentVersion}` : ""}
         </p>
         {rest.length > 0 && (
           <p className="mt-2 text-small text-fg-3">{rest.map(([mode, outcome]) => said(mode, outcome)).join(" · ")}</p>

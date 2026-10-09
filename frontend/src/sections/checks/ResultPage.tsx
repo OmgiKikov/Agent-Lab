@@ -1,21 +1,22 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { FileText } from "lucide-react";
-import { conversationsLink, launchLink, problemLink, type Check } from "../../app/links";
+import { conversationsLink, launchLink, type Check } from "../../app/links";
 import { resultOf } from "../../lab/checks";
-import { useCriteria, type Criterion } from "../../lab/criteria";
-import { longDay, plural } from "../../lab/format";
+import { seriousCompareText, type Compare } from "../../lab/compare";
+import { useCriteria } from "../../lab/criteria";
+import { pct } from "../../lab/format";
+import { FEW } from "../../lab/history";
+import { useLaunches } from "../../lab/launches";
 import { useLabState } from "../../lab/LabProvider";
 import { summarySentence } from "../../lab/problemReport";
+import { toneJudgedByOther } from "../../lab/tone";
 import { seriousOf } from "../../lab/severity";
-import { Step, STEP_ACTION, STEP_NEXT } from "../../product/Checklist";
-import { seriousStep, SeverityStatus } from "../../product/Severity";
+import type { Problems } from "../../lab/problems";
 import { StageResult } from "../../product/StageResult";
-import { answersPending, Trust } from "../../product/Trust";
 import { Button } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
-import { checked, queueOf } from "../problems/model";
 import { ProblemList } from "../problems/ProblemList";
 import { CheckHeader } from "./CheckHeader";
 import { CompareDelta, NoLongerFound, useComparison, wasOf } from "./Compare";
@@ -25,33 +26,36 @@ import { AccuracyStart, ToneStart } from "./Start";
 const PART = { bad: "fail", ok: "pass", none: "none" } as const;
 
 /**
- * The step after the model's answers are checked and the serious errors decided: the main problem — serious first,
- * then the most frequent — opened where its examples are and where it goes to a developer.
+ * «С нарушением важных критериев — 5 из 100 (5%)» under the number, opening those conversations: counted apart, never
+ * added to it. Once the check is compared with its previous one, the comparison says it beside the chip instead, «было
+ * → сейчас» (checks/Compare, CompareDelta).
  */
-function MainProblem({ check, c, next }: { check: Check; c: Criterion; next: boolean }) {
-  const s = c.r.log;
+function Important({ check, data, compare }: { check: Check; data: Problems; compare: Compare | null }) {
+  const serious = seriousOf(data);
+  if (!serious || (compare && seriousCompareText(compare, serious.marked))) return null;
   return (
-    <Step
-      state="todo"
-      title="Разберите главную проблему"
-      text={`${c.r.title.replace(/\.\s*$/, "")}: ${s.failed}\u00a0из\u00a0${checked(s)} ${plural(checked(s), "разговора", "разговоров", "разговоров")}. На странице проблемы — примеры с цитатами и задача для разработчика.`}
-      action={
-        <Link to={problemLink(c.r.id, check)} className={next ? STEP_NEXT : STEP_ACTION}>
-          Открыть
-        </Link>
-      }
-    />
+    <p className="mt-1 text-read text-fg-3">
+      С нарушением важных критериев —{" "}
+      <Link
+        to={conversationsLink(check, { v: "serious" })}
+        title="Разговоры, где нарушен важный критерий"
+        className="whitespace-nowrap rounded-sm font-medium text-fg-2 underline decoration-line-strong underline-offset-4 transition-colors hover:decoration-fg-3"
+      >
+        {`${serious.failed}\u00a0из\u00a0${serious.measured}`}
+      </Link>{" "}
+      ({pct(serious.failed, serious.measured)}%)
+    </p>
   );
 }
 
 /**
- * «Итог» of a check: the real conversations of the export as this check judged them — one number and how it stands to
- * the check's previous check beside it; the steps after a check in the order they are taken, the next one with the
- * black button: check the model's answers, decide the serious errors, open the main problem; then the problems it is
- * made of, serious first, then most frequent, each beside its previous count, and the criteria whose errors are no
- * longer found. Its conversations open from the parts of the number («Все разговоры»), the person's answers from
- * «Проверьте оценки модели» (product/Trust): both are of this result, not tabs of their own. A new check is the
- * header's «Новая проверка», where accuracy can also read its criteria from the agent's code anew.
+ * «Итог» of a check, as a measurement: the real conversations of the export as this check judged them — the share
+ * without an error found, the version of the agent when the check was told it, how the number stands to the check's
+ * previous check, the conversations where an important criterion was broken; then the problems it is made of, the
+ * important ones first, then the most frequent, each beside its previous count, and the criteria whose errors are no
+ * longer found. Its conversations open from the parts of the number («Все разговоры»), where a person can say an
+ * error is not one. A new check is the header's «Новая проверка», where accuracy can also read its criteria from the
+ * agent's code anew.
  */
 export function ResultPage({ check }: { check: Check }) {
   const { state, offline } = useLabState();
@@ -60,6 +64,7 @@ export function ResultPage({ check }: { check: Check }) {
   const { data, list, error, retry } = useCriteria(check);
   const result = resultOf(state, check);
   const compare = useComparison(check);
+  const launches = useLaunches(check, `${state?.job.id}-${state?.job.running}`);
   const [report, setReport] = useState(false);
   useEffect(() => {
     // «Проверить снова» of an older address (?assess=1) is the new check now.
@@ -124,34 +129,30 @@ export function ResultPage({ check }: { check: Check }) {
       </div>,
     );
 
-  // The steps in their order: the answers first while they are to do, then the serious errors, then the main problem.
-  const answering = answersPending(result);
-  const top = queueOf(list, "log")[0];
+  // The version of the agent the check measured, when its launch was told it: the measurement is of that version.
+  const version = launches.data?.launches.find((l) => l.modes.dataset?.checkId === result?.checkId)?.agentVersion;
   return page(
     <div className="max-w-[1040px] px-4 pb-24 pt-8 lg:px-10 lg:pt-12">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-read text-fg-3">
-        <span>
-          {state.logs.file ? `«${state.logs.file}» · ` : ""}проверено {longDay(log.finishedAt)}
-        </span>
-      </div>
+      {version && <p className="mb-4 break-words text-read text-fg-3">Версия агента {version}</p>}
+      {check === "tone" && toneJudgedByOther(state) && (
+        <p className="mb-4 max-w-[68ch] text-body text-fg-2">
+          Критерии изменились после этой проверки: итог посчитан по прежним.{" "}
+          <Link to={launchLink(check)} className="font-medium text-run hover:underline">
+            Проверить по новым
+          </Link>
+        </p>
+      )}
       <StageResult
-        className="mt-4"
         failed={log.withViolations}
         checked={log.assessed}
         unchecked={log.unassessed}
         link={(part) => conversationsLink(check, { v: PART[part] })}
         all={conversationsLink(check)}
+        important={<Important check={check} data={data} compare={compare} />}
         delta={<CompareDelta check={check} compare={compare} serious={seriousOf(data)?.marked} />}
       />
-      {result && (
-        <Trust
-          result={result}
-          check={check}
-          lead
-          serious={<SeverityStatus data={data} check={check} next={!answering} />}
-          problem={top && <MainProblem check={check} c={top} next={!answering && seriousStep(data) !== "todo"} />}
-          className="mt-5"
-        />
+      {log.assessed > 0 && log.assessed < FEW && (
+        <p className="mt-3 text-small text-fg-3">{`Проверено меньше ${FEW}\u00a0разговоров, поэтому вывод предварительный.`}</p>
       )}
       <section aria-label="Проблемы" className="mt-16">
         <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 border-b border-line pb-3">

@@ -18,10 +18,19 @@ class Kind:
     work: Callable[[dict], Work]
     # What makes two starts the same work: a stopped or failed task continues when started again with the same.
     same: Callable[[dict], str] | None = None
+    # Lines of work of the kind that never stand for each other (storage.tasks.begin): a stopped one keeps what it
+    # did while work of another line runs.
+    line: Callable[[dict], object] | None = None
+
+
+def _launch_line(given: dict) -> object:
+    """A launch's line: its check, and whether it checks the recorded answers (the long part a stop leaves half done)
+    or only asks the agent again."""
+    return [given.get('check'), 'dataset' in (given.get('modes') or ())]
 
 
 KINDS: dict[str, Kind] = {
-    'launch': Kind(lambda given: lambda progress: launches.run(given, progress), launches.fingerprint),
+    'launch': Kind(lambda given: lambda progress: launches.run(given, progress), launches.fingerprint, _launch_line),
     'tone-check': Kind(
         lambda given: lambda progress: tone.check(
             tone.selection(given['ruleIds'], given['revision']), given['count'], progress, propose=given['propose']
@@ -60,19 +69,31 @@ def start(jobs: PerAgent, kind: str, given: dict, task_id: str | None = None) ->
     found = KINDS[kind]
     try:
         return jobs.start(
-            kind, found.work(given), given=given, fingerprint=found.same(given) if found.same else None, task_id=task_id
+            kind,
+            found.work(given),
+            given=given,
+            fingerprint=found.same(given) if found.same else None,
+            task_id=task_id,
+            line=found.line,
         )
     except BusyError as error:
         raise HTTPException(409, str(error)) from error
 
 
 def continuable(task: dict | None) -> bool:
-    """Whether starting the task's work again now continues it: it stopped or failed with finished parts kept, and its
-    work is still the same (the materials, the criteria and the models have not changed since)."""
-    if task is None or task['status'] not in (storage.tasks.STOPPED, storage.tasks.FAILED) or not task['kept']:
+    """Whether starting the task's work again now continues it: it stopped or failed with finished parts kept, it is
+    the latest of its line of work (storage.tasks.begin), and its work is still the same (the materials, the criteria
+    and the models have not changed since)."""
+    if task is None:
         return False
     kind = KINDS.get(task['kind'])
-    if kind is None or kind.same is None:
+    if kind is None or (kind.line is not None and task['id'] not in _latest_by_line(task['kind'])):
+        return False
+    return _still_the_same(kind, task)
+
+
+def _still_the_same(kind: Kind, task: dict) -> bool:
+    if task['status'] not in (storage.tasks.STOPPED, storage.tasks.FAILED) or not task['kept'] or kind.same is None:
         return False
     try:
         return kind.same(task['input']) == task['fingerprint']
@@ -80,13 +101,24 @@ def continuable(task: dict | None) -> bool:
         return False
 
 
+def _latest_by_line(name: str) -> dict[str, dict]:
+    """The task started last of each line of a kind of work, by its id, the latest line first; none of a kind without
+    lines."""
+    line = KINDS[name].line
+    return {task['id']: task for task in storage.tasks.latest_by_line(name, line)} if line else {}
+
+
 def paused() -> dict[str, dict]:
     """The stopped or failed work of each kind that the same start would continue now (continuable), as the screens
-    read a task: a screen offers to go on with it whatever other task ran after it."""
+    read a task: a screen offers to go on with it whatever other task ran after it. Of a kind with lines of work, the
+    latest such task of any line."""
     found = {}
     for name, kind in KINDS.items():
-        task = storage.tasks.latest(name) if kind.same else None
-        if continuable(task):
+        if kind.same is None:
+            continue
+        candidates = _latest_by_line(name).values() if kind.line else [storage.tasks.latest(name)]
+        task = next((t for t in candidates if t and _still_the_same(kind, t)), None)
+        if task:
             found[name] = view(task)
     return found
 

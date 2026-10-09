@@ -11,7 +11,7 @@ import { Label } from "../../ui/Label";
 import { useToast } from "../../ui/toast";
 import { agentKey } from "../../app/agent";
 import { KnowledgeField, ToolsField, type AgentContext } from "./ContextFields";
-import { ACCURACY, SIMULATIONS } from "../../app/product";
+import { ACCURACY, LOCAL_AGENT, SIMULATIONS } from "../../app/product";
 
 type Answer = Probe & { question?: string };
 /** The last answer of the agent: on which way and where (`where`, since this change), what it said and when. */
@@ -39,7 +39,7 @@ const words = (text: string) =>
 const WAY_LOOK: Record<string, { icon: typeof Globe; how: string }> = {
   prod: { icon: Globe, how: "по адресу на стенде" },
   "local-http": { icon: Monitor, how: "уже запущен здесь" },
-  "local-code": { icon: Code2, how: "запускаем на время прогона" },
+  "local-code": { icon: Code2, how: "запускаем на время проверки" },
 };
 
 const read = <T,>(key: string): T | null => {
@@ -69,10 +69,14 @@ export function useConnectionMemory() {
   return { last: read<Last>(LAST), way: read<string>(WAY) };
 }
 
+/** The ways to the agent a person is offered: the test stand alone in the first release (app/product, LOCAL_AGENT). */
+export const waysOf = (state: LabState) => (LOCAL_AGENT ? state.targets : state.targets.filter((t) => t.id === "prod"));
+
 /** Where the agent runs: the way chosen, else the one that has an address. */
 export function wayOf(state: LabState, chosen: string | null) {
-  if (chosen && state.targets.some((t) => t.id === chosen)) return chosen;
-  return state.settings.prodUrl ? "prod" : state.settings.repo ? "local-code" : null;
+  if (chosen && waysOf(state).some((t) => t.id === chosen)) return chosen;
+  if (!LOCAL_AGENT || state.settings.prodUrl) return "prod";
+  return state.settings.repo ? "local-code" : null;
 }
 
 const INPUT = "h-9 font-mono text-small";
@@ -191,7 +195,8 @@ export function ConnectionForm({
     nextRepo !== saved.repo ||
     words(epk).join(" ") !== saved.epk.join(" ") ||
     contextDirty;
-  const target = state.targets.find((t) => t.id === way);
+  const ways = waysOf(state);
+  const target = ways.find((t) => t.id === way);
   const check = target ? (checks[targetKey(target)] ?? null) : null;
   const last = lastOn(memory.last, target);
   const pick = (id: string) => {
@@ -264,13 +269,17 @@ export function ConnectionForm({
         </Field>
       </div>
       <h3 className="mb-3 mt-8 text-read font-semibold text-fg">Подключение</h3>
-      <Label>Как подключить агента</Label>
-      <div role="radiogroup" aria-label="Способ подключения" className="mt-2 border-t border-line">
-        {state.targets.map((t) => (
-          <Way key={t.id} target={t} on={t.id === way} onPick={() => pick(t.id)} />
-        ))}
-      </div>
-      <div className="mt-5 space-y-4">
+      {ways.length > 1 && (
+        <>
+          <Label>Как подключить агента</Label>
+          <div role="radiogroup" aria-label="Способ подключения" className="mt-2 border-t border-line">
+            {ways.map((t) => (
+              <Way key={t.id} target={t} on={t.id === way} onPick={() => pick(t.id)} />
+            ))}
+          </div>
+        </>
+      )}
+      <div className={cn("space-y-4", ways.length > 1 ? "mt-5" : "mt-4")}>
         {way === "prod" && (
           <Field
             label="Адрес агента на тестовом стенде"
@@ -293,9 +302,12 @@ export function ConnectionForm({
             Адрес не нужен: агент уже запущен на этом компьютере{target?.where ? ` (${target.where})` : ""}.
           </p>
         )}
-        {/* The simulations and Точность are hidden in the first release (app/product): their fields with them. */}
-        {SIMULATIONS && (
-          <Field label="Клиенты для симуляций" hint="ЕПК через пробел. Если пусто, пишет тестовый клиент.">
+        {/* The customers the stand is asked as: by «Вопросы живому агенту» and by the simulations. */}
+        {(way === "prod" || SIMULATIONS) && (
+          <Field
+            label={SIMULATIONS ? "Клиенты на стенде" : "Клиенты для вопросов на стенде"}
+            hint="ЕПК через пробел: от их имени агенту задаются вопросы. Если пусто, пишет тестовый клиент."
+          >
             <Input
               name="epk"
               autoComplete="off"
@@ -367,7 +379,7 @@ export function ConnectionForm({
       </div>
       {target?.kind === "code" && (
         <p className="mt-3 text-small text-fg-3">
-          Агент запускается только на время прогона, поэтому связь заранее не проверить.
+          Агент запускается только на время проверки, поэтому связь заранее не проверить.
         </p>
       )}
       {check &&

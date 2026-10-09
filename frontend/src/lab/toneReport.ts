@@ -3,7 +3,8 @@ import { agentLine, headingOf, inlineText, quoteText, reliabilityWord } from "./
 import type { Problems, RuleEntry } from "./problems";
 import { seriousFirst, severityText } from "./severity";
 import type { ResultHead } from "./types";
-import { count, pct } from "./format";
+import { count } from "./format";
+import { cleanPct } from "./history";
 
 const excerpt = (value: string, limit = 300) => value.trim().slice(0, limit).trimEnd();
 const cut = (value: string, limit = 300) => excerpt(value, limit) + (value.trim().length > limit ? "…" : "");
@@ -35,7 +36,7 @@ function nextAction(problem: RuleEntry): string {
 /**
  * A short brief for the team, with the same number and words as the screen: «N из M — с ошибкой агента», and the
  * conversations with a serious error with whose decision that is (lab/severity, severityText). It tells the serious
- * problems first, marked «серьёзная», then the most frequent: all the serious ones, and at least three. Complete
+ * problems first, marked «важный», then the most frequent: all the serious ones, and at least three. Complete
  * criteria and evidence remain in the saved check, linked from the brief («История» of tone of voice). Links open Agent
  * Lab on the computer where the check ran; the brief says so, since it travels by e-mail. Its first line names the
  * agent (agentLine): every agent's brief looks alike.
@@ -65,13 +66,13 @@ export function toneBrief(
     "",
     ...(agent ? [agentLine(agent)] : []),
     `Проверка закончилась ${date(result.finishedAt)}.`,
-    ...(filename ? [`Выгрузка «${short(filename, 160)}».`] : []),
+    ...(filename ? [`Датасет «${short(filename, 160)}».`] : []),
     `В выборке ${count(result.sampled, "разговор", "разговора", "разговоров")}, проверка шла по\u00a0${count(criteria.length, "критерию", "критериям", "критериям")}.`,
     measured
-      ? `С ошибкой агента — ${failed}\u00a0из\u00a0${count(measured, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")} (${pct(failed, measured)}%).`
+      ? `Без найденных ошибок — ${cleanPct({ failed, measured })}% проверенных разговоров: ${passed}\u00a0из\u00a0${measured}. С ошибкой агента — ${failed}.`
       : `Ни один разговор не удалось проверить.`,
     ...(measured && severity ? [severity] : []),
-    `Без найденных ошибок — ${passed}. Не удалось проверить — ${unmeasured}\u00a0из\u00a0${result.sampled}, в счёт они не входят.`,
+    `Не удалось проверить — ${unmeasured}\u00a0из\u00a0${result.sampled}, в счёт они не входят.`,
     reviews.length
       ? `Люди проверили ${count(reviews.length, "оценку", "оценки", "оценок")} и согласились с\u00a0${agrees}. Это число оценок, а не разговоров.`
       : "Люди оценки ещё не проверяли.",
@@ -122,7 +123,7 @@ export function toneBrief(
   }
   if (found.length > top.length)
     lines.push(
-      `В отчёте ${grave >= 3 ? "только серьёзные проблемы" : grave ? "серьёзные проблемы и самые частые из остальных" : "три самые частые проблемы"}. Остальные — в итоге проверки в Agent Lab.`,
+      `В отчёте ${grave >= 3 ? "только проблемы по важным критериям" : grave ? "проблемы по важным критериям и самые частые из остальных" : "три самые частые проблемы"}. Остальные — в итоге проверки в Agent Lab.`,
       "",
     );
   if (saved)
@@ -134,7 +135,7 @@ export function toneBrief(
     );
   else
     lines.push(
-      "Числа и текст — на момент, когда составлен отчёт. Ссылки открывают Agent Lab на компьютере, где шла проверка, и показывают то, что там сейчас. После новой выгрузки разговоров там будет другое.",
+      "Числа и текст — на момент, когда составлен отчёт. Ссылки открывают Agent Lab на компьютере, где шла проверка, и показывают то, что там сейчас. После нового датасета там будет другое.",
     );
   return lines.join("\n");
 }

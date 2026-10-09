@@ -60,13 +60,22 @@ export const loadHistory = (check: Check) => api<{ checks: SavedCheck[] }>(`/api
 export const loadSaved = (check: Check, id: string) =>
   api<ToneSnapshot | CodeSnapshot>(`/api/history/${check}/${encodeURIComponent(id)}`);
 
-/** The share of the checked conversations with an error of the agent, or null when none was checked. */
-export const errorShare = (check: SavedCheck) =>
-  check.summary.measured ? pct(check.summary.failed, check.summary.measured) : null;
-
 /** «22 из 53 (42%)»: the conversations with an error of the checked ones, the share beside; never split by a line. */
 export const shareText = ({ failed, measured }: Counts) =>
   `${failed}\u00a0из\u00a0${measured}\u00a0(${pct(failed, measured)}%)`;
+
+/**
+ * The share of the checked conversations without an error found: the percent a check's whole result is told by, so
+ * it grows as the agent gets better — «5% без найденных ошибок», never «95%» of errors. The counts stay the errors'
+ * («279 из 295 с ошибкой»): they are what to fix. A criterion's share and the serious errors' stay theirs.
+ */
+export const cleanPct = ({ failed, measured }: Counts) => pct(Math.max(0, measured - failed), measured);
+/** «5% без найденных ошибок» */
+export const cleanText = (c: Counts) => `${cleanPct(c)}%\u00a0без найденных ошибок`;
+/** «58% без найденных ошибок · 22 из 53 с ошибкой»: a check's result in a line, its measurement first, as «Итог». */
+export const resultText = (c: Counts) => `${cleanText(c)} · ${c.failed}\u00a0из\u00a0${c.measured} с ошибкой`;
+/** The counts of the conversations without an error found, as the comparisons of whole results tell them. */
+export const cleanOf = (c: Counts): Counts => ({ ...c, failed: Math.max(0, c.measured - c.failed) });
 
 /** The same errors among the same number of checked conversations. */
 const unchanged = (before: Counts, now: Counts) => before.failed === now.failed && before.measured === now.measured;
@@ -122,5 +131,5 @@ export function comparisonText(check: SavedCheck, previous?: SavedCheck): string
         : Math.min(before.measured, now.measured) < FEW
           ? VERDICT.few
           : !same && "Могли измениться темы разговоров и клиенты.";
-  return `${context} С ошибкой агента: ${shiftText(before, now, same)}.${caveat ? ` ${caveat}` : ""}`;
+  return `${context} Без найденных ошибок: ${shiftText(cleanOf(before), cleanOf(now), same)}.${caveat ? ` ${caveat}` : ""}`;
 }

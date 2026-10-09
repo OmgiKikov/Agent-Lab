@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { AGENT } from "../app/agent";
 import { api } from "./api";
-import type { Check, Metric, Message, Rule, Criterion } from "./types";
+import type { Check, Metric, Message, Rule } from "./types";
 
 export type Mode = "dataset" | "questions" | "simulations";
 export const MODE_NAME: Record<Mode, string> = {
@@ -30,18 +30,28 @@ export type Launch = {
   ruleIds?: string[] | null;
   replan?: boolean;
   modes: Partial<Record<Mode, Outcome>>;
+  /** On its page: whether it was made of the dataset and the rules in force, so it can be started again as it was. */
+  current?: boolean;
+  /** On its page: whether starting it again goes on from where it stopped, with what it kept. */
+  continuable?: boolean;
 };
-export type Pair = {
-  baseline?: { status: string; rules: Rule[] };
-  comparable?: boolean;
-  contextError?: string | null;
-  knowledge?: { title: string; text: string; article: string }[];
+/** A recorded conversation asked again, as the list of a run shows it (api/launches.py, _line). */
+export type PairLine = {
   dialogueId: string;
   name: string;
+  /** How many questions of the customer were asked again. */
+  asked: number;
+  status: string;
+  comparable?: boolean;
+  /** How its recorded answers stood in the check of the dataset. */
+  baseline?: { status: string } | null;
+};
+/** One recorded conversation asked again, whole: both sides and the verdicts on the new answers. */
+export type Pair = PairLine & {
+  contextError?: string | null;
+  knowledge?: { title: string; text: string; article: string }[];
   original: { role: "user" | "assistant"; content: string }[];
   conversation: Message[];
-  status: string;
-  criteria: Criterion[];
   rules: Rule[];
   error?: string | null;
 };
@@ -62,10 +72,23 @@ export const useLaunches = (check?: Check, stamp?: string) =>
     queryFn: () => api<{ launches: Launch[] }>(`/api/launches${check ? `?check=${check}` : ""}`),
     refetchInterval: (q) => (q.state.data?.launches.some((l) => l.status === "running") ? 4000 : false),
   });
+/**
+ * A run of recorded questions as its list: one light line a question, asked again every 1.5 s while the run goes; the
+ * whole run would carry every conversation each time.
+ */
 export const useQuestions = (id?: string) =>
   useQuery({
     queryKey: ["questions", AGENT, id],
-    queryFn: () => api<{ id: string; status: string; version: string; items: Pair[] }>(`/api/questions/${id}`),
+    queryFn: () =>
+      api<{ id: string; status: string; version: string; items: PairLine[] }>(`/api/questions/${id}?brief=1`),
     enabled: !!id,
     refetchInterval: (q) => (q.state.data?.status === "running" ? 1500 : false),
+  });
+/** One question of a run, whole, while it is open; asked again while it is still being asked. */
+export const useQuestion = (id: string, dialogueId: string | null) =>
+  useQuery({
+    queryKey: ["question", AGENT, id, dialogueId],
+    queryFn: () => api<Pair>(`/api/questions/${id}/items/${encodeURIComponent(dialogueId ?? "")}`),
+    enabled: !!dialogueId,
+    refetchInterval: (q) => (q.state.data?.status === "RUNNING" ? 1500 : false),
   });

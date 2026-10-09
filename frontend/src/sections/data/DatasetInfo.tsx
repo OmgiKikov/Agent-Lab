@@ -18,7 +18,7 @@ const MEANINGLESS = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
  */
 export const shownName = (d: Dataset) => {
   const name = d.name === d.file ? d.name.replace(/\.(jsonl|json|csv|xlsx)$/i, "") : d.name;
-  return MEANINGLESS.test(name) ? `Выгрузка от ${longDay(d.createdAt)}` : name;
+  return MEANINGLESS.test(name) ? `Датасет от ${longDay(d.createdAt)}` : name;
 };
 
 function Line({ label, children }: { label: string; children: ReactNode }) {
