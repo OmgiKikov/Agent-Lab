@@ -38,7 +38,7 @@ function Facts({ facts, end }: { facts: Fact[]; end?: ReactNode }) {
   return (
     <span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-1">
       {facts.map((fact, i) => (
-        <span key={fact.key} className="inline-flex items-center whitespace-nowrap">
+        <span key={fact.key} className="whitespace-nowrap">
           {i > 0 && (
             <span aria-hidden className="mr-1.5">
               ·
@@ -439,7 +439,7 @@ function DatasetPage({
                       aria-label="Подробности"
                       title="Подробности"
                       onClick={() => setInfo(true)}
-                      className="ml-1 grid size-7 place-items-center rounded-full text-fg-3 transition-colors hover:bg-hover hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
+                      className="ml-1 inline-grid size-7 place-items-center rounded-full align-middle text-fg-3 transition-colors hover:bg-hover hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
                     >
                       <Info aria-hidden className="size-4" />
                     </button>
