@@ -41,6 +41,25 @@ export function duty(text: string) {
   return text.replace(/^#{1,6}[ \t].*(?:\n|$)/gm, "").trim() || text;
 }
 
+/** The name a criterion and its problem go by on every screen and in every report. */
+export const criterionName = (r: RuleEntry) => r.rule.name?.trim() || nameFromText(r.rule.text);
+
+/**
+ * What the model most often wrote about a criterion's errors on one side, as a line under the criterion's name:
+ * «Чаще всего: «…» — 12 из 57 ошибок». The problem is the whole criterion; its most frequent short verdict title is one
+ * kind of its errors, so it is shown only when it names at least two of them and says more than the name itself.
+ */
+export function commonTitle(
+  c: Criterion,
+  side: "log" | "sim" = "log",
+): { title: string; count: number; of: number } | null {
+  const fails = c.r[side].examples.filter((e) => e.status === "FAIL");
+  const title = c.r.title.trim();
+  const count = fails.filter((e) => e.title?.trim() === title).length;
+  if (count < 2 || quoteKey(title) === quoteKey(c.name) || quoteKey(title) === quoteKey(c.r.rule.text)) return null;
+  return { title, count, of: fails.length };
+}
+
 /** The criteria in force, in the order of the person's draft: their ids and the words of the rules they quote. */
 export type Reference = { id: string; quote: string }[];
 
@@ -57,7 +76,7 @@ export function numberCriteria(rules: RuleEntry[], reference?: Reference): { lis
   const list = rules.map((r) => ({
     r,
     n: 0,
-    name: r.rule.name?.trim() || nameFromText(r.rule.text),
+    name: criterionName(r),
     every: titles.length > 1 && r.topics.length === titles.length,
     topics: r.topics.map((t) => byTitle.get(t)!),
   }));

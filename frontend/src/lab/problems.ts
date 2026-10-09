@@ -89,6 +89,17 @@ export type RuleEntry = {
   human: { agree: number; disagree: number };
   scenarioIds: string[];
 };
+
+/** The customer's words shown beside a quoted reply: the ones it answered, else the conversation's first message. */
+export const askedOf = (e: Pick<Example, "asked" | "opening">) => e.asked?.trim() || e.opening;
+
+/**
+ * A criterion a person marked important. Only such a decision puts its problem first, makes it the main problem and
+ * ticks it for the summary; the automatic check's proposal is shown as a proposal and moves nothing.
+ */
+export const importantByPerson = (r: Pick<RuleEntry, "serious" | "severity">) =>
+  r.serious && r.severity.by === "person";
+
 export type Problems = {
   /** The check of the record: the one asked for, or the check of the run asked for. */
   check: Check;
