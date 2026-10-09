@@ -335,3 +335,9 @@ def finish(
         'human': {'agree': reviewed.count('agree'), 'disagree': reviewed.count('disagree')},
         'scenarioIds': [c['id'] for c in deck if str(c.get('sourceDialogueId')) in dialogues],
     }
+
+
+def serious_by_person(rule: dict) -> bool:
+    """Whether a person marked a rule of the record (finish) serious: only their decision puts its problem first,
+    the model's proposal informs."""
+    return rule['serious'] and rule['severity']['by'] == 'person'
