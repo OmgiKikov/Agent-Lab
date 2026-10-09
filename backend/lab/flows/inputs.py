@@ -64,11 +64,12 @@ def replace_export(dialogues: list[dict], name: str | None = None) -> int:
     return len(dialogues)
 
 
-async def upload_export(name: str, data: bytes, title: str | None = None) -> dict:
-    """An uploaded export read in a worker thread and committed whole: how many conversations it has, and how many it
-    had that a check cannot read (the agent wrote first, or never answered), which are left out."""
+async def upload_export(name: str, data: bytes, title: str | None = None, agent_version: str | None = None) -> dict:
+    """An uploaded export read in a worker thread and committed whole, with its name (title) and the version of the
+    agent whose answers it holds, when given: how many conversations it has, and how many it had that a check cannot
+    read (the agent wrote first, or never answered), which are left out."""
     dialogues, skipped = await asyncio.to_thread(export.read_export, name, data)
-    item = datasets.add(dialogues, name, title, len(data), skipped)
+    item = datasets.add(dialogues, name, title, len(data), skipped, agent_version)
     return {'total': item['total'], 'skipped': skipped}
 
 

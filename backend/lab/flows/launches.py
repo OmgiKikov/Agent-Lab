@@ -28,6 +28,30 @@ STOPPED = 'Остановлено пользователем.'
 
 
 def prepare(given: dict) -> dict:
+    """A launch's choices, checked (_chosen), and what it is made of put in force: its dataset, the version of the agent
+    whose answers the dataset holds when the launch checks them and names one («Версия агента в этом датасете»), its
+    rules. A ValueError says what to choose."""
+    dataset = _chosen(given)
+    with storage.transaction():
+        datasets.select(dataset['id'])
+        if 'dataset' in given['modes'] and given.get('agentVersion', '').strip():
+            datasets.set_version(dataset['id'], given['agentVersion'])
+        if given.get('judgeId'):
+            judges.activate(given['check'], given['judgeId'])
+        elif given['check'] == checks.CODE:
+            judges.activate(checks.CODE, None)
+        if given['check'] == checks.TONE and not (storage.documents.load(tone.DRAFT) or {}).get('criteria'):
+            raise ValueError('Выберите или сформируйте критерии Tone of voice.')
+        if given.get('ruleIds'):
+            if given['check'] != checks.TONE:
+                raise ValueError('Отдельные критерии выбираются только для Tone of voice.')
+            tone.selection(given['ruleIds'])  # each of them a criterion of the rules in force
+    return given
+
+
+def _chosen(given: dict) -> dict:
+    """The dataset a launch's choices name, once they make a launch: a ValueError says what to choose. Nothing is put in
+    force here (prepare)."""
     if (
         'simulations' in given['modes']
         and 'dataset' not in given['modes']
@@ -49,19 +73,7 @@ def prepare(given: dict) -> dict:
         target = connection.ways().get(given['target'])
         if not target or (not target.get('url') and target['kind'] != 'code'):
             raise ValueError('Настройте подключение к живому агенту.')
-    with storage.transaction():
-        datasets.select(dataset['id'])
-        if given.get('judgeId'):
-            judges.activate(given['check'], given['judgeId'])
-        elif given['check'] == checks.CODE:
-            judges.activate(checks.CODE, None)
-        if given['check'] == checks.TONE and not (storage.documents.load(tone.DRAFT) or {}).get('criteria'):
-            raise ValueError('Выберите или сформируйте критерии Tone of voice.')
-        if given.get('ruleIds'):
-            if given['check'] != checks.TONE:
-                raise ValueError('Отдельные критерии выбираются только для Tone of voice.')
-            tone.selection(given['ruleIds'])  # each of them a criterion of the rules in force
-    return given
+    return dataset
 
 
 def fingerprint(given: dict) -> str:

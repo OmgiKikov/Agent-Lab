@@ -10,6 +10,7 @@ Schema 9: immutable datasets alongside the selected working export.
 Schema 10: grouped launches and recorded-question runs.
 Schema 11: a dataset keeps how many conversations its upload left out.
 Schema 12: a quoted verdict keeps the customer's words its reply answered.
+Schema 13: a dataset keeps the version of the agent whose answers it holds.
 """
 
 import json
@@ -27,7 +28,7 @@ from ..domain.metric import metric
 
 # The database's user_version once these tables are in place. Raise it with every change here: a database is set up
 # again only when its user_version differs.
-SCHEMA = 12
+SCHEMA = 13
 EXPORT = 'logs.json'  # where a database before schema 7 kept the export's conversations, as one document
 EXPORT_META = 'logs-meta.json'  # the name of the export's file and when it was uploaded
 PERSON, LAB = 'person', 'lab'  # who gave an answer: a person on a screen, or the Lab (storage.reviews)
@@ -36,9 +37,11 @@ TABLES = (
     'CREATE TABLE IF NOT EXISTS launches (id TEXT PRIMARY KEY, kind TEXT NOT NULL, '
     'summary TEXT NOT NULL, value TEXT NOT NULL)',
     # skipped: the conversations of the upload a check cannot read (the agent wrote first, or never answered), left
-    # out; unknown (NULL) for a dataset uploaded before it was kept.
+    # out; unknown (NULL) for a dataset uploaded before it was kept. agent_version: the version of the agent whose
+    # answers the dataset holds, '' while nobody named it.
     'CREATE TABLE IF NOT EXISTS datasets (id TEXT PRIMARY KEY, name TEXT NOT NULL, file TEXT, '
-    'created_at TEXT NOT NULL, bytes INTEGER NOT NULL DEFAULT 0, archived_at TEXT, context TEXT, skipped INTEGER)',
+    'created_at TEXT NOT NULL, bytes INTEGER NOT NULL DEFAULT 0, archived_at TEXT, context TEXT, skipped INTEGER, '
+    "agent_version TEXT NOT NULL DEFAULT '')",
     'CREATE TABLE IF NOT EXISTS dataset_dialogues (dataset_id TEXT NOT NULL, position INTEGER NOT NULL, '
     'id TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (dataset_id, position), UNIQUE (dataset_id, id))',
     'CREATE TABLE IF NOT EXISTS documents (name TEXT PRIMARY KEY, value TEXT NOT NULL)',
@@ -86,8 +89,11 @@ def set_up(connection: sqlite3.Connection, path: Path) -> None:
             connection.execute(statement)
         if 'summary' not in {column[1] for column in connection.execute('PRAGMA table_info(runs)')}:
             connection.execute('ALTER TABLE runs ADD COLUMN summary TEXT')
-        if 'skipped' not in {column[1] for column in connection.execute('PRAGMA table_info(datasets)')}:
+        datasets = {column[1] for column in connection.execute('PRAGMA table_info(datasets)')}
+        if 'skipped' not in datasets:
             connection.execute('ALTER TABLE datasets ADD COLUMN skipped INTEGER')
+        if 'agent_version' not in datasets:
+            connection.execute("ALTER TABLE datasets ADD COLUMN agent_version TEXT NOT NULL DEFAULT ''")
         upgrade(connection)
         connection.execute(f'PRAGMA user_version = {SCHEMA}')
 
@@ -101,6 +107,7 @@ def upgrade(connection: sqlite3.Connection) -> None:
     _accuracy_history(connection)
     _answers_to_rows(connection)
     _asked_on_verdicts(connection)
+    _dataset_versions(connection)
     # The number of uploaded dialogues was kept beside them before they were rows.
     connection.execute('DROP TRIGGER IF EXISTS length_on_insert')
     connection.execute('DROP TRIGGER IF EXISTS length_on_update')
@@ -297,6 +304,21 @@ def _with_asked(result: Any, read: Callable[[str], dict | None]) -> Any:
 def _dialogue(connection: sqlite3.Connection, query: str, *key: str) -> dict | None:
     row = connection.execute(query, key).fetchone()
     return json.loads(row[0]) if row else None
+
+
+def _dataset_versions(connection: sqlite3.Connection) -> None:
+    """A dataset nobody named the agent's version of takes the one its newest launch named: before schema 13 the
+    version was the launch's own, given on its form. A dataset with a version keeps it."""
+    named = {}
+    for (value,) in connection.execute("SELECT value FROM launches WHERE kind = 'launch' ORDER BY rowid").fetchall():
+        launch = json.loads(value)
+        dataset_id, version = (launch.get('inputs') or {}).get('datasetId'), (launch.get('agentVersion') or '').strip()
+        if dataset_id and version:
+            named[dataset_id] = version
+    connection.executemany(
+        "UPDATE datasets SET agent_version = ? WHERE id = ? AND agent_version = ''",
+        ((version, dataset_id) for dataset_id, version in named.items()),
+    )
 
 
 def _answer(

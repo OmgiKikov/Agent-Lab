@@ -350,6 +350,43 @@ class StoreTests(unittest.TestCase):
         datasets.select(first['id'])
         self.assertEqual(asked(), ['код авторизации где взять', 'как записано', None])
 
+    def test_a_dataset_takes_the_agent_version_its_newest_launch_named(self) -> None:
+        """Before schema 13 the version of the agent was a launch's own; now it is the dataset's, whose answers it is.
+        A database of schema 12 gives each dataset the version its newest launch named, trimmed; a launch that named
+        none, the live questions' run and a dataset without launches leave it unknown."""
+
+        def launch(launch_id: str, dataset_id: str, version: str, kind: str = 'launch') -> tuple:
+            value = {'id': launch_id, 'agentVersion': version, 'inputs': {'datasetId': dataset_id}}
+            return launch_id, kind, json.dumps(value), json.dumps(value)
+
+        with sqlite3.connect(storage.db.default_database()) as connection:
+            connection.execute(
+                'CREATE TABLE datasets (id TEXT PRIMARY KEY, name TEXT NOT NULL, file TEXT, created_at TEXT NOT NULL, '
+                'bytes INTEGER NOT NULL DEFAULT 0, archived_at TEXT, context TEXT, skipped INTEGER)'
+            )
+            connection.executemany(
+                'INSERT INTO datasets (id, name, created_at) VALUES (?, ?, ?)',
+                [(key, key, '2026-10-05T10:00:00+00:00') for key in ('first', 'second', 'third')],
+            )
+            connection.execute(
+                'CREATE TABLE launches (id TEXT PRIMARY KEY, kind TEXT NOT NULL, summary TEXT NOT NULL, '
+                'value TEXT NOT NULL)'
+            )
+            connection.executemany(
+                'INSERT INTO launches (id, kind, summary, value) VALUES (?, ?, ?, ?)',
+                [
+                    launch('l1', 'first', 'v1.0'),
+                    launch('l2', 'first', ' v1.1 '),
+                    launch('l3', 'first', ''),
+                    launch('l4', 'second', ''),
+                    launch('l4-questions', 'third', 'stand-2.0', kind='questions'),
+                ],
+            )
+            connection.execute('PRAGMA user_version = 12')
+        connection.close()
+        versions = {item['id']: item['agentVersion'] for item in storage.datasets.listed()}
+        self.assertEqual(versions, {'first': 'v1.1', 'second': '', 'third': ''})
+
     def test_repeated_import_cannot_restore_invalidated_audit_or_scenarios(self) -> None:
         legacy = self.path / 'legacy'
         legacy.mkdir()

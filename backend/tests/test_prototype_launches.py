@@ -694,6 +694,19 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 409, response.text)
         self.assertEqual(storage.judges.active('tone')['id'], newer['id'])
 
+    async def test_a_check_of_the_recorded_answers_names_the_version_of_the_dataset(self):
+        """«Версия агента в этом датасете»: a launch that checks the recorded answers with a version names the version
+        of the dataset's answers (trimmed); one without a version leaves the dataset's as it is, and asking the live
+        agent says nothing of the dataset. The launch keeps the version it was given."""
+        launches.prepare(self.given(agentVersion='v-stand'))  # the live agent only
+        self.assertEqual(storage.datasets.get(self.dataset['id'])['agentVersion'], '')
+        given = launches.prepare(self.given(modes=['dataset'], agentVersion=' v2.0 '))
+        self.assertEqual(
+            (storage.datasets.get(self.dataset['id'])['agentVersion'], given['agentVersion']), ('v2.0', ' v2.0 ')
+        )
+        launches.prepare(self.given(modes=['dataset', 'questions']))
+        self.assertEqual(storage.datasets.get(self.dataset['id'])['agentVersion'], 'v2.0')
+
     async def test_a_launch_is_made_of_what_is_in_force_by_its_rules_or_by_none_named(self):
         """A tone launch that named no rules goes by the ones in force: starting it again puts nothing back. One of
         Точность that named none goes by the agent's code, so with a set of Точность in force it is not current."""

@@ -98,6 +98,37 @@ class DatasetTests(unittest.IsolatedAsyncioTestCase):
         storage.dialogues.replace([dialogue('d2')], 'legacy.jsonl')
         self.assertIsNone(storage.datasets.get(storage.datasets.adopt_current())['skipped'])
 
+    async def test_a_dataset_holds_the_version_of_the_agent_whose_answers_it_holds(self):
+        """The version belongs to the dataset: given with its upload or on its page, trimmed, empty when nobody knows
+        it, and listed with it. One longer than 80 characters, none at all, or a dataset that is not there is refused
+        in words."""
+        body = json.dumps(dialogue())
+        response = await self.client.post('/api/logs?name=one.jsonl&agentVersion=%20v1.0%20', content=body)
+        self.assertEqual(response.status_code, 200, response.text)
+        await self.client.post('/api/logs?name=two.jsonl', content=body)
+        listed = (await self.client.get('/api/datasets')).json()['datasets']
+        self.assertEqual(
+            [(item['name'], item['agentVersion']) for item in listed], [('two.jsonl', ''), ('one.jsonl', 'v1.0')]
+        )
+        dataset_id = listed[0]['id']
+        for given, kept in ((' релиз 5 октября ', 'релиз 5 октября'), ('', '')):
+            response = await self.client.post('/api/datasets/version', json={'id': dataset_id, 'agentVersion': given})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json()['agentVersion'], kept)
+        self.assertEqual(storage.datasets.get(dataset_id)['agentVersion'], '')
+        for given, refusal in (
+            ({'id': dataset_id, 'agentVersion': 'v' * 81}, 'Версия агента должна быть не длиннее 80 символов.'),
+            ({'id': dataset_id}, 'Укажите версию агента.'),
+            ({'id': 'nope', 'agentVersion': 'v2'}, 'Датасет не найден.'),
+        ):
+            with self.subTest(given=given):
+                response = await self.client.post('/api/datasets/version', json=given)
+                self.assertEqual((response.status_code, response.json()['detail']), (400, refusal))
+        too_long = await self.client.post(f'/api/logs?name=three.jsonl&agentVersion={"v" * 81}', content=body)
+        self.assertEqual(too_long.status_code, 400)
+        self.assertIn('Версия агента должна быть не длиннее 80 символов.', too_long.json()['detail'])
+        self.assertEqual(len(datasets.listed()['datasets']), 2)
+
     async def test_a_conversation_longer_than_a_csv_cell_takes_by_default_is_read(self):
         """A CSV export with a reply longer than the 131 072 characters csv takes by default is read, not a 500."""
         long = 'Длинный ответ агента без переносов строк. ' * 4000
