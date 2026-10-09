@@ -1,7 +1,7 @@
 import { useIsMutating, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "../ui/toast";
 import { api } from "./api";
-import { count, plural } from "./format";
+import { count } from "./format";
 import { shareText, type Counts } from "./history";
 import { useLabState } from "./LabProvider";
 import type { Problems, RuleEntry } from "./problems";
@@ -24,8 +24,6 @@ export const PROPOSING = "Отмечаем важные критерии";
 /** The person reading («вы») or, on a page someone else reads (the summary, a report, a letter), people («люди»). */
 type Who = "you" | "people";
 
-/** Who proposes: «модель» on the product's screens, «автоматическая проверка» on a page someone else reads. */
-const MODEL: Record<Who, string> = { you: "модель", people: "автоматическая проверка" };
 const PEOPLE: Record<Who, string> = { you: "вы", people: "люди" };
 
 /** Serious first; otherwise the order stays as it was (a stable sort keeps it). */
@@ -96,22 +94,26 @@ export function pendingOf(st: Standing): { text: string; again: boolean } | null
 }
 
 /**
- * Which criteria are serious and whose decision it is, in one line: «Важные критерии — 2 из 8. Их отметила модель,
- * вы проверили 0 из 8.» Once a person decided every serious one, «Их отметили вы.», with how many criteria they checked
- * in all while some proposals wait. With no serious criterion: «Важных критериев нет. Так решили вы.» On a page
- * someone else reads, the automatic check and people.
+ * Which criteria are important and whose decision it is, in one line clear on its own: «Важных критериев 2 из 8, их
+ * отметили вы.»; while the count rests on proposals of the model, «Важных критериев 2 из 8 — с учётом предложений
+ * модели, которые вы ещё не подтвердили.» With none important: «Важных критериев нет, так решили вы.», or the model's
+ * word for it, with how many criteria the person decided. The person reading, where the rest of the proposals waits
+ * for «Подтвердить все»; on a page someone else reads, people, and nothing of what waits.
  */
 export function whoseText(st: Standing, who: Who = "you"): string {
   const person = PEOPLE[who];
-  const checked = `${person} проверили ${st.decided}\u00a0из\u00a0${st.criteria}`;
-  if (!st.serious)
-    return st.proposed
-      ? `Важных критериев нет. Так считает ${MODEL[who]}, ${checked}.`
-      : `Важных критериев нет. Так решили ${person}.`;
-  const head = `Важных критериев ${st.serious}\u00a0из\u00a0${st.criteria}.`;
-  const them = st.serious === 1 ? "Его" : "Их";
-  if (!st.yours) return `${head} ${them} отметила ${MODEL[who]}, ${checked}.`;
-  return `${head} ${them} отметили ${person}.${st.proposed ? ` Всего ${checked}.` : ""}`;
+  if (!st.serious) {
+    if (!st.proposed) return `Важных критериев нет, так решили ${person}.`;
+    if (!st.decided) return `Важных критериев нет: так считает модель, ${person} это ещё не подтвердили.`;
+    return `Важных критериев нет. По\u00a0${count(st.decided, "критерию", "критериям", "критериям")} из\u00a0${st.criteria} так решили ${person}, по\u00a0${st.proposed} так считает модель.`;
+  }
+  const head = `Важных критериев ${st.serious}\u00a0из\u00a0${st.criteria}`;
+  if (!st.yours) return `${head} — с учётом предложений модели, которые ${person} ещё не подтвердили.`;
+  const waiting =
+    who === "you" && st.proposed
+      ? ` Ещё ${count(st.proposed, "критерий", "критерия", "критериев")} модель предлагает считать обычными.`
+      : "";
+  return `${head}, ${st.serious === 1 ? "его" : "их"} отметили ${person}.${waiting}`;
 }
 
 /**
@@ -156,15 +158,16 @@ export function seriousOf(data: Problems | null | undefined): Serious | null {
 }
 
 /**
- * Where the serious criteria could be checked, when not in every checked conversation: «Эти критерии удалось
- * проверить в 16 разговорах из 53.», or «Этот критерий не удалось проверить ни в одном разговоре.» A share of all
- * conversations says little when the criteria seldom applied, and this says how seldom.
+ * Where the important criteria apply, when not in every checked conversation: «Важные критерии применимы в 16 из 53
+ * проверенных разговоров.», or «Важный критерий не применим ни в одном проверенном разговоре.» A share of all
+ * conversations says little when the criteria seldom apply, and this says how seldom.
  */
 export function whereText(s: Serious): string | null {
   if (s.checked >= s.measured) return null;
-  const these = s.marked === 1 ? "Этот критерий" : "Эти критерии";
-  if (!s.checked) return `${these} не удалось проверить ни в одном разговоре.`;
-  return `${these} удалось проверить в\u00a0${s.checked}\u00a0${plural(s.checked, "разговоре", "разговорах", "разговорах")} из\u00a0${s.measured}.`;
+  const one = s.marked === 1;
+  if (!s.checked)
+    return `${one ? "Важный критерий не применим" : "Важные критерии не применимы"} ни в одном проверенном разговоре.`;
+  return `${one ? "Важный критерий применим" : "Важные критерии применимы"} в\u00a0${s.checked}\u00a0из\u00a0${count(s.measured, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")}.`;
 }
 
 /**
@@ -197,7 +200,7 @@ export function severityLines(st: Standing, serious: Serious | null, who: Who = 
     if (pending)
       lines.push({
         kind: "text",
-        text: `Ещё не решено по\u00a0${count(st.pending, "критерию", "критериям", "критериям")}.`,
+        text: `Ещё по\u00a0${count(st.pending, "критерию", "критериям", "критериям")} не решено, важные ли они.`,
         action: again,
       });
     return lines;
