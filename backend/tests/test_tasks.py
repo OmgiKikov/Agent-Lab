@@ -76,6 +76,26 @@ class TaskStorageTests(unittest.TestCase):
         self.assertEqual((found['status'], found['kept'], found['progress']), ('done', 0, {'done': 1, 'total': 1}))
         self.assertFalse(tasks.begin('tone-check', {}, 'same')['continued'])
 
+    def test_the_screens_get_the_latest_task_of_each_line_whole(self):
+        def line(given):
+            return given['check']
+
+        def stopped(check, fingerprint):
+            task = tasks.begin('launch', {'check': check}, fingerprint, line=line)
+            leave = inside(task['id'])
+            tasks.keep('dialogue:1', 'judged')
+            leave()
+            tasks.end(task['id'], tasks.STOPPED)
+            return task['id']
+
+        first = stopped('tone', 'a')
+        code = stopped('code', 'b')
+        tone = stopped('tone', 'c')
+        # The latest line first, each by its latest task with what it kept; the earlier task of a line is no longer
+        # offered and let its steps go, while the other line's stopped work kept its own.
+        self.assertEqual([(t['id'], t['kept']) for t in tasks.latest_by_line('launch', line)], [(tone, 1), (code, 1)])
+        self.assertEqual(tasks.get(first)['kept'], 0)
+
     def test_a_persons_continue_is_no_restart(self):
         task = tasks.begin('tone-check', {}, 'same')
         tasks.resume(task['id'])

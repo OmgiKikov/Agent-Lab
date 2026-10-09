@@ -122,8 +122,8 @@ const where = (p: RuleEntry, source?: Source) =>
     .join(", ");
 
 /**
- * «Перекладывает вину на клиента · серьёзная»: a problem's name as a letter or a ticket heads it, in Markdown (the name
- * comes from a model that read the customers' words: inlineText).
+ * «Перекладывает вину на клиента · важный критерий»: a problem's name as a letter or a ticket heads it, in Markdown
+ * (the name comes from a model that read the customers' words: inlineText).
  */
 export const headingOf = (p: Pick<RuleEntry, "title" | "serious">) =>
   p.serious ? `${inlineText(p.title)} · важный критерий` : inlineText(p.title);

@@ -3,7 +3,6 @@ for work a stop can leave half done, what makes two starts the same work (its fi
 it. A task is kept with its kind and input (storage.tasks): a Lab started after another one died takes it up again
 from them (jobs.recover). A kind not here is work its request awaited, gone with the process: never taken up again."""
 
-import json
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -103,12 +102,10 @@ def _still_the_same(kind: Kind, task: dict) -> bool:
 
 
 def _latest_by_line(name: str) -> dict[str, dict]:
-    """The task started last of each line of a kind of work, by its line, the latest line first."""
+    """The task started last of each line of a kind of work, by its id, the latest line first; none of a kind without
+    lines."""
     line = KINDS[name].line
-    latest: dict[str, dict] = {}
-    for task in storage.tasks.of_kind(name):
-        latest.setdefault(json.dumps(line(task['input']) if line else None, ensure_ascii=False), task)
-    return {task['id']: task for task in latest.values()}
+    return {task['id']: task for task in storage.tasks.latest_by_line(name, line)} if line else {}
 
 
 def paused() -> dict[str, dict]:

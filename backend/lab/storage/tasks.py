@@ -62,8 +62,9 @@ def begin(
         if connection.execute('SELECT 1 FROM tasks WHERE status = ?', (RUNNING,)).fetchone():
             raise Busy
         at = db.now()
-        same = [task for task in _of(connection, kind) if line is None or line(task['input']) == line(given)]
-        latest = same[0] if same else None
+        # A kind without lines needs its latest task alone; one with lines reads its tasks' inputs, never their steps.
+        same = [] if line is None else [task for task in _lines(connection, kind) if line(task['input']) == line(given)]
+        latest = _latest(connection, kind) if line is None else (_get(connection, same[0]['id']) if same else None)
         if fingerprint and latest and latest['status'] in (STOPPED, FAILED) and latest['fingerprint'] == fingerprint:
             connection.execute(
                 'UPDATE tasks SET status = ?, input = ?, progress = ?, error = NULL, started_at = ?, updated_at = ?, '
@@ -71,9 +72,15 @@ def begin(
                 (RUNNING, db.dump(given), '{}', at, at, latest['id']),
             )
             return _get(connection, latest['id']) | {'continued': True}
-        connection.executemany(
-            'DELETE FROM steps WHERE task_id = ?', [(task['id'],) for task in same if task['status'] != RUNNING]
-        )
+        if line is None:
+            connection.execute(
+                'DELETE FROM steps WHERE task_id IN (SELECT id FROM tasks WHERE kind = ? AND status != ?)',
+                (kind, RUNNING),
+            )
+        else:
+            connection.executemany(
+                'DELETE FROM steps WHERE task_id = ?', [(task['id'],) for task in same if task['status'] != RUNNING]
+            )
         new_id = task_id or uuid.uuid4().hex
         connection.execute(
             'INSERT INTO tasks (id, kind, status, input, fingerprint, progress, created_at, started_at, updated_at) '
@@ -176,17 +183,24 @@ def closing() -> bool:
     return current is not None and current.closing
 
 
-def of_kind(kind: str) -> list[dict]:
-    """The tasks of a kind, the latest first."""
+def latest_by_line(kind: str, line: Callable[[dict], object]) -> list[dict]:
+    """The task started last of each line of a kind of work (begin), the latest line first: what the screens may offer
+    to continue. The screens ask every time they look, so the lines are told by the tasks' inputs alone, and only the
+    latest of each is read whole."""
     with db.connect() as connection:
-        return _of(connection, kind)
+        found: dict[str, str] = {}
+        for task in _lines(connection, kind):
+            found.setdefault(json.dumps(line(task['input']), ensure_ascii=False), task['id'])
+        return [task for task in (_get(connection, task_id) for task_id in found.values()) if task]
 
 
-def _of(connection: sqlite3.Connection, kind: str) -> list[dict]:
+def _lines(connection: sqlite3.Connection, kind: str) -> list[dict]:
+    """The tasks of a kind, the latest first, by what tells their lines of work apart: id, status and input, without
+    the steps each kept."""
     rows = connection.execute(
-        f'SELECT {_FIELDS} FROM tasks WHERE kind = ? ORDER BY started_at DESC, rowid DESC', (kind,)
+        'SELECT id, status, input FROM tasks WHERE kind = ? ORDER BY started_at DESC, rowid DESC', (kind,)
     ).fetchall()
-    return [_task(row) for row in rows]
+    return [{'id': task_id, 'status': status, 'input': json.loads(given)} for task_id, status, given in rows]
 
 
 def _latest(connection: sqlite3.Connection, kind: str | None) -> dict | None:
