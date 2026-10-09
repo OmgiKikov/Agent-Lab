@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { ChevronDown, CircleCheck, Download, FileText, Pencil, Plus, RefreshCw } from "lucide-react";
+import { ChevronDown, Download, FileText, Pencil, Plus, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { launchLink, SECTIONS } from "../../app/links";
 import { SIMULATIONS } from "../../app/product";
@@ -15,6 +15,7 @@ import { useFirstRun } from "../../lab/compare";
 import { TONE_ID, toneJudgedByOther, toneResult } from "../../lab/tone";
 import { MarkNo } from "../../product/MarkNo";
 import { Step, Steps, STEP_NEXT } from "../../product/Checklist";
+import { FirstStepsLine } from "../../product/FirstSteps";
 import { IMPORTANT, SeriousTag, SeverityHint, SeverityNote, SeveritySwitch } from "../../product/Severity";
 import { Button } from "../../ui/Button";
 import { EmptyState, Skeleton } from "../../ui/EmptyState";
@@ -142,46 +143,17 @@ function CriterionDetails({ card, onEdit }: { card: Card; onEdit: () => void }) 
 
 /**
  * The way to the first check of tone of voice, while there is none: the conversations, the rules with their criteria,
- * then the check. While the rules are being given (`line`) it is one line saying where the person is, so the step
- * itself stays in view; once the criteria are ready, the steps as under a check's number (product/Checklist), each done
- * ticked and the first check with the page's one black button, so the first run reads as one path to the result.
+ * then the check. While the rules are being given (`line`) it is one line saying where the person is (FirstStepsLine,
+ * the same line «Обзор» and «Новая проверка» show), so the step itself stays in view; once the criteria are ready, the
+ * steps as under a check's number (product/Checklist), each done ticked and the first check with the page's one black
+ * button, so the first run reads as one path to the result.
  */
 function FirstSteps({ criteria, collecting, line }: { criteria: number; collecting?: boolean; line?: boolean }) {
   const { state } = useLabState();
   const total = state?.logs.total ?? 0;
   const name = state?.logs.name || state?.logs.file;
   const ready = criteria > 0;
-  if (line) {
-    const steps: [string, "done" | "now" | "later"][] = [
-      ["Разговоры", total ? "done" : "now"],
-      ["Правила и критерии", ready ? "done" : total ? "now" : "later"],
-      ["Первая проверка", ready && total ? "now" : "later"],
-    ];
-    return (
-      <ol aria-label="Путь к первой проверке" className="mt-5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-small">
-        {steps.map(([label, at], i) => (
-          <li key={label} className="flex items-center gap-2.5">
-            {i > 0 && <span aria-hidden className="h-px w-5 bg-line-strong" />}
-            <span
-              aria-current={at === "now" ? "step" : undefined}
-              className={cn("flex items-center gap-1.5", at === "now" ? "font-medium text-fg" : "text-fg-3")}
-            >
-              {at === "done" ? (
-                <CircleCheck aria-hidden className="size-4 text-ok" />
-              ) : (
-                <span
-                  aria-hidden
-                  className={cn("size-3 rounded-full border-2", at === "now" ? "border-fg" : "border-line-strong")}
-                />
-              )}
-              {label}
-              {at === "now" && collecting && <span className="font-normal text-fg-3">· собираются</span>}
-            </span>
-          </li>
-        ))}
-      </ol>
-    );
-  }
+  if (line) return <FirstStepsLine criteria={criteria} collecting={collecting} className="mt-5" />;
   return (
     <Steps className="mt-6">
       <Step
