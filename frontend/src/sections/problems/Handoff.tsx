@@ -1,5 +1,5 @@
 import { Copy, Link2, RotateCcw } from "lucide-react";
-import { problemMarkdown, useReportAgent } from "../../lab/problemReport";
+import { handoffText, useReportAgent } from "../../lab/problemReport";
 import type { RuleEntry } from "../../lab/problems";
 import { Button } from "../../ui/Button";
 import { Sheet } from "../../ui/Sheet";
@@ -7,9 +7,10 @@ import { useToast } from "../../ui/toast";
 import type { SideKey } from "./model";
 
 /**
- * «Задача для разработчика»: the problem as a brief to paste into a ticket or a coding assistant — the agent it is
- * about, what is wrong, how often, where the agent's code says it, one proof and the link back here. Logs and
- * simulation are told apart. The task is copied only with the agent's name in it: every agent's tasks look alike.
+ * «Задача для разработчика»: the problem as a task for the agent's team, pasted into their tracker — the agent it is
+ * about, what is wrong, how often, what the agent must do, one error and the link back here (lab/problemReport,
+ * handoffText). Plain text that reads the same as Markdown. Logs and simulation are told apart. The task is copied
+ * only with the agent's name in it: every agent's tasks look alike.
  */
 export function Handoff({
   open,
@@ -26,7 +27,7 @@ export function Handoff({
 }) {
   const toast = useToast();
   const agent = useReportAgent();
-  const text = problemMarkdown(r, link, { source: side, agent: agent.name ?? undefined });
+  const text = handoffText(r, link, { side, agent: agent.name ?? undefined });
   const copy = (value: string, done: string) =>
     Promise.resolve()
       .then(() => navigator.clipboard.writeText(value))
@@ -36,7 +37,7 @@ export function Handoff({
       open={open}
       onClose={onClose}
       title="Задача для разработчика"
-      sub="Вставьте в тикет или в Claude Code в папке агента"
+      sub="Вставьте в задачу для команды агента"
       actions={
         <>
           <Button icon={Link2} onClick={() => copy(link, "Ссылка скопирована")} className="hidden sm:inline-flex">

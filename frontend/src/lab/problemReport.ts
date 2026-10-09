@@ -2,10 +2,11 @@ import { AGENT, shareBase } from "../app/agent";
 import { problemLink } from "../app/links";
 import { useAgents } from "./agents";
 import { CHECK_NAME } from "./checks";
-import { duty } from "./criteria";
-import { count, day } from "./format";
-import type { Example, Problems, RuleEntry } from "./problems";
-import { seriousFirst, severityText } from "./severity";
+import { commonTitle, criterionName, type Criterion } from "./criteria";
+import { count, day, pct } from "./format";
+import { askedOf, importantByPerson, type Example, type Problems, type RuleEntry, type Side } from "./problems";
+import { clip, inQuotes, ruleLines } from "./quote";
+import { severityText } from "./severity";
 
 const SOURCE_LABEL: Record<string, string> = {
   prompt: "Инструкции агента",
@@ -17,22 +18,25 @@ export const sourceLabel = (kind: string) => SOURCE_LABEL[kind] ?? "Источн
 /** A word that begins a sentence. */
 const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
+/** One full stop at the end: a model's reason comes with it or without. */
+const sentence = (text: string) => (/[.!?…]$/.test(text) ? text : `${text}.`);
+
 /**
- * Markdown's marks in a text a report quotes, escaped (CommonMark backslash escapes): «[…](…)», «<…>», «#», «|» and «`»
- * stay the characters they are. The copy and the plain text read them back as written (pieces).
+ * Markdown's marks in a text a Markdown file quotes, escaped (CommonMark backslash escapes): «[…](…)», «<…>», «#», «|»
+ * and «`» stay the characters they are.
  */
 const marks = (text: string) => text.replace(/[\\`[\]<>#|]/g, "\\$&");
 
 /**
- * Someone else's text inside a line of a report — the customer's and the agent's words, a model's reason, a quote from
- * the rules or the code, a name: on one line, since its line breaks would start blocks of their own (a heading, a
- * quote), and with its marks escaped, so a «[link](…)» in it stays words and none of its addresses becomes a link.
+ * Someone else's text inside a line of a Markdown file (a conversation saved for a ticket): on one line, since its line
+ * breaks would start blocks of their own (a heading, a quote), and with its marks escaped, so a «[link](…)» in it stays
+ * words and none of its addresses becomes a link.
  */
 export const inlineText = (text: string) => marks(text.replace(/\s+/g, " ").trim());
 
 /**
- * Someone else's text of several lines as a quote: every line «> …», with its marks escaped, and what would begin a
- * list, a rule or a heading at its start escaped too, so each line stays a line of the quote.
+ * Someone else's text of several lines as a quote of a Markdown file: every line «> …», with its marks escaped, and
+ * what would begin a list, a rule or a heading at its start escaped too, so each line stays a line of the quote.
  */
 export const quoteText = (text: string) =>
   text
@@ -46,7 +50,7 @@ export const quoteText = (text: string) =>
     .join("\n");
 
 /** «Агент «Агент эквайринга».»: the first line under a report's heading, so a report never goes out about another agent. */
-export const agentLine = (agent: string) => `Агент «${inlineText(agent)}».`;
+export const agentLine = (agent: string) => `Агент ${inQuotes(agent)}.`;
 
 /** The name of a report's file: what it is and, since every agent's reports look alike, which agent (its address). */
 export const reportFile = (name: string) => `${name}${AGENT ? `-${AGENT}` : ""}.md`;
@@ -109,68 +113,165 @@ export function summarySentence(data: Problems, source: Source): string {
   return `Ошибок не нашли ни по одному из\u00a0${count(total, "критерия", "критериев", "критериев")} в\u00a0${count(n, "разговоре", "разговорах", "разговорах")}`;
 }
 
-const where = (p: RuleEntry, source?: Source) =>
-  [
-    source !== "sim" && p.log.failed
-      ? `в\u00a0${p.log.failed}\u00a0из\u00a0${count(p.log.failed + p.log.passed, "разговора", "разговоров", "разговоров")}`
-      : null,
-    source !== "log" && p.sim.failed
-      ? `в\u00a0${p.sim.failed}\u00a0из\u00a0${count(p.sim.failed + p.sim.passed, "разговора", "разговоров", "разговоров")} симуляции`
-      : null,
-  ]
-    .filter(Boolean)
-    .join(", ");
+/**
+ * The client data an export hides in the conversations, named once where a text that leaves the product quotes them,
+ * after a word of the sentence: a line of a report never begins with «#» (a heading in Markdown, a list in a tracker).
+ */
+export const MASKS = "# и * — скрытые данные клиента";
+
+/** Whether the quoted words of conversations carry the client data an export hides (MASKS). */
+export const masked = (texts: string[]) => texts.some((t) => /[#*]/.test(t));
+
+/** «В примерах # и * — скрытые данные клиента.», once under the examples of a text that has them. */
+export const masksLine = (examples: number) => `В ${examples === 1 ? "примере" : "примерах"} ${MASKS}.`;
+
+/** The words of a conversation a text quotes of an error: the customer's the reply answered (askedOf) and the agent's. */
+export const quotedOf = (e: Example) => [askedOf(e), e.agentQuote];
+
+/** How many characters of someone's words a text quotes at most: a customer's message, the agent's words, a reason. */
+const WORDS = 300;
+
+/** A criterion of a text that leaves the product, named as on every screen (lab/criteria); a text numbers nothing. */
+export const criterionOf = (r: RuleEntry): Criterion => ({ r, n: 0, name: criterionName(r), every: false, topics: [] });
 
 /**
- * «Перекладывает вину на клиента · важный критерий»: a problem's name as a letter or a ticket heads it, in Markdown
- * (the name comes from a model that read the customers' words: inlineText).
+ * The order a text tells the problems of one side in, as «Итог» does: the criteria a person marked important first
+ * (lab/problems, importantByPerson), then the most frequent; a model's proposal moves nothing.
  */
-export const headingOf = (p: Pick<RuleEntry, "title" | "serious">) =>
-  p.serious ? `${inlineText(p.title)} · важный критерий` : inlineText(p.title);
+export const importantFirst =
+  (side: Source) =>
+  (a: RuleEntry, b: RuleEntry): number =>
+    Number(importantByPerson(b)) - Number(importantByPerson(a)) || b[side].failed - a[side].failed;
 
 /**
- * One problem for a ticket or a message: what (with «важный» when its errors are serious), how often, where the
- * agent's code says it, one proof and the link. With a source, only that source is told; with an agent, a ticket of
- * its own names it first (agentLine), a problem inside a report does not repeat the report's.
+ * « · важный критерий» after a problem's name when a person marked its criterion important, « · важный по предложению
+ * модели» while only the model proposed it (lab/problems, importantByPerson), nothing for the others.
  */
-export function problemMarkdown(
-  p: RuleEntry,
-  link: string,
-  { level = 1, source, agent }: { level?: number; source?: Source; agent?: string } = {},
-): string {
-  const own = source ? p[source].examples : [...p.log.examples, ...p.sim.examples];
-  const e = own.find((x) => x.status === "FAIL");
-  const lines = [
-    `${"#".repeat(level)} ${headingOf(p)}`,
+export const importanceTag = (r: Pick<RuleEntry, "serious" | "severity">) =>
+  importantByPerson(r) ? " · важный критерий" : r.serious ? " · важный по предложению модели" : "";
+
+/** «Простой и понятный язык · важный критерий»: a problem by its criterion's name, as a report heads it. */
+export const headingOf = (c: Criterion) => `${c.name}${importanceTag(c.r)}`;
+
+/** «Чаще всего: «Пишет „нажмите на кнопку“…» — 12 из 57 ошибок.», when it is worth a line (lab/criteria, commonTitle). */
+export function commonLine(c: Criterion, side: Source = "log"): string | null {
+  const common = commonTitle(c, side);
+  return (
+    common &&
+    `Чаще всего: ${inQuotes(common.title)} — ${common.count}\u00a0из\u00a0${count(common.of, "ошибки", "ошибок", "ошибок")}.`
+  );
+}
+
+/** «Ошибка в 57 из 89 проверенных разговоров, где критерий применим (64%).»: a criterion's count, as on «Итог». */
+export function errorsLine(s: Pick<Side, "failed" | "passed">): string {
+  const applies = s.failed + s.passed;
+  return `Ошибка в\u00a0${s.failed}\u00a0из\u00a0${count(applies, "проверенного разговора", "проверенных разговоров", "проверенных разговоров")}, где критерий применим (${pct(s.failed, applies)}%).`;
+}
+
+/**
+ * «Ещё в 5 разговорах критерий не удалось проверить, в 3 он не применим. В счёт они не входят.»: the checked
+ * conversations a criterion's count leaves out, only the parts there are; null without any. Those it does not apply to
+ * are the service's count; a service without it leaves the check's checked conversations (`assessed`) beyond the rest.
+ */
+export function restLine(s: Side, assessed?: number): string | null {
+  const notApplicable =
+    s.notApplicable ?? (assessed === undefined ? 0 : Math.max(0, assessed - s.failed - s.passed - s.unknown));
+  const conversations = (n: number) => count(n, "разговоре", "разговорах", "разговорах");
+  const parts = [
+    s.unknown ? `в\u00a0${conversations(s.unknown)} критерий не удалось проверить` : null,
+    notApplicable && s.unknown ? `в\u00a0${notApplicable} он не применим` : null,
+    notApplicable && !s.unknown ? `в\u00a0${conversations(notApplicable)} критерий не применим` : null,
+  ].filter(Boolean);
+  if (!parts.length) return null;
+  return `Ещё ${parts.join(", ")}. В счёт ${s.unknown + notApplicable === 1 ? "он не входит" : "они не входят"}.`;
+}
+
+/** The same words, whatever the headings, the codes, the marks and the spaces between them. */
+const wordsOf = (text: string) =>
+  ruleLines(text)
+    .join(" ")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "");
+
+/**
+ * What the agent must do as points (lab/quote, ruleLines), the same words «Критерии» shows, and where it is written.
+ * The rules' own words follow only where they say more than the criterion: a rubric's criterion is its passage itself.
+ */
+export function dutyLines(r: RuleEntry): string[] {
+  const duty = ruleLines(r.rule.text);
+  if (!duty.length) return [];
+  const where = [SOURCE_LABEL[r.rule.kind]?.toLowerCase(), r.rule.origin && inQuotes(r.rule.origin)].filter(Boolean);
+  const source = where.length ? `Источник: ${where.join(" ")}.` : "";
+  const quote = r.rule.quote && wordsOf(r.rule.quote) !== wordsOf(r.rule.text) ? ruleLines(r.rule.quote) : [];
+  return [
+    "Агент должен:",
+    ...duty,
+    ...(quote.length ? [`${source} Там написано:`.trim(), ...quote] : r.rule.origin ? [source] : []),
+  ];
+}
+
+/** The error a text tells of a criterion: one a person confirmed, else one nobody refuted, else the first. */
+export const proofOf = (errors: Example[]): Example | undefined =>
+  errors.find((e) => e.review === "agree") ?? errors.find((e) => e.review !== "disagree") ?? errors[0];
+
+/** The errors of one side of a criterion, in the service's order: the best-backed first. */
+export const errorsOf = (s: Side) => s.examples.filter((e) => e.status === "FAIL");
+
+/**
+ * One error as a text tells it: the customer's words the reply answered (lab/problems, askedOf), the agent's words
+ * the model pointed at, why it is an error and who checked it. Long words are cut at a word (lab/quote, clip).
+ */
+export function exampleLines(e: Example): string[] {
+  const asked = askedOf(e).trim();
+  return [
+    "Пример:",
+    ...(asked ? [`Клиент: ${clip(asked, WORDS)}`] : []),
+    ...(e.agentQuote.trim() ? [`Агент: ${inQuotes(clip(e.agentQuote, WORDS))}`] : []),
+    ...(e.reason.trim() ? [`Почему это ошибка: ${sentence(capital(clip(e.reason, WORDS)))}`] : []),
+    `${capital(reliabilityWord(e, "people"))}.`,
+  ];
+}
+
+/**
+ * A problem as every text that leaves the product tells it, in the words of «Итог»: the kind of error named most
+ * often, how often among the checked conversations where the criterion applies and what that count leaves out, what
+ * the agent must do as points, and one error (`proof`). Blocks are parted by an empty line; no line begins with a mark
+ * of Markdown, so the text reads the same as plain text and as Markdown.
+ */
+export function problemLines(c: Criterion, side: Source, proof: Example | undefined, assessed?: number): string[] {
+  const s = c.r[side];
+  const duty = dutyLines(c.r);
+  return [
+    ...[commonLine(c, side), errorsLine(s), restLine(s, assessed)].filter((line): line is string => !!line),
+    ...(duty.length ? ["", ...duty] : []),
+    ...(proof ? ["", ...exampleLines(proof)] : []),
+  ];
+}
+
+/**
+ * «Задача для разработчика»: one problem as a task for the agent's team, pasted into a tracker — its name, the agent
+ * (agentLine), the problem (problemLines), the hidden client data named when the example has it, and the link back.
+ * Plain text that reads the same as Markdown: no line begins with «#», «*» or «-», and nothing needs escaping.
+ */
+export function handoffText(r: RuleEntry, link: string, { side, agent }: { side: Source; agent?: string }): string {
+  const c = criterionOf(r);
+  const proof = proofOf(errorsOf(r[side]));
+  return [
+    headingOf(c),
     "",
     ...(agent ? [agentLine(agent)] : []),
-    `Ошибка ${where(p, source)}.`,
+    ...problemLines(c, side, proof),
+    ...(proof && masked(quotedOf(proof)) ? [masksLine(1)] : []),
     "",
-    `Агент должен: ${inlineText(duty(p.rule.text))}`,
-    "",
-    p.rule.quote
-      ? `${sourceLabel(p.rule.kind)}${p.rule.origin ? ` (${inlineText(p.rule.origin)})` : ""}: «${inlineText(duty(p.rule.quote))}»`
-      : "Цитата не сохранилась.",
-  ];
-  if (e)
-    lines.push(
-      "",
-      `${"#".repeat(level + 1)} Пример`,
-      "",
-      `Клиент: ${inlineText(e.opening)}`,
-      `Агент: «${inlineText(e.agentQuote)}»`,
-      `Почему это ошибка: ${inlineText(e.reason)}`,
-      `${capital(reliabilityWord(e, "people"))}.`,
-    );
-  lines.push("", link);
-  return lines.join("\n");
+    `Проблема в Agent Lab: ${link}`,
+  ].join("\n");
 }
 
 /**
  * The problems of one source of a check as a file: its conversations and its simulation are never told together. It
- * names its agent first (agentLine), and the conversations name their export (filename), as the tone-of-voice brief
- * does; under their numbers the conversations with a serious error with whose decision that is (lab/severity,
- * severityText). Serious problems first, then the most frequent.
+ * names its agent first (agentLine), and the conversations name their dataset, as the tone-of-voice brief does; under
+ * their numbers the conversations with an error by an important criterion with whose decision that is (lab/severity,
+ * severityText). The problems a person marked important first, then the most frequent.
  */
 export function problemsReport(
   data: Problems,
@@ -184,10 +285,10 @@ export function problemsReport(
     ...(agent ? [agentLine(agent)] : []),
     `Проверка «${CHECK_NAME[data.check]}».`,
   ];
-  if (source === "log" && data.log && filename) lines.push(`Датасет «${inlineText(filename)}».`);
+  if (source === "log" && data.log && filename) lines.push(`Датасет ${inQuotes(filename)}.`);
   if (source === "log" && data.log) {
     lines.push(
-      `Диалоги ${day(data.log.finishedAt)}: проверено ${data.log.assessed}\u00a0из\u00a0${count(data.log.sampled, "разговора", "разговоров", "разговоров")}.`,
+      `Разговоры ${day(data.log.finishedAt)}: проверено ${data.log.assessed}\u00a0из\u00a0${count(data.log.sampled, "разговора", "разговоров", "разговоров")}.`,
       `С ошибкой агента — ${data.log.withViolations}, не удалось проверить — ${data.log.unassessed}.`,
     );
     const severity = severityText(data);
@@ -198,18 +299,24 @@ export function problemsReport(
       `Симуляция ${data.sim.target} · ${data.sim.version}, ${day(data.sim.finishedAt)}: проверено ${data.sim.assessed}\u00a0из\u00a0${count(data.sim.dialogs, "разговора", "разговоров", "разговоров")}.`,
       `С ошибкой агента — ${data.sim.withViolations}, не удалось проверить — ${data.sim.unassessed}.`,
     );
-  lines.push("");
   const list = data.rules
     .filter((r) => r[source].failed > 0)
-    .sort((a, b) => seriousFirst(a, b) || b[source].failed - a[source].failed);
-  for (const p of list)
+    .sort(importantFirst(source))
+    .map(criterionOf);
+  const proofs = list.map((c) => proofOf(errorsOf(c.r[source])));
+  const shown = proofs.filter((e): e is Example => !!e);
+  if (masked(shown.flatMap(quotedOf))) lines.push(masksLine(shown.length));
+  const assessed = source === "log" ? data.log?.assessed : data.sim?.assessed;
+  list.forEach((c, i) =>
     lines.push(
-      problemMarkdown(p, `${base}${problemLink(p.id, source === "sim" ? "sim" : data.check, data.sim?.runId)}`, {
-        level: 2,
-        source,
-      }),
       "",
-    );
+      `## ${headingOf(c)}`,
+      "",
+      ...problemLines(c, source, proofs[i], assessed),
+      "",
+      `${base}${problemLink(c.r.id, source === "sim" ? "sim" : data.check, data.sim?.runId)}`,
+    ),
+  );
   return lines.join("\n");
 }
 
@@ -244,25 +351,23 @@ const ownAddress = (href: string, base: string) =>
 /**
  * A line of a report in pieces. «[text](address)» and a bare address become links only when the address is this
  * Lab's own (`base`): the report's own links. Any other address stays the words it is, never a link a customer or the
- * agent could have written, and an escaped mark is its character again (inlineText, quoteText).
+ * agent could have written; the words of a conversation stay as written, a backslash in them too.
  */
 function pieces(line: string, base: string): Piece[] {
   const out: Piece[] = [];
   let words = "";
   let at = 0;
-  for (const m of line.matchAll(
-    /\\([!-/:-@[-`{-~])|\[([^\]\\]+)\]\((https?:\/\/[^\s)\\]+)\)|(https?:\/\/[^\s<>«»"\\]+)/g,
-  )) {
+  for (const m of line.matchAll(/\[([^\]\\]+)\]\((https?:\/\/[^\s)\\]+)\)|(https?:\/\/[^\s<>«»"\\]+)/g)) {
     words += line.slice(at, m.index);
     at = m.index + m[0].length;
-    const href = m[3] ?? m[4];
-    if (!href || !ownAddress(href, base)) {
-      words += m[1] ?? m[0];
+    const href = m[2] ?? m[3];
+    if (!ownAddress(href, base)) {
+      words += m[0];
       continue;
     }
     if (words) out.push({ text: words });
     words = "";
-    out.push({ text: m[2] ?? href, href });
+    out.push({ text: m[1] ?? href, href });
   }
   words += line.slice(at);
   return words ? [...out, { text: words }] : out;
@@ -287,16 +392,13 @@ export function reportHtml(markdown: string, base = shareBase()): string {
   return `<div>${html.join("\n")}</div>`;
 }
 
-/**
- * A line of a report as plain words, without Markdown marks: a link of its own is its words and its address, an
- * escaped mark its character; anything else stays as written.
- */
+/** A line of a report as plain words, without Markdown marks: a link of its own is its words and its address. */
 export const plainLine = (line: string, base = shareBase()) =>
   pieces(line, base)
     .map((p) => (p.href && p.text !== p.href ? `${p.text}: ${p.href}` : p.text))
     .join("");
 
-/** The report as text, without Markdown marks: no «#», «>», «[…](…)» or escapes (plainLine). */
+/** The report as text, without Markdown marks: no «#», «>» or «[…](…)» (plainLine). */
 export function reportText(markdown: string, base = shareBase()): string {
   return blocksOf(markdown)
     .map((b) => (b.kind === "h" ? [b.text] : b.lines).map((line) => plainLine(line, base)).join("\n"))
