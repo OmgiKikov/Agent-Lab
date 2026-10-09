@@ -16,7 +16,7 @@ import { TONE_ID, toneJudgedByOther, toneResult } from "../../lab/tone";
 import { MarkNo } from "../../product/MarkNo";
 import { Step, Steps, STEP_NEXT } from "../../product/Checklist";
 import { FirstStepsLine } from "../../product/FirstSteps";
-import { IMPORTANT, SeriousTag, SeverityHint, SeverityNote, SeveritySwitch } from "../../product/Severity";
+import { SeriousTag, SeverityHint, SeverityNote, SeveritySwitch } from "../../product/Severity";
 import { Button } from "../../ui/Button";
 import { EmptyState, Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
@@ -42,6 +42,10 @@ type Card = {
   clarifications: string[];
   result?: Criterion;
 };
+
+/** «А», «Б» и «В»: names inside a sentence, the last one joined with «и». */
+const listed = (names: string[]) =>
+  names.length > 1 ? `${names.slice(0, -1).join(", ")} и ${names[names.length - 1]}` : names.join("");
 
 /**
  * One criterion as a card, as the criteria were shown before the first check: its number, name and words; after a
@@ -77,7 +81,10 @@ function CriterionCard({ card, judged, onOpen }: { card: Card; judged: boolean; 
           <span className="mt-auto block pt-4">
             {s && checked ? (
               <>
-                <span className="flex items-baseline justify-between gap-3 text-small text-fg-3">
+                <span
+                  title="Второе число — в скольких проверенных разговорах критерий применим"
+                  className="flex items-baseline justify-between gap-3 text-small text-fg-3"
+                >
                   <span>
                     <span className={cn("font-semibold tabular-nums", s.failed ? "text-bad" : "text-fg")}>
                       {s.failed}
@@ -571,8 +578,10 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
         </section>
       )}
 
+      {/* What a person needs before the cards, in the page's reading size: what the last check covered when it differs
+          from the criteria now, and what an important criterion is, with where marking them stands and its action. */}
       {hasResult && data && (
-        <div className="mt-8 space-y-1 border-t border-line pt-5 text-small text-fg-3">
+        <div className="mt-8 space-y-2 border-t border-line pt-5 text-read text-fg-2 [&>*]:max-w-[68ch]">
           {other ? (
             <p>
               Последняя проверка{data.log?.finishedAt ? ` ${longDay(data.log.finishedAt)}` : ""} шла по прежним
@@ -583,17 +592,22 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
               пойдёт по этим.
             </p>
           ) : (
-            data.log?.finishedAt && (
-              <p>
-                Последняя проверка {longDay(data.log.finishedAt)}
-                {unjudged.length > 0
-                  ? `: шла по ${cards.length - unjudged.length}\u00a0из\u00a0${cards.length}, ${unjudged.map((c) => `«${c.name}»`).join(", ")} ${unjudged.length === 1 ? "в неё не входил" : "в неё не входили"}. Новая проверка пойдёт по всем.`
-                  : "."}
-              </p>
-            )
+            <>
+              {unjudged.length > 0 && (
+                <p>
+                  Последняя проверка шла по {cards.length - unjudged.length}
+                  {"\u00a0"}из{"\u00a0"}
+                  {count(cards.length, "критерия", "критериев", "критериев")}:{" "}
+                  {listed(unjudged.map((c) => `«${c.name}»`))}{" "}
+                  {unjudged.length === 1 ? "в неё не входил" : "в неё не входили"}. Новая проверка пойдёт по всем.
+                </p>
+              )}
+              <div>
+                Важный критерий — одно его нарушение может навредить клиенту или банку.{" "}
+                <SeverityHint check="tone" data={data} className="inline text-read text-fg-2" />
+              </div>
+            </>
           )}
-          {!other && <p>{IMPORTANT}</p>}
-          {!other && <SeverityHint check="tone" data={data} />}
         </div>
       )}
 
