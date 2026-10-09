@@ -282,6 +282,8 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
   const [params, setParams] = useSearchParams();
   const [replacing, setReplacing] = useState(params.get("doc") === "1");
   const [editing, setEditing] = useState<JudgeVersion | null | undefined>();
+  // The editor opened by «Добавить критерий»: on a new empty criterion at the end.
+  const [adding, setAdding] = useState(false);
   // An older address of the rules with their criteria marked (?view=code, «В правилах») opens the document.
   const [reading, setReading] = useState(params.get("view") === "code");
   const [asking, setAsking] = useState<JudgeVersion | null>(null);
@@ -433,7 +435,11 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
           version={editing}
           baseId={versions.find((v) => v.setId === editing?.setId)?.id}
           replacesResult={hasResult}
-          onClose={() => setEditing(undefined)}
+          adding={adding}
+          onClose={() => {
+            setEditing(undefined);
+            setAdding(false);
+          }}
         />
       )}
     </div>
@@ -593,7 +599,10 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
           <button
             type="button"
             disabled={blocked || !rules}
-            onClick={() => setEditing(rules)}
+            onClick={() => {
+              setAdding(true);
+              setEditing(rules);
+            }}
             className="flex h-full min-h-[132px] w-full flex-col items-center justify-center gap-2 rounded-[18px] border border-dashed border-line-strong text-body text-fg-3 transition-colors hover:bg-hover hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60 disabled:opacity-50"
           >
             <Plus aria-hidden className="size-5" />
