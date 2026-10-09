@@ -1,3 +1,4 @@
+import { lazy, type ComponentType } from "react";
 import { createBrowserRouter, Navigate, useLocation, useParams, type RouteObject } from "react-router-dom";
 import { ACCURACY, SIMULATIONS } from "./app/product";
 import {
@@ -15,24 +16,34 @@ import { dialogLink } from "./lab/dialogs";
 import { useLabState } from "./lab/LabProvider";
 import { Shell } from "./app/Shell";
 import { ScreenError } from "./app/ScreenError";
-import { LaunchPage } from "./sections/launches/LaunchPage";
-import { LaunchReport } from "./sections/launches/LaunchReport";
-import { DataPage } from "./sections/data/DataPage";
-import { OverviewPage } from "./sections/overview/OverviewPage";
-import { SummaryPage } from "./sections/summary/SummaryPage";
-import { ResultPage } from "./sections/checks/ResultPage";
-import { ProblemPage } from "./sections/problems/ProblemPage";
-import { CriteriaPage } from "./sections/criteria/CriteriaPage";
-import { DialogsPage } from "./sections/dialogs/DialogsPage";
-import { ReviewPage } from "./sections/review/ReviewPage";
-import { AgentPage } from "./sections/agent/AgentPage";
-import { SettingsPage } from "./sections/settings/SettingsPage";
-import { RunListPage } from "./sections/simulations/RunList";
-import { ScenariosPage } from "./sections/simulations/ScenariosPage";
-import { SimResultPage } from "./sections/simulations/SimResultPage";
-import { HistoryPage } from "./sections/checks/History";
-import { RunPage } from "./sections/checks/RunPage";
 import { ServiceDown } from "./ui/EmptyState";
+
+/**
+ * A page of the product, loaded the first time it is opened: the first load brings the frame and the page asked for,
+ * not every screen. The frame waits for it in the shape of a page (app/Shell); a page that fails to load is a screen
+ * that failed to draw (ScreenError).
+ */
+function page<Props>(load: () => Promise<ComponentType<Props>>) {
+  return lazy(() => load().then((component) => ({ default: component })));
+}
+
+const LaunchPage = page(() => import("./sections/launches/LaunchPage").then((m) => m.LaunchPage));
+const LaunchReport = page(() => import("./sections/launches/LaunchReport").then((m) => m.LaunchReport));
+const DataPage = page(() => import("./sections/data/DataPage").then((m) => m.DataPage));
+const OverviewPage = page(() => import("./sections/overview/OverviewPage").then((m) => m.OverviewPage));
+const SummaryPage = page(() => import("./sections/summary/SummaryPage").then((m) => m.SummaryPage));
+const ResultPage = page(() => import("./sections/checks/ResultPage").then((m) => m.ResultPage));
+const ProblemPage = page(() => import("./sections/problems/ProblemPage").then((m) => m.ProblemPage));
+const CriteriaPage = page(() => import("./sections/criteria/CriteriaPage").then((m) => m.CriteriaPage));
+const DialogsPage = page(() => import("./sections/dialogs/DialogsPage").then((m) => m.DialogsPage));
+const ReviewPage = page(() => import("./sections/review/ReviewPage").then((m) => m.ReviewPage));
+const AgentPage = page(() => import("./sections/agent/AgentPage").then((m) => m.AgentPage));
+const SettingsPage = page(() => import("./sections/settings/SettingsPage").then((m) => m.SettingsPage));
+const RunListPage = page(() => import("./sections/simulations/RunList").then((m) => m.RunListPage));
+const ScenariosPage = page(() => import("./sections/simulations/ScenariosPage").then((m) => m.ScenariosPage));
+const SimResultPage = page(() => import("./sections/simulations/SimResultPage").then((m) => m.SimResultPage));
+const HistoryPage = page(() => import("./sections/checks/History").then((m) => m.HistoryPage));
+const RunPage = page(() => import("./sections/checks/RunPage").then((m) => m.RunPage));
 
 type From = (p: Record<string, string | undefined>) => Record<string, string>;
 

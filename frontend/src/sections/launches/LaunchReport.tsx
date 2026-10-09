@@ -5,6 +5,7 @@ import { ArrowRight, RotateCcw, Square } from "lucide-react";
 import { Header } from "../../app/Header";
 import { historyLink, launchLink, runLink } from "../../app/links";
 import { api } from "../../lab/api";
+import { useDatasets } from "../../lab/datasets";
 import {
   MODE_NAME,
   useLaunch,
@@ -24,6 +25,7 @@ import { Sheet } from "../../ui/Sheet";
 import { LaunchStatus } from "./LaunchStatus";
 import { StageResult } from "../../product/StageResult";
 import { CheckHeader } from "../checks/CheckHeader";
+import { shownName } from "../data/DatasetInfo";
 import { SIMULATIONS } from "../../app/product";
 
 function pairLabel(item: PairLine): string {
@@ -31,7 +33,7 @@ function pairLabel(item: PairLine): string {
   if (item.comparable && item.baseline?.status === "PASS" && item.status === "FAIL") return "Стало хуже";
   return (
     ({ PASS: "Без ошибок", FAIL: "С ошибками", RUNNING: "Выполняется" } as Record<string, string>)[item.status] ??
-    "Не оценён"
+    "Не проверен"
   );
 }
 
@@ -97,12 +99,11 @@ function Question({ chosen }: { chosen: Pair }) {
           <h3 className="mb-5 text-read font-semibold text-fg">В датасете</h3>
           {chosen.baseline && (
             <p className="mb-3 text-small text-fg-3">
-              Автооценка:{" "}
               {chosen.baseline.status === "FAIL"
-                ? "с ошибками"
+                ? "Ошибки нашла модель."
                 : chosen.baseline.status === "PASS"
-                  ? "без ошибок"
-                  : "нет оценки"}
+                  ? "Модель ошибок не нашла."
+                  : "Модель не смогла проверить этот разговор."}
             </p>
           )}
           <Conversation
@@ -124,18 +125,19 @@ function Question({ chosen }: { chosen: Pair }) {
         </section>
       </div>
       <section className="mt-8 border-t border-line pt-5">
-        <h3 className="text-read font-semibold text-fg">Оценка новых ответов</h3>
+        <h3 className="text-read font-semibold text-fg">Что модель нашла в новых ответах</h3>
         {chosen.baseline && (
           <p className="mt-2 text-small text-fg-3">
             {chosen.comparable
-              ? "Исходный и новый ответы оценены тем же судьёй по тем же критериям."
-              : "Условия оценки различаются. Показываем ответы без вывода об улучшении."}
+              ? "Прежние и новые ответы проверила одна и та же модель по тем же критериям."
+              : "Прежние и новые ответы проверяли по-разному, поэтому вывода об улучшении нет."}
           </p>
         )}
         {chosen.rules.map((rule) => (
           <div key={rule.ruleId} className="mt-4 text-body">
             <p className="font-medium text-fg">
-              {rule.rule} · {rule.status === "FAIL" ? "Нарушено" : rule.status === "PASS" ? "Выполнено" : "Нет оценки"}
+              {rule.rule} ·{" "}
+              {rule.status === "FAIL" ? "Нарушено" : rule.status === "PASS" ? "Выполнено" : "Не удалось проверить"}
             </p>
             <p className="mt-1 text-fg-3">{rule.reason}</p>
             {rule.agentQuote && (
@@ -151,6 +153,7 @@ export function LaunchReport() {
   const { id } = useParams();
   const { pathname } = useLocation();
   const q = useLaunch(id);
+  const datasets = useDatasets(true);
   const { state, refresh } = useLabState();
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
@@ -186,14 +189,14 @@ export function LaunchReport() {
   if (q.isError)
     return (
       <>
-        <Header title="Запуск" />
-        <LoadFailed page title="Запуск не загрузился" error={q.error} onRetry={() => q.refetch()} />
+        <Header title="Проверка" />
+        <LoadFailed page title="Проверка не загрузилась" error={q.error} onRetry={() => q.refetch()} />
       </>
     );
   if (!record)
     return (
       <>
-        <Header title="Запуск" />
+        <Header title="Проверка" />
         <Skeleton className="m-6 h-60" />
       </>
     );
@@ -206,15 +209,24 @@ export function LaunchReport() {
   // would put them back in force (api/launches.py, retry); «Новая проверка» goes by the current ones.
   const continues = record.continuable ?? state?.paused?.launch?.id === record.id;
   const again = record.current !== false;
+  const running = record.status === "running";
   // A finished check of the recorded answers: going through its result is the next step, the page's black button.
-  const lead = record.status !== "running" && record.modes.dataset?.status === "done" && !!record.modes.dataset.checkId;
+  const lead = !running && record.modes.dataset?.status === "done" && !!record.modes.dataset.checkId;
+  // The simulations are hidden in the first release (app/product): an older launch's run is not offered.
+  const ways = Object.entries(record.modes).filter(([mode]) => mode !== "simulations" || SIMULATIONS);
+  // The dataset by its name as «Датасеты» call it, with the version of the agent whose answers it holds: the
+  // dataset's own, else the one this launch recorded. A launch that did not keep which dataset, by the name it kept.
+  const dataset = datasets.data?.datasets.find((d) => d.id === record.dataset?.datasetId);
+  const datasetName = dataset ? shownName(dataset) : record.dataset?.name || record.dataset?.file;
+  const agentVersion = dataset?.agentVersion || record.agentVersion;
   return (
     <div>
+      {/* While it runs, nothing here is the next step: «Остановить» is the page's action, «Новая проверка» quiet. */}
       <CheckHeader
         check={record.check}
-        quiet={lead}
+        quiet={lead || running}
         actions={
-          record.status === "running" ? (
+          running ? (
             <Button
               icon={Square}
               loading={busy}
@@ -233,10 +245,10 @@ export function LaunchReport() {
                 title={
                   continues
                     ? "Продолжить с того места, где проверка остановилась: уже проверенное не проверяется снова"
-                    : "Новая проверка с теми же датасетом, правилами и режимами"
+                    : "Ещё одна проверка с тем же датасетом, правилами и способами проверки"
                 }
               >
-                {continues ? "Продолжить" : "Запустить ещё раз"}
+                {continues ? "Продолжить" : "Повторить проверку"}
               </Button>
             )
           )
@@ -249,7 +261,7 @@ export function LaunchReport() {
               Проверка {longDay(record.startedAt)}, {time(record.startedAt)}
             </h2>
             <p className="mt-2 break-words text-read text-fg-3">
-              «{record.dataset?.name || record.dataset?.file || "Датасет"}» ·{" "}
+              {datasetName ? `Датасет «${datasetName}»` : "Датасет"} ·{" "}
               {record.judge
                 ? `правила «${record.judge.name}», версия ${record.judge.version}`
                 : record.replan
@@ -258,11 +270,11 @@ export function LaunchReport() {
               {record.ruleIds?.length
                 ? `, ${count(record.ruleIds.length, "выбранный критерий", "выбранных критерия", "выбранных критериев")}`
                 : ""}
-              {record.agentVersion ? ` · версия агента ${record.agentVersion}` : ""}
+              {agentVersion ? ` · версия агента в датасете ${agentVersion}` : ""}
             </p>
-            {!again && record.status !== "running" && (
+            {!again && !running && (
               <p className="mt-1 text-body text-fg-3">
-                После этого запуска сменились правила или датасет. Новая проверка пойдёт по текущим.
+                После этой проверки сменились правила или датасет. Новая проверка пойдёт по текущим.
               </p>
             )}
           </div>
@@ -276,73 +288,71 @@ export function LaunchReport() {
           </p>
         )}
         <div className="mt-7 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {/* The simulations are hidden in the first release (app/product): an older launch's run is not offered. */}
-          {Object.entries(record.modes)
-            .filter(([mode]) => mode !== "simulations" || SIMULATIONS)
-            .map(([mode, result]) => {
-              const m = result.metric;
-              const href = result.checkId
-                ? historyLink(record.check, result.checkId)
-                : result.runId
-                  ? runLink(result.runId)
-                  : result.questionsId
-                    ? "#answers"
-                    : null;
-              return (
-                <section key={mode} className="flex flex-col rounded-block border border-line p-5">
-                  <h3 className="text-read font-semibold text-fg">{MODE_NAME[mode as Mode]}</h3>
-                  {/* A finished mode needs no tag: its number says it. */}
-                  {result.status !== "done" && (
-                    <div className="mt-2">
-                      <LaunchStatus status={result.status} />
-                    </div>
-                  )}
-                  {m ? (
-                    <StageResult
-                      size="display"
-                      className="mt-5"
-                      failed={m.failed}
-                      checked={m.measured}
-                      unchecked={m.unmeasured}
-                    />
-                  ) : (
-                    <p className="mt-5 text-body text-fg-3">
-                      {result.status === "pending"
-                        ? "Начнётся после предыдущего режима."
-                        : result.status === "running"
-                          ? "Собираем диалоги и оценки…"
-                          : "Результат ещё не получен."}
-                    </p>
-                  )}
-                  {result.error && (
-                    <p role="alert" className="mt-4 text-small text-bad">
-                      {result.error}
-                    </p>
-                  )}
-                  {href && (
-                    <div className="mt-auto pt-5">
-                      {href.startsWith("#") ? (
-                        <a href={href} className={buttonClass({ variant: "outline" })}>
-                          Посмотреть ответы
-                          <ArrowRight className="size-3.5" />
-                        </a>
-                      ) : (
-                        <Link
-                          to={href}
-                          className={buttonClass({ variant: lead && mode === "dataset" ? "primary" : "outline" })}
-                        >
-                          Разобрать результат
-                          <ArrowRight className="size-3.5" />
-                        </Link>
-                      )}
-                    </div>
-                  )}
-                </section>
-              );
-            })}
+          {ways.map(([mode, result]) => {
+            const m = result.metric;
+            const href = result.checkId
+              ? historyLink(record.check, result.checkId)
+              : result.runId
+                ? runLink(result.runId)
+                : result.questionsId
+                  ? "#answers"
+                  : null;
+            return (
+              <section key={mode} className="flex flex-col rounded-block border border-line p-5">
+                <h3 className="text-read font-semibold text-fg">{MODE_NAME[mode as Mode]}</h3>
+                {/* The check's status is said once, by its title; each way's own only beside another way. A finished
+                    way needs no tag: its number says it. */}
+                {ways.length > 1 && result.status !== "done" && (
+                  <div className="mt-2">
+                    <LaunchStatus status={result.status} />
+                  </div>
+                )}
+                {m ? (
+                  <StageResult
+                    size="display"
+                    className="mt-5"
+                    failed={m.failed}
+                    checked={m.measured}
+                    unchecked={m.unmeasured}
+                  />
+                ) : (
+                  <p className="mt-5 text-body text-fg-3">
+                    {result.status === "pending"
+                      ? "Начнётся после предыдущего режима."
+                      : result.status === "running"
+                        ? "Проверяем разговоры…"
+                        : "Результат ещё не получен."}
+                  </p>
+                )}
+                {result.error && (
+                  <p role="alert" className="mt-4 text-small text-bad">
+                    {result.error}
+                  </p>
+                )}
+                {href && (
+                  <div className="mt-auto pt-5">
+                    {href.startsWith("#") ? (
+                      <a href={href} className={buttonClass({ variant: "outline" })}>
+                        Посмотреть ответы
+                        <ArrowRight className="size-3.5" />
+                      </a>
+                    ) : (
+                      <Link
+                        to={href}
+                        className={buttonClass({ variant: lead && mode === "dataset" ? "primary" : "outline" })}
+                      >
+                        Разобрать результат
+                        <ArrowRight className="size-3.5" />
+                      </Link>
+                    )}
+                  </div>
+                )}
+              </section>
+            );
+          })}
         </div>
         {/* Said only when there is more than one way: one has nothing to add up. */}
-        {Object.keys(record.modes).filter((mode) => mode !== "simulations" || SIMULATIONS).length > 1 && (
+        {ways.length > 1 && (
           <p className="mt-4 text-small text-fg-3">
             У каждого режима свои разговоры и свой итог: их числа не складываются.
           </p>

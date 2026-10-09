@@ -55,6 +55,20 @@ export type Pair = PairLine & {
   rules: Rule[];
   error?: string | null;
 };
+/**
+ * Why a launch failed, in its own words: the reason its way gave, or with several ways the reason of each that failed,
+ * by its name. The service ends a failed launch with one sentence for all its ways (backend/lab/flows/launches.py, run),
+ * which says nothing of a single one. Null when no way says why.
+ */
+export function launchError(launch: Launch): string | null {
+  const ways = Object.entries(launch.modes) as [Mode, Outcome][];
+  const failed = ways.flatMap(([mode, outcome]) =>
+    outcome.status === "failed" && outcome.error ? [{ mode, error: outcome.error }] : [],
+  );
+  if (!failed.length) return launch.error || null;
+  if (ways.length === 1) return failed[0].error;
+  return failed.map(({ mode, error }) => `«${MODE_NAME[mode]}»: ${error}`).join(" ");
+}
 export const useLaunch = (id?: string) =>
   useQuery({
     queryKey: ["launch", AGENT, id],

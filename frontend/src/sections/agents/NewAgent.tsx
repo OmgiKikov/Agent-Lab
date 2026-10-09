@@ -67,7 +67,7 @@ export function NewAgent({ open, onClose }: { open: boolean; onClose: () => void
           />
         </label>
         <label className="block text-body font-medium text-fg">
-          Описание <span className="font-normal text-fg-3">— по желанию</span>
+          Описание <span className="font-normal text-fg-3">· по желанию</span>
           <input
             value={description}
             maxLength={200}

@@ -31,8 +31,9 @@ function Line({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /**
- * «Подробности» of a dataset (ⓘ): its name to change, its file, when it came, what its upload left out; the archive.
- * Sending the dataset in work to the archive says first which one the Обзор shows after it (`next`).
+ * «Подробности» of a dataset (ⓘ): its name and the version of the agent whose answers it holds, to change; its file,
+ * when it came, what its upload left out; the archive. Sending the dataset in work to the archive says first which one
+ * the Обзор shows after it (`next`).
  */
 export function DatasetInfo({
   open,
@@ -52,15 +53,17 @@ export function DatasetInfo({
   const library = useDatasets(true);
   const { state } = useLabState();
   const [name, setName] = useState(d.name);
+  const [version, setVersion] = useState(d.agentVersion ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [confirm, setConfirm] = useState(false);
   useEffect(() => {
     if (!open) return;
     setName(d.name);
+    setVersion(d.agentVersion ?? "");
     setError("");
     setConfirm(false);
-  }, [open, d.name]);
+  }, [open, d.name, d.agentVersion]);
   const blocked = busy || library.changing || !!state?.job.running;
   const run = async (work: () => Promise<unknown>, then?: () => void) => {
     setBusy(true);
@@ -74,26 +77,44 @@ export function DatasetInfo({
       setBusy(false);
     }
   };
-  const renamed = name.trim() && name.trim() !== d.name;
+  const renamed = !!name.trim() && name.trim() !== d.name;
+  const versioned = version.trim() !== (d.agentVersion ?? "");
+  // One «Сохранить» for both fields; a version the service did not keep says so, apart from the name it kept.
+  const save = () =>
+    run(async () => {
+      if (renamed) await library.change("rename", d.id, { name });
+      if (versioned)
+        await library.change("version", d.id, { agentVersion: version.trim() }).catch((cause: unknown) => {
+          throw new Error(`Версия агента не сохранилась. ${cause instanceof Error ? cause.message : String(cause)}`);
+        });
+    });
   return (
     <Sheet open={open} onClose={() => !busy && onClose()} title="Подробности" sub={shownName(d)}>
       <div className="p-5 sm:p-7">
-        <label className="block text-body font-medium text-fg">
-          Название
-          <span className="mt-2 flex gap-2">
-            <Input value={name} maxLength={160} onChange={(e) => setName(e.target.value)} />
-            {renamed && (
-              <Button
-                variant="primary"
-                loading={busy}
-                disabled={blocked}
-                onClick={() => void run(() => library.change("rename", d.id, { name }))}
-              >
-                Сохранить
-              </Button>
-            )}
-          </span>
-        </label>
+        <div className="space-y-5">
+          <label className="block text-body font-medium text-fg">
+            Название
+            <Input value={name} maxLength={160} onChange={(e) => setName(e.target.value)} className="mt-2" />
+          </label>
+          <label className="block text-body font-medium text-fg">
+            Версия агента в этом датасете <span className="font-normal text-fg-3">· по желанию</span>
+            <Input
+              value={version}
+              maxLength={80}
+              placeholder="Например, v2.4"
+              onChange={(e) => setVersion(e.target.value)}
+              className="mt-2"
+            />
+            <span className="mt-1.5 block text-small font-normal text-fg-3">
+              Какая версия агента дала ответы этого датасета. Видна в итоге и в истории его проверок.
+            </span>
+          </label>
+          {(renamed || versioned) && (
+            <Button variant="primary" loading={busy} disabled={blocked} onClick={() => void save()}>
+              Сохранить
+            </Button>
+          )}
+        </div>
         <dl className="mt-6 divide-y divide-line border-y border-line">
           <Line label="Файл">
             {d.file || "Без имени"}

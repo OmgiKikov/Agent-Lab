@@ -36,7 +36,8 @@ export function AgentSwitch() {
             <span className="block truncate text-read font-semibold leading-5 text-fg">
               {current?.name ?? "Agent Lab"}
             </span>
-            <span className="block truncate text-small text-fg-3">{current?.description || "Agent Lab"}</span>
+            {/* An agent without a description is its name alone: the product's name is not what it is. */}
+            {current?.description && <span className="block truncate text-small text-fg-3">{current.description}</span>}
           </span>
           <ChevronsUpDown aria-hidden className="size-4 shrink-0 text-fg-3" />
         </span>

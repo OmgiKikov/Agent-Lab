@@ -18,6 +18,12 @@ export type Dataset = {
   agentVersion?: string;
 };
 export type DatasetLibrary = { activeId: string | null; datasets: Dataset[] };
+/**
+ * What a person changes in a dataset (api/logs.py, dataset_action): which one the checks go by, the archive, its name,
+ * the version of the agent whose answers it holds (`agentVersion`, '' when not known).
+ */
+type Change = "select" | "archive" | "rename" | "version";
+type ChangeExtra = { name?: string; undo?: boolean; agentVersion?: string };
 export function useDatasets(archived = false) {
   const { state, refresh } = useLabState();
   const cache = useQueryClient();
@@ -28,22 +34,13 @@ export function useDatasets(archived = false) {
   const changing = useIsMutating({ mutationKey: ["dataset-change", AGENT] }) > 0;
   const mutation = useMutation({
     mutationKey: ["dataset-change", AGENT],
-    mutationFn: async ({
-      action,
-      id,
-      extra,
-    }: {
-      action: "select" | "archive" | "rename";
-      id: string;
-      extra: { name?: string; undo?: boolean };
-    }) => {
+    mutationFn: async ({ action, id, extra }: { action: Change; id: string; extra: ChangeExtra }) => {
       await api(`/api/datasets/${action}`, { id, ...extra });
       await refresh();
       await cache.invalidateQueries({ queryKey: ["datasets", AGENT] });
     },
   });
-  const change = (action: "select" | "archive" | "rename", id: string, extra: { name?: string; undo?: boolean } = {}) =>
-    mutation.mutateAsync({ action, id, extra });
+  const change = (action: Change, id: string, extra: ChangeExtra = {}) => mutation.mutateAsync({ action, id, extra });
   return { ...query, change, changing };
 }
 

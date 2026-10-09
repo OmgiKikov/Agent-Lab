@@ -1,15 +1,13 @@
-import { Square } from "lucide-react";
-import { api } from "../lab/api";
 import { useLabState } from "../lab/LabProvider";
-import { useToast } from "../ui/toast";
 
 /**
- * Under a section's head while its own task runs: what it does, how far, «Остановить», and a hairline of progress. A
- * narrow window shows the task once, in the bar above the bottom navigation (TaskCard), so this line is for wide ones.
+ * Under a section's head while its own task runs: what it does, how far, and a hairline of progress. It only tells:
+ * «Остановить» lives in the task's card, on every screen (TaskCard), and in the head of a check's own page, not in
+ * this line as well. A narrow window shows the task once, in the bar above the bottom navigation, so this line is for
+ * wide ones.
  */
 export function SectionJob({ kinds }: { kinds: string[] }) {
   const { state } = useLabState();
-  const toast = useToast();
   const job = state?.job;
   if (!job?.running || !job.kind || !kinds.includes(job.kind)) return null;
   const { done = 0, total = 0, message } = job.progress;
@@ -23,14 +21,6 @@ export function SectionJob({ kinds }: { kinds: string[] }) {
             {done} из {total}
           </span>
         )}
-        <button
-          type="button"
-          onClick={() => api("/api/job/stop", {}).catch(toast.error)}
-          className="inline-flex items-center gap-1 rounded-sm transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
-        >
-          <Square aria-hidden className="size-2.5 fill-current" />
-          Остановить
-        </button>
       </div>
       <div className="h-px bg-line">
         <div
