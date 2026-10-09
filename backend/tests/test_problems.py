@@ -4,7 +4,8 @@ import unittest
 import support
 
 from lab import storage
-from lab.domain import checks, scenarios
+from lab.domain import checks, scenarios, was_is
+from lab.domain.problems import rule_key
 from lab.domain.results import carry_reviews, summarize
 from lab.flows import accuracy, answers, inputs
 from lab.flows import checks as problems
@@ -118,7 +119,10 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rule['topics'], ['Терминалы', 'Возвраты'])
         self.assertEqual(rule['rule']['name'], 'Не отсылает в поддержку')
         self.assertEqual(rule['rule']['origin'], 'prompts/main.txt')
-        self.assertEqual((rule['log']['failed'], rule['log']['passed'], rule['log']['unknown']), (1, 1, 1))
+        # d3, which the check could not decide, is no conversation of its count: its verdict stays an example.
+        counts = [rule['log'][key] for key in ('failed', 'passed', 'unknown', 'notApplicable')]
+        self.assertEqual(counts, [1, 1, 0, 0])
+        self.assertEqual([e['dialogueId'] for e in rule['log']['examples']], ['d1', 'd2', 'd3'])
         self.assertEqual(rule['log']['examples'][0]['second'], 'agree')
         self.assertEqual(value['log'], {
             'sampled': 4,
@@ -139,6 +143,69 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         storage.runs.create(played_run())
         rule = problems.problems('code', 'run-1')['rules'][0]
         self.assertEqual((rule['log']['ruleIds'], rule['sim']['ruleIds']), (['t1r1', 't2r1'], ['c1']))
+
+    def test_a_criterion_is_counted_only_in_the_conversations_its_check_counts_as_checked(self) -> None:
+        """«57 из 95» beside «92 проверенных» is a part bigger than the whole: a criterion decided in a conversation the
+        check could not decide (another criterion unknown there) is counted nowhere, its verdict stays an example; a
+        checked conversation without a verdict of the criterion is one it does not apply to. The four counts of each
+        criterion add up to the check's own."""
+        other = {'id': 't1r2', 'name': 'Здоровается', 'text': 'Агент здоровается', 'quote': 'Здоровайся с клиентом'}
+
+        def talk(dialogue_id: str, status: str, first: str, second: str) -> dict:
+            rows = [
+                {'ruleId': rule_id, 'status': verdict, 'reason': 'Так', 'agentQuote': 'Здравствуйте, звоните'}
+                for rule_id, verdict in (('t1r1', first), ('t1r2', second))
+            ]
+            return {'dialogueId': dialogue_id, 'status': status, 'opening': dialogue_id, 'rules': rows}
+
+        value = audit() | {
+            'topics': [{'id': 't1', 'title': 'Терминалы', 'rules': [RULE, other]}],
+            'results': [
+                talk('d1', 'FAIL', 'FAIL', 'NOT_APPLICABLE'),
+                talk('d2', 'PASS', 'PASS', 'PASS'),
+                talk('d3', 'UNMEASURED', 'PASS', 'UNKNOWN'),
+                talk('d4', 'FAIL', 'UNKNOWN', 'FAIL'),
+            ],
+        }
+        storage.documents.save(accuracy.RESULT, value)
+        found = problems.problems('code')
+        self.assertEqual(found['log']['assessed'], 3)
+        counted = ('failed', 'passed', 'unknown', 'notApplicable')
+        by_name = {rule['rule']['name']: rule['log'] for rule in found['rules']}
+        self.assertEqual([by_name['Не отсылает в поддержку'][key] for key in counted], [1, 1, 1, 0])
+        self.assertEqual([by_name['Здоровается'][key] for key in counted], [1, 1, 0, 1])
+        for side in by_name.values():
+            self.assertEqual(sum(side[key] for key in counted), found['log']['assessed'])
+        passed = [e['dialogueId'] for e in by_name['Не отсылает в поддержку']['examples'] if e['status'] == 'PASS']
+        self.assertEqual(passed, ['d2', 'd3'])
+        # «Было → стало» counts a criterion the same way.
+        criteria = was_is.criteria(value, [SOURCE])
+        self.assertEqual(criteria[rule_key(QUOTE)]['counts'], {'failed': 1, 'measured': 2})
+
+    def test_a_run_counts_a_criterion_only_in_the_conversations_it_measured(self) -> None:
+        """The run's side as the audit's: a played conversation the judge could not decide counts nowhere, a measured
+        one whose scenario does not check the criterion is one it does not apply to; a criterion only the run checked
+        has nothing «not applicable» among the recorded answers, which never checked it."""
+        record = played_run()
+        greets = {'id': 'c2', 'text': 'Агент здоровается', 'quote': ''}
+        undecided = dict(record['items'][0], status='UNMEASURED', criteria=[*record['items'][0]['criteria'], greets])
+        undecided['rules'] = [
+            {'ruleId': 'c1', 'status': 'PASS', 'reason': 'Не отправил', 'agentQuote': 'поможем сами'},
+            {'ruleId': 'c2', 'status': 'UNKNOWN', 'reason': 'Не ясно', 'agentQuote': ''},
+        ]
+        greeted = dict(record['items'][0], cardId='greets', status='PASS', criteria=[greets])
+        greeted['rules'] = [{'ruleId': 'c2', 'status': 'PASS', 'reason': 'Поздоровался', 'agentQuote': 'Здравствуйте'}]
+        record['items'] += [undecided, greeted]
+        storage.runs.create(record)
+        found = problems.problems('code', 'run-1')
+        self.assertEqual(found['sim']['assessed'], 2)
+        by_text = {rule['rule']['text']: rule for rule in found['rules']}
+        counted = ('failed', 'passed', 'unknown', 'notApplicable')
+        support_rule = by_text['Агент не отсылает в поддержку']
+        self.assertEqual([support_rule['sim'][key] for key in counted], [1, 0, 0, 1])
+        self.assertEqual([e['status'] for e in support_rule['sim']['examples']], ['FAIL', 'PASS'])
+        self.assertEqual([by_text['Агент здоровается']['sim'][key] for key in counted], [0, 1, 0, 1])
+        self.assertEqual([by_text['Агент здоровается']['log'][key] for key in counted], [0, 0, 0, 0])
 
     def test_the_first_example_of_a_problem_shows_what_its_title_says(self) -> None:
         def failed(dialogue_id: str, title: str, second: dict | None = None) -> dict:

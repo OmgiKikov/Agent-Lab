@@ -14,12 +14,13 @@ def line(record: dict | None) -> dict | None:
 
 def criteria(analysis: dict, sources: list[dict]) -> dict[str, dict]:
     """Each criterion of a result by its key (problems.rule_key, as on the screen of problems): its wording and the
-    errors among the conversations where it could be checked. sources: what the criteria quote."""
+    errors among the checked conversations where it was decided, the same ones the screen of problems counts.
+    sources: what the criteria quote."""
     book = problems.Book(sources)
     problems.from_logs(book, analysis)
     found = {}
     for entry in book.rules.values():
-        side, _ = problems.verdicts(entry, 'log')
+        side, _ = problems.verdicts(book, entry, 'log')
         found[entry['id']] = {
             'name': entry['rule']['name'] or entry['rule']['text'],
             'text': entry['rule']['text'],

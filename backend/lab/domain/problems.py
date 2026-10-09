@@ -3,7 +3,8 @@ of that check.
 
 A rule is keyed by its source quote, as in results.summarize: the same rule restated in several topics is one rule.
 A problem is a rule the judge found violated at least once. Logs and a run are two sides of a rule, counted apart:
-other conversations, other customers. One record per check.
+other conversations, other customers. A side counts a rule only in the conversations its line counts as checked, so a
+criterion never has more conversations than its check. One record per check.
 """
 
 import hashlib
@@ -67,6 +68,9 @@ class Book:
         self.srcs = {s['id']: s for s in srcs}
         self.rules: dict[str, dict] = {}
         self.by_text: dict[str, dict] = {}
+        # The conversations each side's line counts as checked, as the verdicts of a rule are keyed (add): the audit's
+        # with a verdict, the run's items it measured. A rule's counts are of these only (verdicts).
+        self.checked: dict[str, set[str]] = {'log': set(), 'sim': set()}
 
     def source(self, rule: dict) -> dict:
         known = self.srcs.get(rule.get('sourceId') or '')
@@ -173,7 +177,8 @@ def from_logs(book: Book, analysis: dict, serious: set[str] = frozenset()) -> di
                 'reviewScope': review_scope,
             }
             book.add(book.entry(rule, topic), 'log', example['dialogueId'], example, row.get('title', ''))
-    measured = [r for r in results if r['status'] in ('PASS', 'FAIL')]
+    measured = [r for r in results if r['status'] in DECIDED]
+    book.checked['log'] = {str(r['dialogueId']) for r in measured}
     sampled = analysis.get('sampled', len(results))
     line = {
         'sampled': sampled,
@@ -250,7 +255,8 @@ def from_run(book: Book, run: dict | None, deck: list[dict], target: str = '') -
             entry['ruleIds']['sim'].add(row['ruleId'])
             book.add(entry, 'sim', f'{run["id"]}#{index}', example, row.get('title', ''))
     done = [i for i in items if i.get('status') in MEASURED]
-    assessed = sum(1 for i in done if i['status'] in ('PASS', 'FAIL'))
+    book.checked['sim'] = {f'{run["id"]}#{index}' for index, item in enumerate(items) if item.get('status') in DECIDED}
+    assessed = len(book.checked['sim'])
     return {
         'runId': run['id'],
         'target': target,
@@ -263,19 +269,24 @@ def from_run(book: Book, run: dict | None, deck: list[dict], target: str = '') -
     }
 
 
-def verdicts(entry: dict, where: str) -> tuple[dict, list[str]]:
-    """Counts and examples of one side: violations first, the best backed first, then fulfilled, then unchecked."""
-    rows = list(entry['found'][where].values())
+def verdicts(book: Book, entry: dict, where: str) -> tuple[dict, list[str]]:
+    """Counts and examples of one side. The counts are of the conversations the side's line counts as checked
+    (Book.checked): with an error, without one, not decided, and not applicable, the checked ones without a verdict of
+    the rule (none on a side that never checked it). The examples are every verdict: violations first, the best backed
+    first, then fulfilled, then unchecked."""
+    found = entry['found'][where]
     examples = sorted(
-        ({**e, 'title': t} for e, t in rows),
+        ({**e, 'title': t} for e, t in found.values()),
         key=lambda e: (ORDER[e['status']], reliability(e) if e['status'] == 'FAIL' else 0),
     )
-    counts = Counter(COUNTED[e['status']] for e in examples)
-    titles = [t for e, t in rows if e['status'] == 'FAIL' and t]
+    checked = book.checked[where]
+    counts = Counter(COUNTED[e['status']] for at, (e, _) in found.items() if at in checked)
+    titles = [t for e, t in found.values() if e['status'] == 'FAIL' and t]
     side = {
         'failed': counts['failed'],
         'passed': counts['passed'],
         'unknown': counts['unknown'],
+        'notApplicable': len(checked) - counts.total() if entry['ruleIds'][where] else 0,
         'examples': examples,
         'ruleIds': sorted(entry['ruleIds'][where]),
     }
@@ -283,6 +294,7 @@ def verdicts(entry: dict, where: str) -> tuple[dict, list[str]]:
 
 
 def finish(
+    book: Book,
     entry: dict,
     deck: list[dict],
     serious: set[str] = frozenset(),
@@ -292,8 +304,8 @@ def finish(
     """One rule of the record. `serious`: its errors are serious, by a person's decision (`marks`), else by the model's
     proposal (`proposals`); `severity` says whose it is and what the model proposed, with its reason."""
     marks, proposals = marks or {}, proposals or {}
-    log, log_titles = verdicts(entry, 'log')
-    sim, sim_titles = verdicts(entry, 'sim')
+    log, log_titles = verdicts(book, entry, 'log')
+    sim, sim_titles = verdicts(book, entry, 'sim')
     failed = [e for e in log['examples'] + sim['examples'] if e['status'] == 'FAIL']
     judged = [e for e in failed if e['second']]
     reviewed = [e['review'] for e in failed if e['review']]

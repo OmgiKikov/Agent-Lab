@@ -82,7 +82,9 @@ def problems(check: str, run_id: str | None = None) -> dict:
     run = chosen_run(check, run_id)
     sim = problem_book.from_run(book, run, deck, agents.run_name(run) if run else '')
     built = deck if document.get('check') == check else []
-    rules = [problem_book.finish(entry, built, serious, marks, proposed['proposals']) for entry in book.rules.values()]
+    rules = [
+        problem_book.finish(book, entry, built, serious, marks, proposed['proposals']) for entry in book.rules.values()
+    ]
     rules.sort(key=lambda r: (not r['serious'], -r['log']['failed'], -r['sim']['failed'], r['rule']['text']))
     # The criteria of the result: the model proposes for these and «Подтвердить все» confirms them; one only a run has
     # is listed, but nobody proposes for it.
