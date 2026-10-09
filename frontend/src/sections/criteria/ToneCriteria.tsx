@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ChevronDown, Download, FileText, Pencil, Plus, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { launchLink, SECTIONS } from "../../app/links";
+import { criterionLink, launchLink, SECTIONS } from "../../app/links";
 import { SIMULATIONS } from "../../app/product";
 import { api, textFile } from "../../lab/api";
 import { nameFromText, type Criterion } from "../../lab/criteria";
@@ -23,6 +23,7 @@ import { LoadFailed } from "../../ui/LoadFailed";
 import { Menu, type MenuItem } from "../../ui/Menu";
 import { Modal } from "../../ui/Modal";
 import { Sheet } from "../../ui/Sheet";
+import { useToast } from "../../ui/toast";
 import { RuleEditor } from "../judges/RuleEditor";
 import { AddRules } from "./AddRules";
 import { CriterionPanel, type Shown } from "./CriterionPanel";
@@ -303,35 +304,44 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
   // never for these, and stay on «Итог» and in the history.
   const other = hasResult && toneJudgedByOther(state);
   const collecting = !!state?.job.running && state.job.kind === "tone-criteria";
-  // The first criteria collected lead on to the first check: «Новая проверка» takes them, and opens them from there.
-  // They come a moment after the task ends (the rules' versions are fetched again), so the page waits for them.
-  // Collected again later, the criteria come where the rules were given, low on the page: the page goes back to its
-  // top, to them. Its own scroll moves, not the frame around it (as checks/RunPage does). A collection is told by its
-  // task, finished since the page opened: a quick one may end between two looks at the service.
+  // A collection is told by its task, finished since the page opened: a quick one may end between two looks at the
+  // service. What came is said in a notice: how many criteria, from which rules. The first criteria collected lead on to
+  // the first check: «Новая проверка» takes them, and the notice opens them from there. They come a moment after the
+  // task ends (the rules' versions are fetched again), so the page waits for them. Collected again later, the criteria
+  // come where the rules were given, low on the page: the page goes back to its top, to them. Its own scroll moves, not
+  // the frame around it (as checks/RunPage does).
   const navigate = useNavigate();
+  const toast = useToast();
   const [collected, setCollected] = useState(false);
   const top = useRef<HTMLDivElement>(null);
   const loaded = !!state;
   const finished =
     state?.job.kind === "tone-criteria" && !state.job.running ? `${state.job.id}|${state.job.startedAt}` : "";
+  const jobError = state?.job.error;
+  const came = `Собрали ${count(state?.toneOfVoice?.criteria.length ?? 0, "критерий", "критерия", "критериев")} из ${
+    policy ? `правил «${policy.origin}»` : "правил общения"
+  }`;
   const seen = useRef<string | null>(null);
   useEffect(() => {
     if (!loaded) return;
     // What the page found when it opened is no collection of its own.
     if (seen.current !== null && finished && finished !== seen.current) {
-      if (first) setCollected(true);
+      if (first) setCollected(!jobError);
       else {
         let box = top.current?.parentElement ?? null;
         while (box && !/(auto|scroll)/.test(getComputedStyle(box).overflowY)) box = box.parentElement;
         box?.scrollTo({ top: 0 });
+        if (!jobError) toast.notify(came);
       }
     }
     seen.current = finished;
-  }, [loaded, finished, first]);
-  const jobError = state?.job.error;
+  }, [loaded, finished, first, jobError, came, toast]);
   useEffect(() => {
-    if (collected && set.length && !jobError) navigate(launchLink("tone"));
-  }, [collected, set.length, jobError, navigate]);
+    if (!collected || !set.length) return;
+    setCollected(false);
+    toast.notify(came, { label: "Посмотреть", run: () => void navigate(criterionLink("tone")) });
+    navigate(launchLink("tone"));
+  }, [collected, set.length, came, toast, navigate]);
   const failed =
     !state?.job.running && state?.job.kind === "tone-criteria" && state.job.error && state.job.error !== "Остановлено"
       ? state.job.error
