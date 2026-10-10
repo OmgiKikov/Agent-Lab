@@ -25,6 +25,7 @@ import { Sheet } from "../../ui/Sheet";
 import { useToast } from "../../ui/toast";
 import { checked, queueOf, violationsOf, type SideKey } from "./model";
 import { shareBase } from "../../app/agent";
+import { fileName } from "../checks/origin";
 
 const Cap = ({ children }: { children: ReactNode }) => (
   <span className="font-mono text-label uppercase tracking-caps text-ink-3">{children}</span>
@@ -116,8 +117,10 @@ export function ReportSheet({
   list: Criterion[];
 }) {
   const toast = useToast();
-  // The export the conversations come from: named as the tone-of-voice report names it.
-  const file = useLabState().state?.logs.file ?? undefined;
+  // The dataset the conversations come from: its name on the sheet, its file for the report's own name of it.
+  const logs = useLabState().state?.logs;
+  const file = logs?.file ?? undefined;
+  const dataset = logs?.name || (file && fileName(file));
   const agent = useReportAgent();
   const sides = (
     [
@@ -197,8 +200,8 @@ export function ReportSheet({
             {agent.name && <span className="normal-case tracking-normal">{agent.name} · </span>}
             {side === "log" ? (
               <>
-                {CHECK_NAME[data.check]} · разговоры
-                {file && <span className="normal-case tracking-normal"> «{file}»</span>} · {day(log?.finishedAt)}
+                {CHECK_NAME[data.check]} · датасет
+                {dataset && <span className="normal-case tracking-normal"> «{dataset}»</span>} · {day(log?.finishedAt)}
               </>
             ) : (
               `${CHECK_NAME[data.check]} · симуляция · ${day(sim?.finishedAt)}`

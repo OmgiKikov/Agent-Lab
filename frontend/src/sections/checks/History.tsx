@@ -1,18 +1,19 @@
 import { Link, Navigate, useSearchParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { historyLink, launchLink, type Check } from "../../app/links";
 import { SIMULATIONS } from "../../app/product";
 import { resultOf } from "../../lab/checks";
+import { useDatasets, type Dataset } from "../../lab/datasets";
 import { count, longDay, plural, time } from "../../lab/format";
-import { cleanPct, comparisonText, loadHistory, type SavedCheck } from "../../lab/history";
+import { cleanPct, comparisonText, useHistory, type SavedCheck } from "../../lab/history";
 import { MODE_NAME, useLaunches, type Launch, type Mode, type Outcome } from "../../lab/launches";
 import { useLabState } from "../../lab/LabProvider";
 import { Button } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { LaunchStatus } from "../launches/LaunchStatus";
 import { CheckHeader } from "./CheckHeader";
+import { fileName, originOf } from "./origin";
 
 /** «3 октября, 14:05»: when a check finished, to the minute, so two checks of one day are told apart. */
 const finished = (iso: string) => `${longDay(iso)}, ${time(iso)}`;
@@ -42,8 +43,9 @@ const ROW =
   "flex w-full items-start gap-3 rounded-control px-1 py-4 text-left transition-colors hover:bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run";
 
 /**
- * One saved check in the list: its number first, as on every screen, then when, which export, how it stands. It opens
- * on its own page (checks/RunPage); the latest one is «Итог».
+ * One saved check in the list: its number first, as on every screen, then when, which dataset, how it stands. It opens
+ * on its own page (checks/RunPage); the latest one is «Итог». A check no launch made names its dataset by its file at
+ * most: without one, the way it checked.
  */
 function CheckRow({
   of,
@@ -65,7 +67,7 @@ function CheckRow({
           {current && <span className="ml-2 text-small text-fg-3">текущий итог</span>}
         </p>
         <p className="mt-1 break-words text-small text-fg-3">
-          {finished(check.finishedAt)} · {check.file || "Загруженные разговоры"}
+          {finished(check.finishedAt)} · {check.file ? `датасет «${fileName(check.file)}»` : MODE_NAME.dataset}
           {unmeasured ? ` · не удалось проверить ${unmeasured} из ${check.sampled}` : ""}
         </p>
         <p className="mt-2 text-small text-fg-3">{comparisonText(check, previous)}</p>
@@ -87,15 +89,18 @@ const ORDER = (["dataset", "questions", "simulations"] as Mode[]).filter(
  */
 function LaunchRow({
   launch,
+  datasets,
   saved,
   previous,
   current,
 }: {
   launch: Launch;
+  datasets: Dataset[];
   saved?: SavedCheck;
   previous?: SavedCheck;
   current: boolean;
 }) {
+  const origin = originOf(launch, datasets);
   const modes = ORDER.filter((mode) => launch.modes[mode]).map((mode) => [mode, launch.modes[mode]!] as const);
   const [[firstMode, first], ...rest] = modes.length
     ? modes
@@ -125,11 +130,12 @@ function LaunchRow({
           )}
         </p>
         <p className="mt-1 break-words text-small text-fg-3">
-          {finished(launch.startedAt)} · {launch.dataset?.name || launch.dataset?.file || "Датасет"}
+          {finished(launch.startedAt)}
+          {origin.dataset ? ` · датасет «${origin.dataset}»` : ""}
           {launch.judge ? ` · правила «${launch.judge.name}»` : launch.check === "code" ? " · критерии из кода" : ""}
           {launch.ruleIds?.length ? ` · ${count(launch.ruleIds.length, "критерий", "критерия", "критериев")}` : ""}
           {launch.replan ? " · критерии извлечены заново" : ""}
-          {launch.agentVersion ? ` · версия агента ${launch.agentVersion}` : ""}
+          {origin.version ? ` · версия агента ${origin.version}` : ""}
         </p>
         {rest.length > 0 && (
           <p className="mt-2 text-small text-fg-3">{rest.map(([mode, outcome]) => said(mode, outcome)).join(" · ")}</p>
@@ -150,14 +156,10 @@ export function HistoryPage({ check }: { check: Check }) {
   const { state, offline } = useLabState();
   const [params] = useSearchParams();
   const result = resultOf(state, check);
-  const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ["history", check, result?.finishedAt ?? null, String(state?.job.running)],
-    queryFn: () => loadHistory(check),
-    enabled: !!state,
-    staleTime: Infinity,
-  });
+  const { data, isLoading, error, refetch } = useHistory(check);
   const checks = data?.checks ?? [];
   const launches = useLaunches(check, `${state?.job.id}-${state?.job.running}`);
+  const datasets = useDatasets().data?.datasets ?? [];
   // One list, newest first: a launch is one row with all it checked; a saved check that came from no launch (an older
   // one, or a check of chosen criteria) is a row of its own.
   // A launch that only played the simulations is not in the list while they are hidden (app/product).
@@ -221,6 +223,7 @@ export function HistoryPage({ check }: { check: Check }) {
                         <LaunchRow
                           key={row.launch.id}
                           launch={row.launch}
+                          datasets={datasets}
                           saved={saved}
                           previous={previousOf(saved)}
                           current={!!saved && saved.id === result?.checkId}
