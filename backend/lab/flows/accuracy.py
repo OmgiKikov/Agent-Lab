@@ -104,7 +104,7 @@ async def _assess(check_id: str, count: int, progress: Progress, replan: bool) -
         raise RuntimeError('Код агента ещё не прочитан. Прочитайте его в разделе «Агент».')
     dialogues = conversations.sample(count)
     if not dialogues:
-        raise RuntimeError('Нет разговоров для проверки. Сначала загрузите диалоги.')
+        raise RuntimeError('Нет разговоров для проверки. Сначала загрузите датасет.')
     kept = storage.tasks.steps()
     planned = kept.get(TOPICS)
     if planned is None:
@@ -205,7 +205,7 @@ def commit(result: dict, *, new_criteria: bool) -> None:
         previous = storage.history.latest(checks.CODE)
         export = storage.dialogues.meta()
         record = accuracy.saved(result, dialogues, export.get('file'), storage.dialogues.count(), previous)
-        provenance.attach(result, record, checks.CODE)
+        provenance.attach(result, record, checks.CODE, previous)
         publish(result, record, new_criteria=new_criteria)
 
 

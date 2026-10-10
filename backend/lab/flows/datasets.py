@@ -83,13 +83,21 @@ def select(dataset_id: str) -> dict:
         return _activate(dataset_id)
 
 
-def add(items: list[dict], file: str, name: str | None = None, size: int = 0, skipped: int | None = None) -> dict:
+def add(
+    items: list[dict],
+    file: str,
+    name: str | None = None,
+    size: int = 0,
+    skipped: int | None = None,
+    agent_version: str | None = None,
+) -> dict:
     title = (name or '').strip() or file
     if len(title) > 160:
         raise ValueError('Название датасета должно быть не длиннее 160 символов.')
+    version = _version(agent_version or '')
     with storage.transaction():
         _stash()
-        item = storage.datasets.create(items, file, title, size, skipped)
+        item = storage.datasets.create(items, file, title, size, skipped, version)
         return _activate(item['id'])
 
 
@@ -108,6 +116,24 @@ def archive(dataset_id: str, *, undo: bool = False) -> dict:
                 for name in CONTEXT:
                     storage.documents.save(name, None)
         return listed()
+
+
+def set_version(dataset_id: str, agent_version: str | None) -> dict:
+    """«Версия агента» of a dataset: the version of the agent whose answers it holds, as a person names it
+    (trimmed); '' says it is not known."""
+    if agent_version is None:
+        raise ValueError('Укажите версию агента.')
+    version = _version(agent_version)
+    with storage.transaction():
+        storage.datasets.set_version(dataset_id, version)
+        return storage.datasets.get(dataset_id)
+
+
+def _version(agent_version: str) -> str:
+    version = agent_version.strip()
+    if len(version) > 80:
+        raise ValueError('Версия агента должна быть не длиннее 80 символов.')
+    return version
 
 
 def rename(dataset_id: str, name: str) -> dict:

@@ -1,7 +1,7 @@
 """Rubric library and selection, bridged to the existing tone and accuracy workflows."""
 
 from .. import storage
-from ..domain import checks, quotes
+from ..domain import checks, quotes, tone
 from ..domain import judges as rules
 from . import inputs
 
@@ -43,16 +43,14 @@ def activate(kind: str, version_id: str | None) -> dict:
         if value:
             sources.append(rules.source(kind, value['name'], value['policy']))
         draft = (storage.documents.load(DRAFT) or {}) if kind == 'tone' else {}
-        # The same criteria of the same rules under another name or version: the result judged by them, its scenarios
-        # and the revision the screens compare it with stay.
-        same = (
-            bool(value)
-            and draft.get('criteria') == value['criteria']
-            and draft.get('sourceSha256') == sources[-1]['sha256']
-        )
+        # What the judge reads stays: the same criteria of the same rules under other names, or in another version. The
+        # result judged by them, its scenarios and the revision the screens compare it with stay; the criteria in force
+        # take the version's names, which the result is shown under (flows.checks.current).
+        same = bool(value) and _judged_alike(draft, value['criteria'], sources[-1])
         inputs.replace_sources(sources)
         storage.judges.select(kind, version_id)
         if same:
+            storage.documents.save(DRAFT, draft | {'criteria': value['criteria']})
             return value
         storage.documents.save(checks.result(kind), None)
         inputs.drop_deck([kind])
@@ -73,6 +71,16 @@ def activate(kind: str, version_id: str | None) -> dict:
         return value or {'kind': 'code', 'mode': 'code'}
 
 
+def _judged_alike(draft: dict, criteria: list[dict], source: dict) -> bool:
+    """Whether the judge reads these criteria of these rules (source) as it reads the ones in force (draft): names
+    aside (domain.tone.criteria_fingerprint)."""
+    return (
+        isinstance(draft.get('criteria'), list)
+        and draft.get('sourceSha256') == source['sha256']
+        and tone.criteria_fingerprint(draft['criteria'], source) == tone.criteria_fingerprint(criteria, source)
+    )
+
+
 def save(kind: str, name: str, policy: str, criteria: list[dict], set_id: str | None, base_id: str | None) -> dict:
     name, policy = name.strip(), policy.strip()
     if not name or not 20 <= len(policy) <= 50000:
@@ -87,16 +95,20 @@ def save(kind: str, name: str, policy: str, criteria: list[dict], set_id: str | 
 
 
 def _as_before(found: list[dict], base: dict | None) -> list[dict]:
-    """A criterion the person left as it was keeps its saved form to the key: the form sends every criterion back with
-    the fields it fills in (empty clarifications, defaults), and a check is comparable with the ones before it, the
-    answers on a criterion carried to it, only while its criteria are the same records (tone.criteria_fingerprint,
-    tone.carry_decisions). Renaming the set or editing one criterion changes nothing of the others."""
+    """A criterion the person left as it was, or only renamed, keeps its saved form to the key, under the name it has
+    now: the form sends every criterion back with the fields it fills in (empty clarifications, defaults), and a check
+    is comparable with the ones before it, the answers on a criterion carried to it, only while the judge reads its
+    criteria the same (tone.criteria_fingerprint, tone.carry_decisions). Renaming the set or editing one criterion
+    changes nothing of the others."""
     before = {rule['id']: rule for rule in (base or {}).get('criteria') or []}
 
     def bare(rule: dict) -> dict:
-        return {key: value for key, value in rule.items() if value not in ('', [], None)}
+        return {key: value for key, value in rule.items() if key != 'name' and value not in ('', [], None)}
 
-    return [before[r['id']] if r['id'] in before and bare(before[r['id']]) == bare(r) else r for r in found]
+    return [
+        before[r['id']] | {'name': r['name']} if r['id'] in before and bare(before[r['id']]) == bare(r) else r
+        for r in found
+    ]
 
 
 def markdown(version_id: str) -> str:

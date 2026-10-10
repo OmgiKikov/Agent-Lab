@@ -22,10 +22,14 @@ def log_page(offset: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=50)) 
 
 
 @router.post('/api/logs')
-async def upload_logs(jobs: Jobs, request: Request, name: str, title: str | None = None) -> dict:
+async def upload_logs(
+    jobs: Jobs, request: Request, name: str, title: str | None = None, agentVersion: str | None = None
+) -> dict:
+    """A dataset uploaded: the file (name), what to call it (title) and the version of the agent whose answers it
+    holds (agentVersion), both by choice."""
     data = await uploaded(request, export.LIMIT, 'Выгрузите разговоры за меньший срок.')
     try:
-        return await jobs.perform('logs', lambda progress: inputs.upload_export(name, data, title))
+        return await jobs.perform('logs', lambda progress: inputs.upload_export(name, data, title, agentVersion))
     except BusyError as error:
         raise HTTPException(409, str(error)) from error
     except asyncio.CancelledError as error:
@@ -47,6 +51,8 @@ def log_detail(dialogue_id: str, check: Literal['tone', 'code'] | None = None) -
 class DatasetCommand(BaseModel):
     id: str = Field(min_length=1, max_length=120)
     name: str | None = Field(None, min_length=1, max_length=160)
+    # The version of the agent whose answers the dataset holds: the flow trims it and refuses one too long in words.
+    agentVersion: str | None = None
     undo: bool = False
 
 
@@ -73,12 +79,16 @@ def dataset_dialogue(dataset_id: str, dialogue_id: str) -> dict:
 
 
 @router.post('/api/datasets/{action}')
-async def dataset_action(action: Literal['select', 'archive', 'rename'], jobs: Jobs, payload: DatasetCommand) -> dict:
+async def dataset_action(
+    action: Literal['select', 'archive', 'rename', 'version'], jobs: Jobs, payload: DatasetCommand
+) -> dict:
     async def work(progress: object) -> dict:
         if action == 'select':
             return datasets.select(payload.id)
         if action == 'archive':
             return datasets.archive(payload.id, undo=payload.undo)
+        if action == 'version':
+            return datasets.set_version(payload.id, payload.agentVersion)
         return datasets.rename(payload.id, payload.name or '')
 
     try:

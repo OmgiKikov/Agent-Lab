@@ -41,7 +41,7 @@ async def run(
         async with agents.session(connection.connect(target)) as agent:
             known = record['version']
             if known not in ('…', agents.UNKNOWN_VERSION) and agent.version != known:
-                raise ValueError('Версия агента изменилась. Создайте новый запуск для нового сравнения.')
+                raise ValueError('Версия агента на стенде изменилась. Запустите новую проверку.')
             record['version'] = agent.version
             slots = asyncio.Semaphore(min(4, models.concurrency()))
             criteria = {topic['id']: topic['rules'] for topic in record.get('topics') or []}
@@ -90,10 +90,10 @@ def _finish(record: dict) -> None:
         for item in record['items']:
             if item['status'] == 'RUNNING':
                 item.update(
-                    status='UNMEASURED', error=record.get('error') or 'Разговор не завершён: запуск остановлен.'
+                    status='UNMEASURED', error=record.get('error') or 'Разговор не завершён: проверка остановлена.'
                 )
     if record['status'] == 'failed' and not record.get('error'):
-        record['error'] = 'Не удалось оценить новые ответы. Откройте диалоги с причиной или повторите запуск.'
+        record['error'] = 'Не удалось оценить новые ответы. Откройте разговоры с причиной или повторите проверку.'
     record['metric'] = metric.metric(record['items'])
     if record['status'] != 'running':
         record['finishedAt'] = storage.now()
@@ -170,7 +170,7 @@ async def _play(agent: agents.HttpAgent, item: dict, criteria: list[dict]) -> No
         return
     original = [m['content'] for m in item['original'] if m['role'] == 'user']
     if len(original) > 50:
-        item.update(status='UNMEASURED', error='В разговоре больше 50 вопросов. Подготовьте более короткий диалог.')
+        item.update(status='UNMEASURED', error='В разговоре больше 50 вопросов. Подготовьте более короткий разговор.')
         return
     conversation_id = str(uuid.uuid4())
     try:

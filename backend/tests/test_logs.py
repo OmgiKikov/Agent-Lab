@@ -144,7 +144,10 @@ class LogImportTests(unittest.TestCase):
     def test_an_unreadable_jsonl_says_which_line_and_what_to_check(self):
         good = json.dumps({'id': 'one', 'messages': [{'role': 'user', 'content': 'Вопрос'}]})
         for data, message in (
-            ((good + '\n\nid;client;agent\n').encode(), r'^Строка 3 не читается как JSON\. Нужна выгрузка чата'),
+            (
+                (good + '\n\nid;client;agent\n').encode(),
+                r'^Строка 3 не читается как JSON\. В датасете нужен один разговор в строке\.$',
+            ),
             ('Здравствуйте'.encode('cp1251'), r'^Файл \.jsonl не в кодировке UTF-8'),
         ):
             with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):

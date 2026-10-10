@@ -251,7 +251,7 @@ class ChanceTests(unittest.TestCase):
                 self.assertNotEqual(again, comparison.evaluation_fingerprint({'model': 'main', 'results': [other]}))
         before = {'id': 'c1', 'criteriaFingerprint': 'k', 'evaluationFingerprint': 'old', 'datasetFingerprint': 'd'}
         now = dict(before, id='c2', evaluationFingerprint=again)
-        self.assertEqual(comparison.comparison(now, before)['reason'], 'Изменились модели или инструкции проверки.')
+        self.assertEqual(comparison.comparison(now, before)['reason'], 'Изменились модели или их инструкции.')
 
     def test_fisher_exact_two_sided(self):
         self.assertAlmostEqual(statistics.fisher(3, 1, 1, 3), 0.4857, places=4)  # the lady tasting tea

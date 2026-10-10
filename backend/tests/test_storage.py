@@ -8,7 +8,7 @@ from unittest.mock import patch
 import support
 
 from lab import config, storage
-from lab.flows import answers, inputs
+from lab.flows import answers, datasets, inputs
 from lab.migrate import migrate
 from lab.storage import legacy as legacy_import
 
@@ -312,6 +312,80 @@ class StoreTests(unittest.TestCase):
             legacy_import.insert({'logs-meta.json': meta, 'logs.json': [talk]}, []), {'documents': 2, 'runs': 0}
         )
         self.assertEqual((storage.dialogues.read(), storage.dialogues.meta()), ([talk], meta))
+
+    def test_quoted_verdicts_judged_before_get_the_customer_s_words_their_replies_answered(self) -> None:
+        """A result judged before verdicts kept the customer's words a quoted reply answered gets them when its
+        database is set up again: the result in force from the export's conversations, the one kept with another
+        dataset from that dataset's. Words a verdict has stay; a verdict without a quote gets none."""
+
+        def talk(question: str) -> dict:
+            return {
+                'id': 'd1',
+                'messages': [
+                    {'role': 'user', 'content': 'Терминал не печатает чек'},
+                    {'role': 'assistant', 'content': 'Проверьте бумагу в терминале.'},
+                    {'role': 'user', 'content': question},
+                    {'role': 'assistant', 'content': 'Нажмите на кнопку «Чат с поддержкой».'},
+                ],
+            }
+
+        rows = [
+            {'ruleId': 'r1', 'status': 'FAIL', 'agentQuote': 'Нажмите на кнопку «Чат с поддержкой»'},
+            {'ruleId': 'r2', 'status': 'PASS', 'agentQuote': 'Проверьте бумагу', 'asked': 'как записано'},
+            {'ruleId': 'r3', 'status': 'UNKNOWN', 'agentQuote': ''},
+        ]
+        result = {'checkId': 'c1', 'results': [{'dialogueId': 'd1', 'status': 'FAIL', 'rules': rows}]}
+        first = datasets.add([talk('код авторизации где взять')], 'first.jsonl')
+        storage.documents.save('tone-result.json', result)
+        datasets.add([talk('а где сверка итогов')], 'second.jsonl')  # the first one's result is kept with it
+        storage.documents.save('tone-result.json', result)
+        with sqlite3.connect(storage.db.default_database()) as connection:
+            connection.execute('PRAGMA user_version = 11')
+        connection.close()
+
+        def asked() -> list:
+            return [row.get('asked') for row in storage.documents.load('tone-result.json')['results'][0]['rules']]
+
+        self.assertEqual(asked(), ['а где сверка итогов', 'как записано', None])
+        datasets.select(first['id'])
+        self.assertEqual(asked(), ['код авторизации где взять', 'как записано', None])
+
+    def test_a_dataset_takes_the_agent_version_its_newest_launch_named(self) -> None:
+        """Before schema 13 the version of the agent was a launch's own; now it is the dataset's, whose answers it is.
+        A database of schema 12 gives each dataset the version its newest launch named, trimmed; a launch that named
+        none, the live questions' run and a dataset without launches leave it unknown."""
+
+        def launch(launch_id: str, dataset_id: str, version: str, kind: str = 'launch') -> tuple:
+            value = {'id': launch_id, 'agentVersion': version, 'inputs': {'datasetId': dataset_id}}
+            return launch_id, kind, json.dumps(value), json.dumps(value)
+
+        with sqlite3.connect(storage.db.default_database()) as connection:
+            connection.execute(
+                'CREATE TABLE datasets (id TEXT PRIMARY KEY, name TEXT NOT NULL, file TEXT, created_at TEXT NOT NULL, '
+                'bytes INTEGER NOT NULL DEFAULT 0, archived_at TEXT, context TEXT, skipped INTEGER)'
+            )
+            connection.executemany(
+                'INSERT INTO datasets (id, name, created_at) VALUES (?, ?, ?)',
+                [(key, key, '2026-10-05T10:00:00+00:00') for key in ('first', 'second', 'third')],
+            )
+            connection.execute(
+                'CREATE TABLE launches (id TEXT PRIMARY KEY, kind TEXT NOT NULL, summary TEXT NOT NULL, '
+                'value TEXT NOT NULL)'
+            )
+            connection.executemany(
+                'INSERT INTO launches (id, kind, summary, value) VALUES (?, ?, ?, ?)',
+                [
+                    launch('l1', 'first', 'v1.0'),
+                    launch('l2', 'first', ' v1.1 '),
+                    launch('l3', 'first', ''),
+                    launch('l4', 'second', ''),
+                    launch('l4-questions', 'third', 'stand-2.0', kind='questions'),
+                ],
+            )
+            connection.execute('PRAGMA user_version = 12')
+        connection.close()
+        versions = {item['id']: item['agentVersion'] for item in storage.datasets.listed()}
+        self.assertEqual(versions, {'first': 'v1.1', 'second': '', 'third': ''})
 
     def test_repeated_import_cannot_restore_invalidated_audit_or_scenarios(self) -> None:
         legacy = self.path / 'legacy'

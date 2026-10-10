@@ -7,11 +7,12 @@ from . import db, dialogues, documents
 
 
 def _item(row: tuple) -> dict:
-    return dict(zip(('id', 'name', 'file', 'createdAt', 'bytes', 'archivedAt', 'skipped', 'total'), row, strict=True))
+    keys = ('id', 'name', 'file', 'createdAt', 'bytes', 'archivedAt', 'skipped', 'agentVersion', 'total')
+    return dict(zip(keys, row, strict=True))
 
 
 SELECT = (
-    'SELECT d.id, d.name, d.file, d.created_at, d.bytes, d.archived_at, d.skipped, '
+    'SELECT d.id, d.name, d.file, d.created_at, d.bytes, d.archived_at, d.skipped, d.agent_version, '
     '(SELECT count(*) FROM dataset_dialogues WHERE dataset_id=d.id) FROM datasets d'
 )
 
@@ -28,13 +29,15 @@ def get(dataset_id: str) -> dict | None:
         return _item(row) if row else None
 
 
-def create(items: list[dict], file: str, name: str, size: int = 0, skipped: int | None = None) -> dict:
+def create(
+    items: list[dict], file: str, name: str, size: int = 0, skipped: int | None = None, agent_version: str = ''
+) -> dict:
     dataset_id = uuid.uuid4().hex
     with db.connect() as connection:
         db.begin(connection)
         connection.execute(
-            'INSERT INTO datasets(id,name,file,created_at,bytes,skipped) VALUES(?,?,?,?,?,?)',
-            (dataset_id, name, file, db.now(), size, skipped),
+            'INSERT INTO datasets(id,name,file,created_at,bytes,skipped,agent_version) VALUES(?,?,?,?,?,?,?)',
+            (dataset_id, name, file, db.now(), size, skipped, agent_version),
         )
         connection.executemany(
             'INSERT INTO dataset_dialogues(dataset_id,position,id,value) VALUES(?,?,?,?)',
@@ -108,6 +111,14 @@ def rename(dataset_id: str, name: str) -> None:
         raise ValueError('Датасет не найден.')
     with db.connect() as connection:
         connection.execute('UPDATE datasets SET name=? WHERE id=?', (name, dataset_id))
+
+
+def set_version(dataset_id: str, agent_version: str) -> None:
+    """The version of the agent whose answers the dataset holds; '' when it is not known."""
+    if get(dataset_id) is None:
+        raise ValueError('Датасет не найден.')
+    with db.connect() as connection:
+        connection.execute('UPDATE datasets SET agent_version=? WHERE id=?', (agent_version, dataset_id))
 
 
 def page(dataset_id: str, offset: int, limit: int) -> list[dict]:

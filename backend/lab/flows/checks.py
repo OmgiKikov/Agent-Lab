@@ -4,18 +4,26 @@ conversation with its evaluation. Reads stored records only: no model is called.
 """
 
 from .. import agents, storage
-from ..domain import answers, checks, judges, metric, results, statistics, was_is
+from ..domain import answers, checks, judges, metric, results, statistics, tone, was_is
 from ..domain import problems as problem_book
 from . import inputs
 
 
 def current(check: str) -> dict | None:
-    """The check's current result with the answers people gave on its verdicts (domain.answers.on_result); None when
-    it has none."""
+    """The check's current result with the answers people gave on its verdicts (domain.answers.on_result), and tone of
+    voice's under the names its criteria have now (domain.tone.named); None when it has none."""
     result = storage.documents.load(checks.result(check))
     if not result:
         return result
+    result = _named(check, result)
     return answers.on_result(result, storage.reviews.visible(answers.LOG, answers.record_of(check, result)))
+
+
+def _named(check: str, result: dict) -> dict:
+    """Tone of voice's result under the names its criteria have now (domain.tone.named); Точность's as it is."""
+    if check != checks.TONE:
+        return result
+    return tone.named(result, (storage.documents.load(inputs.TONE_DRAFT) or {}).get('criteria') or [])
 
 
 def shown(check: str) -> dict | None:
@@ -68,10 +76,11 @@ def chosen_run(check: str, run_id: str | None) -> dict | None:
 
 def problems(check: str, run_id: str | None = None) -> dict:
     """The check's rules and problems: its result on one side, the run asked for (else its newest finished run) on
-    the other. Its scenarios are named only when the deck was built from this check. The serious criteria come first
-    (a person's decision, else the model's proposal), then by frequency; `severity` counts, among the criteria of the
-    check's result, the ones the model proposed for and a person did not decide yet, the ones a person decided, and says
-    why the last proposal failed while one of them has neither."""
+    the other. Its scenarios are named only when the deck was built from this check. The criteria a person marked
+    serious come first, then the most frequent: the model's proposal is told on each criterion (`serious`, `severity`)
+    and moves none of them. `severity` counts, among the criteria of the check's result, the ones the model proposed
+    for and a person did not decide yet, the ones a person decided, and says why the last proposal failed while one of
+    them has neither."""
     document = storage.documents.load(checks.DECK) or {}
     deck = document.get('cards') or []
     serious = set(storage.severity.serious()[check])
@@ -82,8 +91,17 @@ def problems(check: str, run_id: str | None = None) -> dict:
     run = chosen_run(check, run_id)
     sim = problem_book.from_run(book, run, deck, agents.run_name(run) if run else '')
     built = deck if document.get('check') == check else []
-    rules = [problem_book.finish(entry, built, serious, marks, proposed['proposals']) for entry in book.rules.values()]
-    rules.sort(key=lambda r: (not r['serious'], -r['log']['failed'], -r['sim']['failed'], r['rule']['text']))
+    rules = [
+        problem_book.finish(book, entry, built, serious, marks, proposed['proposals']) for entry in book.rules.values()
+    ]
+    rules.sort(
+        key=lambda r: (
+            not problem_book.serious_by_person(r),
+            -r['log']['failed'],
+            -r['sim']['failed'],
+            r['rule']['text'],
+        )
+    )
     # The criteria of the result: the model proposes for these and «Подтвердить все» confirms them; one only a run has
     # is listed, but nobody proposes for it.
     by = [rule['severity']['by'] for rule in rules if rule['log']['ruleIds']]
@@ -146,7 +164,7 @@ def comparison(check: str) -> dict:
     """The current result against the saved check before it. Without a current result (a new export not checked yet)
     the last saved check is named, nothing compared; a result from before the history has nothing to compare with."""
     saved = saved_checks(check)
-    result = storage.documents.load(checks.result(check)) or {}
+    result = _named(check, storage.documents.load(checks.result(check)) or {})
     current = next((record for record in saved if record['id'] == result.get('checkId')), None)
     if current is None:
         latest = None if result.get('results') else next(iter(saved), None)

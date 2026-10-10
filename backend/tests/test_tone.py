@@ -86,6 +86,32 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual([rule['name'] for rule in rules][1:4], ['Оформление списков', 'emoji2', 'Обращение по имени'])
         self.assertTrue(all(quotes.found(rule['quote'], source['content']) for rule in rules))
 
+    def test_the_judge_reads_a_criterion_without_its_name(self):
+        """A criterion's name is the people's label: the judge is never shown it, and what it reads (the duty, with the
+        clarifications people confirmed) is what checks compare by. A result goes by the names its criteria have now
+        while the judge reads them the same; a criterion of the same id that reads otherwise is another one."""
+        rule = {
+            'id': 'pronouns',
+            'name': 'Обращение',
+            'text': 'Обращайтесь к клиенту на «вы».',
+            'quote': 'на «вы»',
+            'clarifications': ['Кроме прямой цитаты клиента.'],
+        }
+        read = tone_rules.for_judging(rule)
+        self.assertNotIn('name', read)
+        self.assertIn('Кроме прямой цитаты клиента.', read['text'])
+        source = tone_rules.policy('rules', POLICY)
+        renamed = rule | {'name': 'Обращение на «вы» (со строчной)'}
+        fingerprint = tone_rules.criteria_fingerprint
+        self.assertEqual(fingerprint([rule], source), fingerprint([renamed], source))
+        self.assertNotEqual(fingerprint([rule], source), fingerprint([rule | {'text': 'Обращайтесь на «ты».'}], source))
+        other = {'id': 'simple_language', 'name': 'Простой язык', 'text': 'Без канцелярита.', 'quote': 'канцеляризмы'}
+        result = {'topics': [{'id': 't1', 'rules': [rule, other]}]}
+        collected_again = other | {'name': 'Активный залог', 'text': 'Пишите в активном залоге.'}
+        named = tone_rules.named(result, [renamed, collected_again])
+        self.assertEqual([r['name'] for r in named['topics'][0]['rules']], [renamed['name'], 'Простой язык'])
+        self.assertEqual(tone_rules.named(result, [rule, other]), result)
+
     def test_generated_criteria_cannot_invent_source_evidence(self):
         support.lab(self)
         source = tone_rules.policy('rules', 'Обращайтесь к клиенту на вы и не используйте эмодзи.')

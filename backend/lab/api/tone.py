@@ -98,6 +98,11 @@ async def read_tone_file(request: Request, name: str) -> dict:
 
 @router.post('/api/tone-of-voice/criteria')
 async def prepare_tone_criteria(jobs: Jobs) -> dict:
+    """«Собрать критерии»: refused before it starts when the rules need a model that is not set up."""
+    try:
+        tone.ensure_collectable()
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
     return work.start(jobs, 'tone-criteria', {})
 
 

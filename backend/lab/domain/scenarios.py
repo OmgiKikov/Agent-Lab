@@ -112,14 +112,14 @@ def criteria(topic: dict, general: Sequence[dict], prompts: str) -> list[dict]:
         {
             'id': r['id'],
             'name': r.get('name', ''),
-            'text': r['text'],
+            'text': for_judging(r)['text'],
             'condition': r.get('condition', ''),
             'acceptable': r.get('acceptable', ''),
             'quote': r['quote'],
             'observation': r.get('observation', 'reply'),
             **({'clarifications': list(r['clarifications'])} if r.get('clarifications') else {}),
         }
-        for r in map(for_judging, rules)
+        for r in rules
     ]
 
 

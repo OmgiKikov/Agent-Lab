@@ -49,7 +49,8 @@ async def judge_dialogue(dialogue: dict, topic: dict) -> dict:
     limit of requests (RateLimited): every next conversation would meet the same limit, so the check stops with what it
     judged kept, to be continued later. The systems the agent called, where its replies carry them (events: its answers
     to recorded questions asked again), are shown to the judges under each reply and are the only evidence of a call,
-    as in a played conversation."""
+    as in a played conversation. A quoted verdict keeps the customer's words its reply answered
+    (verdicts.with_asked)."""
     rules, shown = topic['rules'], export.conversation(dialogue)
     tools = '\n'.join(call for message in dialogue['messages'] for call in tool_calls(message))
     knowledge, context_error = [], None
@@ -78,7 +79,7 @@ async def judge_dialogue(dialogue: dict, topic: dict) -> dict:
         'dialogueId': dialogue['id'],
         'topicId': topic['id'],
         'status': status,
-        'rules': rows,
+        'rules': verdicts.with_asked(rows, shown),
         'second': second,
         'opening': dialogue['messages'][0]['content'],
         'error': error,
@@ -94,11 +95,13 @@ async def judge_each(todo: list[tuple[dict, dict]], done: Callable[[dict], None]
 
     Each verdict is kept as a step of the task the moment it is made (storage.tasks.keep): a task continued after a
     stop or a restart is given the verdicts it kept first (kept: its steps, when the caller read them), and judges only
-    the rest. A conversation the model could not judge is not kept, so it is tried again then."""
+    the rest; a verdict an earlier Lab kept without the customer's words its quote answered gets them then
+    (verdicts.with_asked). A conversation the model could not judge is not kept, so it is tried again then."""
     kept = storage.tasks.steps() if kept is None else kept
     for dialogue, _ in todo:
         if step(dialogue['id']) in kept:
-            done(kept[step(dialogue['id'])])
+            judged = kept[step(dialogue['id'])]
+            done(judged | {'rules': verdicts.with_asked(judged['rules'], export.conversation(dialogue))})
     slots = asyncio.Semaphore(models.concurrency())
 
     async def one(dialogue: dict, topic: dict) -> None:

@@ -1,5 +1,5 @@
 """Serious and minor errors: after a check the model proposes for each criterion whether its errors are serious, and a
-person confirms or changes it; serious errors come first and are counted apart."""
+person confirms or changes it; the ones a person marked serious come first, and serious errors are counted apart."""
 
 import asyncio
 import json
@@ -305,7 +305,7 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
         model.assert_awaited_once()
         pronouns, simple = self.key('pronouns'), self.key('simple_language')
         found = await self.get('/api/problems?check=tone')
-        self.assertEqual(found['problems'], [pronouns, simple])  # the one proposed serious first, though rarer
+        self.assertEqual(found['problems'], [simple, pronouns])  # a proposal moves nothing: the most frequent first
         rules = {rule['id']: rule for rule in found['rules']}
         self.assertEqual((rules[pronouns]['serious'], rules[simple]['serious']), (True, False))
         self.assertEqual(rules[pronouns]['severity']['by'], 'model')
@@ -315,6 +315,27 @@ class SeverityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(found['severity'], {'criteria': 2, 'proposed': 2, 'decided': 0, 'error': None})
         self.assertEqual(found['log']['withSerious'], 1)
         self.assertEqual((await self.get('/api/state'))['severity'], {'tone': [pronouns], 'code': []})
+
+    async def test_only_a_person_s_decision_puts_a_criterion_first(self):
+        """The model's proposal informs, a person's decision orders: a criterion only the model proposed as serious
+        stays where the number of its errors puts it, and comes first once a person confirms it, though rarer. Its
+        `serious` says it is serious now, whoever decided."""
+        failing = {'d1': {'pronouns'}, 'd2': {'simple_language'}, 'd3': {'simple_language'}}
+        await self.check_tone(failing, propose=proposing('«вы»'))
+        pronouns, simple = self.key('pronouns'), self.key('simple_language')
+        found = await self.get('/api/problems?check=tone')
+        self.assertEqual(found['problems'], [simple, pronouns])
+        self.assertEqual(
+            [(rule['serious'], rule['severity']['by']) for rule in found['rules']], [(False, 'model'), (True, 'model')]
+        )
+        response = await self.post('/api/severity/confirm', {'check': 'tone'})
+        self.assertEqual(response.status_code, 200, response.text)
+        found = await self.get('/api/problems?check=tone')
+        self.assertEqual(found['problems'], [pronouns, simple])
+        self.assertEqual(
+            [(rule['serious'], rule['severity']['by']) for rule in found['rules']],
+            [(True, 'person'), (False, 'person')],
+        )
 
     async def test_a_stop_while_the_model_proposes_ends_the_proposals_not_the_saved_check(self):
         asked = asyncio.Event()

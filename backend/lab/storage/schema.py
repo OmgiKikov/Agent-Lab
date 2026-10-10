@@ -9,22 +9,26 @@ Schema 8: long work is kept as it goes (tasks, steps), never only in memory.
 Schema 9: immutable datasets alongside the selected working export.
 Schema 10: grouped launches and recorded-question runs.
 Schema 11: a dataset keeps how many conversations its upload left out.
+Schema 12: a quoted verdict keeps the customer's words its reply answered.
+Schema 13: a dataset keeps the version of the agent whose answers it holds.
 """
 
 import json
 import sqlite3
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from typing import Any
 
-from ..domain import accuracy, answers, checks
+from ..domain import accuracy, answers, checks, export, verdicts
 from ..domain.comparison import dataset_fingerprint
 from ..domain.metric import metric
 
 # The database's user_version once these tables are in place. Raise it with every change here: a database is set up
 # again only when its user_version differs.
-SCHEMA = 11
+SCHEMA = 13
 EXPORT = 'logs.json'  # where a database before schema 7 kept the export's conversations, as one document
 EXPORT_META = 'logs-meta.json'  # the name of the export's file and when it was uploaded
 PERSON, LAB = 'person', 'lab'  # who gave an answer: a person on a screen, or the Lab (storage.reviews)
@@ -33,9 +37,11 @@ TABLES = (
     'CREATE TABLE IF NOT EXISTS launches (id TEXT PRIMARY KEY, kind TEXT NOT NULL, '
     'summary TEXT NOT NULL, value TEXT NOT NULL)',
     # skipped: the conversations of the upload a check cannot read (the agent wrote first, or never answered), left
-    # out; unknown (NULL) for a dataset uploaded before it was kept.
+    # out; unknown (NULL) for a dataset uploaded before it was kept. agent_version: the version of the agent whose
+    # answers the dataset holds, '' while nobody named it.
     'CREATE TABLE IF NOT EXISTS datasets (id TEXT PRIMARY KEY, name TEXT NOT NULL, file TEXT, '
-    'created_at TEXT NOT NULL, bytes INTEGER NOT NULL DEFAULT 0, archived_at TEXT, context TEXT, skipped INTEGER)',
+    'created_at TEXT NOT NULL, bytes INTEGER NOT NULL DEFAULT 0, archived_at TEXT, context TEXT, skipped INTEGER, '
+    "agent_version TEXT NOT NULL DEFAULT '')",
     'CREATE TABLE IF NOT EXISTS dataset_dialogues (dataset_id TEXT NOT NULL, position INTEGER NOT NULL, '
     'id TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY (dataset_id, position), UNIQUE (dataset_id, id))',
     'CREATE TABLE IF NOT EXISTS documents (name TEXT PRIMARY KEY, value TEXT NOT NULL)',
@@ -83,8 +89,11 @@ def set_up(connection: sqlite3.Connection, path: Path) -> None:
             connection.execute(statement)
         if 'summary' not in {column[1] for column in connection.execute('PRAGMA table_info(runs)')}:
             connection.execute('ALTER TABLE runs ADD COLUMN summary TEXT')
-        if 'skipped' not in {column[1] for column in connection.execute('PRAGMA table_info(datasets)')}:
+        datasets = {column[1] for column in connection.execute('PRAGMA table_info(datasets)')}
+        if 'skipped' not in datasets:
             connection.execute('ALTER TABLE datasets ADD COLUMN skipped INTEGER')
+        if 'agent_version' not in datasets:
+            connection.execute("ALTER TABLE datasets ADD COLUMN agent_version TEXT NOT NULL DEFAULT ''")
         upgrade(connection)
         connection.execute(f'PRAGMA user_version = {SCHEMA}')
 
@@ -97,6 +106,8 @@ def upgrade(connection: sqlite3.Connection) -> None:
     _one_history(connection)
     _accuracy_history(connection)
     _answers_to_rows(connection)
+    _asked_on_verdicts(connection)
+    _dataset_versions(connection)
     # The number of uploaded dialogues was kept beside them before they were rows.
     connection.execute('DROP TRIGGER IF EXISTS length_on_insert')
     connection.execute('DROP TRIGGER IF EXISTS length_on_update')
@@ -249,6 +260,65 @@ def _answers_to_rows(connection: sqlite3.Connection) -> None:
         at = record.get('updatedAt') or record.get('finishedAt') or record.get('startedAt')
         _answer(connection, answers.SIM, run_id, taken, PERSON, at)
         connection.execute('UPDATE runs SET value = ?, summary = ? WHERE id = ?', (_dump(kept), _summary(kept), run_id))
+
+
+def _asked_on_verdicts(connection: sqlite3.Connection) -> None:
+    """The quoted verdicts of a result an earlier Lab made get the customer's words their replies answered
+    (verdicts.with_asked), from the conversations the result was judged on: a result in force from the export's, one
+    kept with a dataset for when it is selected again from that dataset's. A verdict that has them keeps them."""
+    in_export = partial(_dialogue, connection, 'SELECT value FROM dialogues WHERE id = ?')
+    for name in checks.RESULTS.values():
+        result = _document(connection, name)
+        asked = _with_asked(result, in_export)
+        if asked != result:
+            _put(connection, name, asked)
+    in_dataset = 'SELECT value FROM dataset_dialogues WHERE dataset_id = ? AND id = ?'
+    kept = connection.execute('SELECT id, context FROM datasets WHERE context IS NOT NULL').fetchall()
+    for dataset_id, context in kept:
+        stashed = json.loads(context)
+        read = partial(_dialogue, connection, in_dataset, dataset_id)
+        documents = stashed.get('documents') or {}
+        asked = {
+            name: _with_asked(value, read) if name in checks.RESULTS.values() else value
+            for name, value in documents.items()
+        }
+        if asked != documents:
+            connection.execute(
+                'UPDATE datasets SET context = ? WHERE id = ?', (_dump(stashed | {'documents': asked}), dataset_id)
+            )
+
+
+def _with_asked(result: Any, read: Callable[[str], dict | None]) -> Any:
+    """A result with the customer's words on its quoted verdicts, each conversation read by its id (read): one no
+    longer there gives none. No result, or a record of another shape, stays as it is."""
+    if not isinstance(result, dict) or not isinstance(result.get('results'), list):
+        return result
+    judged = []
+    for item in result['results']:
+        dialogue = read(str(item['dialogueId']))
+        shown = export.conversation(dialogue) if dialogue else []
+        judged.append(item | {'rules': verdicts.with_asked(item['rules'], shown)} if item.get('rules') else item)
+    return result | {'results': judged}
+
+
+def _dialogue(connection: sqlite3.Connection, query: str, *key: str) -> dict | None:
+    row = connection.execute(query, key).fetchone()
+    return json.loads(row[0]) if row else None
+
+
+def _dataset_versions(connection: sqlite3.Connection) -> None:
+    """A dataset nobody named the agent's version of takes the one its newest launch named: before schema 13 the
+    version was the launch's own, given on its form. A dataset with a version keeps it."""
+    named = {}
+    for (value,) in connection.execute("SELECT value FROM launches WHERE kind = 'launch' ORDER BY rowid").fetchall():
+        launch = json.loads(value)
+        dataset_id, version = (launch.get('inputs') or {}).get('datasetId'), (launch.get('agentVersion') or '').strip()
+        if dataset_id and version:
+            named[dataset_id] = version
+    connection.executemany(
+        "UPDATE datasets SET agent_version = ? WHERE id = ? AND agent_version = ''",
+        ((version, dataset_id) for dataset_id, version in named.items()),
+    )
 
 
 def _answer(

@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import support
 from test_prototype_library import criterion, dialogue
+from test_tone import POLICY
 
 from lab import models, storage
 from lab.agents import idp
@@ -369,7 +370,7 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
                     'status': status,
                     'reason': 'Тестовый вердикт',
                     'agentQuote': text,
-                    'title': r['name'],
+                    'title': 'Нет обращения на вы' if status == 'FAIL' else '',
                 }
                 for r in rules
             ]
@@ -510,12 +511,43 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
         with patch('lab.flows.launches._mode', new=AsyncMock(side_effect=mode)):
             first = work.start(self.jobs, 'launch', launches.prepare(given))
             await wait()
+            self.assertEqual(self.jobs.state['error'], '«Вопросы живому агенту»: Временный сбой')
             second = work.start(self.jobs, 'launch', launches.prepare(given))
             await wait()
         self.assertEqual(first['task'], second['task'])
         self.assertEqual(calls.count('dataset'), 1)
         self.assertEqual(calls.count('questions'), 2)
-        self.assertEqual(storage.launches.get('launch', first['task'])['status'], 'done')
+        done = storage.launches.get('launch', first['task'])
+        self.assertEqual((done['status'], done.get('error')), ('done', None))
+
+    async def test_a_failed_launch_says_its_own_reason(self):
+        """A launch that failed says why in its own words, never «Часть режимов не завершена»: the reason its one way
+        of checking gave, or the reason of each way that failed, by the way's name."""
+        from lab.api import work
+
+        reasons = {
+            'dataset': 'Модель не ответила ни по одному разговору.',
+            'questions': 'Агент не ответил ни на один вопрос.',
+        }
+
+        async def failing(name, *args):
+            raise ValueError(reasons[name])
+
+        for modes, said in (
+            (['dataset'], reasons['dataset']),
+            (
+                ['dataset', 'questions'],
+                f'«Ответы в датасете»: {reasons["dataset"]} «Вопросы живому агенту»: {reasons["questions"]}',
+            ),
+        ):
+            with self.subTest(modes=modes), patch('lab.flows.launches._mode', new=AsyncMock(side_effect=failing)):
+                started = work.start(self.jobs, 'launch', launches.prepare(self.given(modes=modes)))
+                for _ in range(100):
+                    if not self.jobs.state['running']:
+                        break
+                    await asyncio.sleep(0.01)
+                self.assertEqual(self.jobs.state['error'], said)
+                self.assertEqual(storage.launches.get('launch', started['task'])['error'], said)
 
     async def test_a_launch_whose_task_was_given_up_is_never_shown_running(self):
         """The Lab closed under a launch and the next start gave its task up: on its page and in the list the launch
@@ -694,6 +726,19 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 409, response.text)
         self.assertEqual(storage.judges.active('tone')['id'], newer['id'])
 
+    async def test_a_check_of_the_recorded_answers_names_the_version_of_the_dataset(self):
+        """«Версия агента в этом датасете»: a launch that checks the recorded answers with a version names the version
+        of the dataset's answers (trimmed); one without a version leaves the dataset's as it is, and asking the live
+        agent says nothing of the dataset. The launch keeps the version it was given."""
+        launches.prepare(self.given(agentVersion='v-stand'))  # the live agent only
+        self.assertEqual(storage.datasets.get(self.dataset['id'])['agentVersion'], '')
+        given = launches.prepare(self.given(modes=['dataset'], agentVersion=' v2.0 '))
+        self.assertEqual(
+            (storage.datasets.get(self.dataset['id'])['agentVersion'], given['agentVersion']), ('v2.0', ' v2.0 ')
+        )
+        launches.prepare(self.given(modes=['dataset', 'questions']))
+        self.assertEqual(storage.datasets.get(self.dataset['id'])['agentVersion'], 'v2.0')
+
     async def test_a_launch_is_made_of_what_is_in_force_by_its_rules_or_by_none_named(self):
         """A tone launch that named no rules goes by the ones in force: starting it again puts nothing back. One of
         Точность that named none goes by the agent's code, so with a set of Точность in force it is not current."""
@@ -783,6 +828,58 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
         storage.tasks.end(task['id'], storage.tasks.STOPPED)
         shown = (await self.client.get('/api/questions/l9-questions?brief=1')).json()
         self.assertEqual(shown['status'], 'stopped')
+
+
+class ModelsNotSetUpTests(unittest.IsolatedAsyncioTestCase):
+    """OpenRouter without its key: a check that would fail on its first conversation is refused before it starts, in
+    words that say why and where to look; so is collecting criteria the model would write. A rubric that defines its
+    criteria in code needs no model."""
+
+    REFUSAL = (
+        'Модели не настроены: Нет ключа OpenRouter. Задайте OPENROUTER_API_KEY и перезапустите Agent Lab. '
+        'Подробности в «Настройках».'
+    )
+
+    async def asyncSetUp(self):
+        support.serve(self, model_url=None)
+        self.dataset = datasets.add([dialogue()], 'dialogs.json')
+
+    async def wait_job(self):
+        for _ in range(100):
+            if not self.jobs.state['running']:
+                return
+            await asyncio.sleep(0.002)
+        self.fail('background job did not finish')
+
+    async def test_no_check_starts_while_the_models_are_not_set_up(self):
+        rules = judges.save('tone', 'Правила', 'Всегда обращайтесь к клиенту на вы.', [criterion()], None, None)
+        given = {
+            'check': 'tone',
+            'datasetId': self.dataset['id'],
+            'judgeId': rules['id'],
+            'count': 1,
+            'agentVersion': 'v1.0',
+            'modes': ['dataset'],
+        }
+        response = await self.client.post('/api/launches', json=given)
+        self.assertEqual((response.status_code, response.json()['detail']), (400, self.REFUSAL))
+        self.assertEqual((storage.launches.listed('launch'), storage.tasks.latest('launch')), ([], None))
+        self.assertEqual(storage.datasets.get(self.dataset['id'])['agentVersion'], '')
+
+    async def test_criteria_the_model_would_write_wait_for_it_and_a_coded_rubric_does_not(self):
+        policy = {'text': 'Обращайтесь к клиенту на вы и отвечайте вежливо.', 'name': 'Правила'}
+        await self.client.post('/api/tone-of-voice/policy', json=policy)
+        response = await self.client.post('/api/tone-of-voice/criteria')
+        self.assertEqual((response.status_code, response.json()['detail']), (400, self.REFUSAL))
+        self.assertIsNone(storage.tasks.latest('tone-criteria'))
+        await self.client.post('/api/tone-of-voice/policy', json={'text': POLICY, 'name': 'ToV.docx'})
+        response = await self.client.post('/api/tone-of-voice/criteria')
+        self.assertEqual(response.status_code, 200, response.text)
+        await self.wait_job()
+        self.assertIsNone(self.jobs.state['error'])
+        self.assertEqual(
+            [rule['id'] for rule in storage.documents.load(tone.DRAFT)['criteria']], ['pronouns', 'simple_language']
+        )
 
 
 class IdpTests(unittest.TestCase):

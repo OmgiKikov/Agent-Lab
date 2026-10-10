@@ -93,3 +93,25 @@ def log_words(shown: list[dict]) -> str:
     buttons as «[Кнопки: …]», but that line is the Lab's rendering of export codes (the judge's instructions say as
     much)."""
     return '\n'.join(words(m['text']) for m in shown if m['role'] == 'AGENT')
+
+
+def asked(shown: list[dict], quote: str) -> str:
+    """The customer's words a quoted reply answered: of a conversation as the judges read it ({'role': 'CUSTOMER' |
+    'AGENT', 'text'}), the customer's message nearest before the first reply whose own words hold the quote
+    (quotes.cited); '' when no reply does."""
+    customer = ''
+    for message in shown:
+        if message['role'] == 'CUSTOMER':
+            customer = message['text']
+        elif quotes.cited(quote, words(message['text'])):
+            return customer
+    return ''
+
+
+def with_asked(rows: list[dict], shown: list[dict]) -> list[dict]:
+    """A conversation's verdicts, each quoted one with the customer's words its reply answered (asked): a screen shows
+    the pair, not the conversation's first message beside a reply to its third. A verdict that has them keeps them."""
+    return [
+        row | {'asked': asked(shown, row['agentQuote'])} if row.get('agentQuote') and 'asked' not in row else row
+        for row in rows
+    ]
