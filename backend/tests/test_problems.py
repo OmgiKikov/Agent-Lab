@@ -178,6 +178,9 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(sum(side[key] for key in counted), found['log']['assessed'])
         passed = [e['dialogueId'] for e in by_name['Не отсылает в поддержку']['examples'] if e['status'] == 'PASS']
         self.assertEqual(passed, ['d2', 'd3'])
+        # Each example says whether the counts count it: a screen lists exactly the verdicts it counts.
+        listed = {e['dialogueId']: e['counted'] for e in by_name['Не отсылает в поддержку']['examples']}
+        self.assertEqual(listed, {'d1': True, 'd2': True, 'd3': False, 'd4': True})
         # «Было → стало» counts a criterion the same way.
         criteria = was_is.criteria(value, [SOURCE])
         self.assertEqual(criteria[rule_key(QUOTE)]['counts'], {'failed': 1, 'measured': 2})
@@ -203,7 +206,9 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         counted = ('failed', 'passed', 'unknown', 'notApplicable')
         support_rule = by_text['Агент не отсылает в поддержку']
         self.assertEqual([support_rule['sim'][key] for key in counted], [1, 0, 0, 1])
-        self.assertEqual([e['status'] for e in support_rule['sim']['examples']], ['FAIL', 'PASS'])
+        self.assertEqual(
+            [(e['status'], e['counted']) for e in support_rule['sim']['examples']], [('FAIL', True), ('PASS', False)]
+        )
         self.assertEqual([by_text['Агент здоровается']['sim'][key] for key in counted], [0, 1, 0, 1])
         self.assertEqual([by_text['Агент здоровается']['log'][key] for key in counted], [0, 0, 0, 0])
 
