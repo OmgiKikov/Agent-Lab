@@ -4,9 +4,11 @@ import { CHECK_NAME } from "../../lab/checks";
 import { commonText, commonTitle, type Criterion } from "../../lab/criteria";
 import { day, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
+import { useDatasets } from "../../lab/datasets";
 import {
   copyReport,
   download,
+  importantFirst,
   problemsReport,
   reliabilityWord,
   reportFile,
@@ -15,6 +17,7 @@ import {
   useReportAgent,
 } from "../../lab/problemReport";
 import { askedOf, type Problems } from "../../lab/problems";
+import { inQuotes } from "../../lab/quote";
 import { secondOf } from "../../lab/problemStats";
 import { seriousOf, severityLines, standingOf } from "../../lab/severity";
 import { SeriousTag } from "../../product/Severity";
@@ -23,9 +26,9 @@ import { Button } from "../../ui/Button";
 import { Segmented } from "../../ui/Segmented";
 import { Sheet } from "../../ui/Sheet";
 import { useToast } from "../../ui/toast";
-import { checked, queueOf, violationsOf, type SideKey } from "./model";
+import { checked, violationsOf, type SideKey } from "./model";
 import { shareBase } from "../../app/agent";
-import { fileName } from "../checks/origin";
+import { originOf } from "../checks/origin";
 
 const Cap = ({ children }: { children: ReactNode }) => (
   <span className="font-mono text-label uppercase tracking-caps text-ink-3">{children}</span>
@@ -99,11 +102,11 @@ function Section({ c, i, side }: { c: Criterion; i: number; side: SideKey }) {
 
 /**
  * «Отчёт»: a check's assessment as a protocol to send, a white sheet inside the product. Its conversations and its
- * simulation are never in one report. The serious problems come first, marked «важный», and the conversations with
- * a serious error stand under the numbers of the conversations, with whose decision that is: while some criteria are
- * the automatic check's proposals, how many of them people checked. «Скопировать для письма» puts the same on the
- * clipboard formatted and as plain text without Markdown marks, each problem with its link; the downloaded file is
- * Markdown. Both name the agent, the file too, and wait for its name: every agent's report looks alike.
+ * simulation are never in one report. The problems a person marked important come first, then the most frequent, in
+ * the order of the copied text; the conversations with a serious error stand under the numbers of the conversations,
+ * with whose decision that is. «Скопировать для письма» puts the same on the clipboard formatted and as plain text
+ * without Markdown marks, each problem with its link; the downloaded file is Markdown. Both name the agent and the
+ * dataset as the sheet does, and wait for the agent's name: every agent's report looks alike.
  */
 export function ReportSheet({
   open,
@@ -117,10 +120,10 @@ export function ReportSheet({
   list: Criterion[];
 }) {
   const toast = useToast();
-  // The dataset the conversations come from: its name on the sheet, its file for the report's own name of it.
+  // The dataset the conversations come from, named as «Итог» names it, on the sheet and in the text alike.
   const logs = useLabState().state?.logs;
-  const file = logs?.file ?? undefined;
-  const dataset = logs?.name || (file && fileName(file));
+  const datasets = useDatasets().data?.datasets ?? [];
+  const { dataset } = originOf(undefined, datasets, logs?.datasetId, logs?.file);
   const agent = useReportAgent();
   const sides = (
     [
@@ -129,8 +132,14 @@ export function ReportSheet({
     ] as const
   ).filter(([k]) => (k === "log" ? !!data.log : !!data.sim));
   const [side, setSide] = useState<SideKey>(data.log ? "log" : "sim");
-  const items = queueOf(list, side);
-  const markdown = () => problemsReport(data, shareBase(), side, { filename: file, agent: agent.name ?? undefined });
+  // In the order the copied text tells them (lab/problemReport, importantFirst), so the sheet and the text agree.
+  const byId = new Map(list.map((c) => [c.r.id, c]));
+  const items = data.rules
+    .filter((r) => r[side].failed > 0)
+    .sort(importantFirst(side))
+    .flatMap((r) => byId.get(r.id) ?? []);
+  const markdown = () =>
+    problemsReport(data, shareBase(), side, { filename: dataset || undefined, agent: agent.name ?? undefined });
   const copy = () => copyReport(markdown()).then(() => toast.notify("Отчёт скопирован"), toast.error);
   const log = data.log;
   const sim = data.sim;
@@ -201,7 +210,8 @@ export function ReportSheet({
             {side === "log" ? (
               <>
                 {CHECK_NAME[data.check]} · датасет
-                {dataset && <span className="normal-case tracking-normal"> «{dataset}»</span>} · {day(log?.finishedAt)}
+                {dataset && <span className="normal-case tracking-normal"> {inQuotes(dataset)}</span>} ·{" "}
+                {day(log?.finishedAt)}
               </>
             ) : (
               `${CHECK_NAME[data.check]} · симуляция · ${day(sim?.finishedAt)}`

@@ -18,7 +18,7 @@ export type Origin = {
 };
 
 /** A dataset's file as the dataset is called when nothing else names it: without its extension. */
-export const fileName = (file: string) => file.replace(/\.(jsonl|json|csv|xlsx)$/i, "");
+const fileName = (file: string) => file.replace(/\.(jsonl|json|csv|xlsx)$/i, "");
 
 /**
  * The origin of a check: by its launch, else by the dataset (`datasetId`) or the file it is known to be of — the
