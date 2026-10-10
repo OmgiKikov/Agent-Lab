@@ -10,6 +10,7 @@ import { count, longDay, time } from "../../lab/format";
 import { notComparedText, useHistory } from "../../lab/history";
 import { useLabState } from "../../lab/LabProvider";
 import { checkedIn } from "../../lab/problemReport";
+import { inQuotes } from "../../lab/quote";
 import { StageResult } from "../../product/StageResult";
 import { Button, buttonClass } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
@@ -161,11 +162,11 @@ function PastCheck({ check, id }: { check: Check; id: string }) {
           История проверок
         </Link>
         <p className="mt-6 break-words text-read text-fg-3">
-          {origin.dataset ? `Датасет «${origin.dataset}» · ` : ""}проверено {longDay(line.finishedAt)},{" "}
+          {origin.dataset ? `Датасет ${inQuotes(origin.dataset)} · ` : ""}проверено {longDay(line.finishedAt)},{" "}
           {time(line.finishedAt)}
           {line.sampled < line.total ? ` · выборка ${line.sampled} из ${line.total}` : ""}
           {origin.launch?.judge
-            ? ` · правила «${origin.launch.judge.name}», версия ${origin.launch.judge.version}`
+            ? ` · правила ${inQuotes(origin.launch.judge.name)}, версия ${origin.launch.judge.version}`
             : ""}
           {origin.version ? ` · версия агента ${origin.version}` : ""}
           {origin.launch && (
@@ -319,7 +320,7 @@ function CriterionFacts({ criterion }: { criterion: SavedCriterion }) {
     // The rules' words without their headings («## Объём: text_volume»), as the criterion's card says them.
     [
       "Основание в правилах",
-      criterion.quote && criterion.quote !== criterion.text ? `«${plainRule(duty(criterion.quote))}»` : null,
+      criterion.quote && criterion.quote !== criterion.text ? inQuotes(plainRule(duty(criterion.quote))) : null,
     ],
   ];
   const shown = facts.filter(([, value]) => !!value);

@@ -6,6 +6,7 @@ import { historyLink, launchLink, SECTIONS, type Check } from "../../app/links";
 import { count } from "../../lab/format";
 import { useLaunches, type Launch } from "../../lab/launches";
 import { useLabState } from "../../lab/LabProvider";
+import { inQuotes } from "../../lab/quote";
 import { reasonText } from "../../lab/severity";
 import { codeSources, customAccuracy, TONE_ID } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
@@ -145,8 +146,10 @@ export function ToneStart() {
         lead={
           <div className="mb-8 flex max-w-[760px] flex-wrap items-center gap-x-4 gap-y-2 rounded-block bg-inset px-4 py-3">
             <p className="min-w-[min(100%,18rem)] flex-1 text-body text-fg-2">
-              {fresh ? `Новый датасет «${shownName(fresh)}» ещё не проверен.` : "Новый датасет ещё не проверен."} Ниже —
-              итог прошлой проверки.
+              {fresh
+                ? `Новый датасет ${inQuotes(shownName(fresh))} ещё не проверен.`
+                : "Новый датасет ещё не проверен."}{" "}
+              Ниже — итог прошлой проверки.
             </p>
             <Link to={launchLink("tone")} className={buttonClass({ variant: "primary", size: "sm" })}>
               Проверить новый датасет

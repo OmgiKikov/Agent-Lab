@@ -9,11 +9,12 @@ import { count, longDay, plural, time } from "../../lab/format";
 import { cleanPct, comparisonText, useHistory, type SavedCheck } from "../../lab/history";
 import { MODE_NAME, useLaunches, type Launch, type Mode, type Outcome } from "../../lab/launches";
 import { useLabState } from "../../lab/LabProvider";
+import { inQuotes } from "../../lab/quote";
 import { Button } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { LaunchStatus } from "../launches/LaunchStatus";
 import { CheckHeader } from "./CheckHeader";
-import { fileName, originOf } from "./origin";
+import { originOf } from "./origin";
 
 /** «3 октября, 14:05»: when a check finished, to the minute, so two checks of one day are told apart. */
 const finished = (iso: string) => `${longDay(iso)}, ${time(iso)}`;
@@ -44,17 +45,19 @@ const ROW =
 
 /**
  * One saved check in the list: its number first, as on every screen, then when, which dataset, how it stands. It opens
- * on its own page (checks/RunPage); the latest one is «Итог». A check no launch made names its dataset by its file at
- * most: without one, the way it checked.
+ * on its own page (checks/RunPage); the latest one is «Итог». A check no launch made names its dataset as far as it is
+ * known (`dataset`, origin.ts): the current one is of the dataset in use, an older one names at most its file.
  */
 function CheckRow({
   of,
   check,
+  dataset,
   previous,
   current,
 }: {
   of: Check;
   check: SavedCheck;
+  dataset: string;
   previous?: SavedCheck;
   current: boolean;
 }) {
@@ -67,7 +70,8 @@ function CheckRow({
           {current && <span className="ml-2 text-small text-fg-3">текущий итог</span>}
         </p>
         <p className="mt-1 break-words text-small text-fg-3">
-          {finished(check.finishedAt)} · {check.file ? `датасет «${fileName(check.file)}»` : MODE_NAME.dataset}
+          {finished(check.finishedAt)}
+          {dataset ? ` · датасет ${inQuotes(dataset)}` : ""}
           {unmeasured ? ` · не удалось проверить ${unmeasured} из ${check.sampled}` : ""}
         </p>
         <p className="mt-2 text-small text-fg-3">{comparisonText(check, previous)}</p>
@@ -131,8 +135,12 @@ function LaunchRow({
         </p>
         <p className="mt-1 break-words text-small text-fg-3">
           {finished(launch.startedAt)}
-          {origin.dataset ? ` · датасет «${origin.dataset}»` : ""}
-          {launch.judge ? ` · правила «${launch.judge.name}»` : launch.check === "code" ? " · критерии из кода" : ""}
+          {origin.dataset ? ` · датасет ${inQuotes(origin.dataset)}` : ""}
+          {launch.judge
+            ? ` · правила ${inQuotes(launch.judge.name)}`
+            : launch.check === "code"
+              ? " · критерии из кода"
+              : ""}
           {launch.ruleIds?.length ? ` · ${count(launch.ruleIds.length, "критерий", "критерия", "критериев")}` : ""}
           {launch.replan ? " · критерии извлечены заново" : ""}
           {origin.version ? ` · версия агента ${origin.version}` : ""}
@@ -168,6 +176,9 @@ export function HistoryPage({ check }: { check: Check }) {
   );
   const fromLaunch = new Set(shown.map((l) => l.modes.dataset?.checkId).filter(Boolean));
   const previousOf = (saved?: SavedCheck) => checks.find((item) => item.id === saved?.comparison.previousId);
+  // The current result is of the dataset in use, named as «Итог» names it; an older saved check by its file at most.
+  const datasetOf = (saved: SavedCheck) =>
+    originOf(undefined, datasets, saved.id === result?.checkId ? state?.logs.datasetId : null, saved.file).dataset;
   const rows = [
     ...shown.map((launch) => ({ at: launch.startedAt, launch, saved: undefined })),
     ...checks
@@ -235,6 +246,7 @@ export function HistoryPage({ check }: { check: Check }) {
                         key={row.saved!.id}
                         of={check}
                         check={row.saved!}
+                        dataset={datasetOf(row.saved!)}
                         previous={previousOf(row.saved)}
                         current={row.saved!.id === result?.checkId}
                       />
