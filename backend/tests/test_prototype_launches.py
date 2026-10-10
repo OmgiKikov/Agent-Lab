@@ -13,8 +13,9 @@ from test_tone import POLICY
 from lab import models, storage
 from lab.agents import idp
 from lab.domain import checks
+from lab.domain import tone as tone_rules
 from lab.domain.comparison import comparison
-from lab.flows import agent_context, datasets, judges, launches, questions, tone
+from lab.flows import agent_context, datasets, inputs, judges, launches, questions, tone
 from lab.roles import judge
 
 
@@ -893,19 +894,27 @@ class ModelsNotSetUpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(storage.datasets.get(self.dataset['id'])['agentVersion'], '')
 
     async def test_criteria_the_model_would_write_wait_for_it_and_a_coded_rubric_does_not(self):
-        policy = {'text': 'Обращайтесь к клиенту на вы и отвечайте вежливо.', 'name': 'Правила'}
-        await self.client.post('/api/tone-of-voice/policy', json=policy)
-        response = await self.client.post('/api/tone-of-voice/criteria')
-        self.assertEqual((response.status_code, response.json()['detail']), (400, self.REFUSAL))
-        self.assertIsNone(storage.tasks.latest('tone-criteria'))
+        """A rubric that defines its criteria in code is taken and collected without a model. Rules whose criteria only
+        the model could write are refused before they replace anything, so the rules, criteria and «Итог» in force
+        stay; rules like that already in force are not collected again either."""
         await self.client.post('/api/tone-of-voice/policy', json={'text': POLICY, 'name': 'ToV.docx'})
         response = await self.client.post('/api/tone-of-voice/criteria')
         self.assertEqual(response.status_code, 200, response.text)
         await self.wait_job()
         self.assertIsNone(self.jobs.state['error'])
-        self.assertEqual(
-            [rule['id'] for rule in storage.documents.load(tone.DRAFT)['criteria']], ['pronouns', 'simple_language']
-        )
+        draft = storage.documents.load(tone.DRAFT)
+        self.assertEqual([rule['id'] for rule in draft['criteria']], ['pronouns', 'simple_language'])
+        result = {'checkId': 'c1', 'topics': [], 'results': []}
+        storage.documents.save(tone.RESULT, result)
+        plain = 'Обращайтесь к клиенту на вы и отвечайте коротко и вежливо.'
+        response = await self.client.post('/api/tone-of-voice/policy', json={'text': plain, 'name': 'Правила'})
+        self.assertEqual((response.status_code, response.json()['detail']), (400, self.REFUSAL))
+        self.assertEqual(tone.current_policy()['content'], POLICY.strip())
+        self.assertEqual((storage.documents.load(tone.DRAFT), storage.documents.load(tone.RESULT)), (draft, result))
+        inputs.replace_sources([tone_rules.policy('Правила', plain)])  # taken while the models were set up
+        response = await self.client.post('/api/tone-of-voice/criteria')
+        self.assertEqual((response.status_code, response.json()['detail']), (400, self.REFUSAL))
+        self.assertEqual(storage.tasks.latest('tone-criteria')['status'], storage.tasks.DONE)
 
 
 class IdpTests(unittest.TestCase):

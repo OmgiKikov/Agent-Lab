@@ -81,11 +81,20 @@ async def collect_criteria(progress: Progress) -> dict:
     return draft
 
 
-def ensure_collectable() -> None:
-    """Criteria can be collected from the rules in force now: the rules define them in code
-    (domain.tone.coded_criteria), or the model that collects them can be asked (models.ensure_set_up). A ValueError
-    says what is missing before any work starts."""
-    if not tone.coded_criteria(current_policy()):
+def save_policy(name: str, text: str) -> None:
+    """New rules of communication in place of the current ones, beside the agent's code, with what they reset
+    (inputs.replace_sources). Refused before anything is replaced while the criteria of the new rules could not be
+    collected (ensure_collectable): the criteria and «Итог» in force would go, and none could come."""
+    rules = tone.policy(name.strip(), text)
+    ensure_collectable(rules)
+    inputs.replace_sources([*(source for source in inputs.sources() if source['kind'] != tone.KIND), rules])
+
+
+def ensure_collectable(policy: dict) -> None:
+    """Criteria can be collected from these rules now: they define them in code (domain.tone.coded_criteria), or the
+    model that collects them can be asked (models.ensure_set_up). A ValueError says what is missing before any work
+    starts."""
+    if not tone.coded_criteria(policy):
         models.ensure_set_up()
 
 

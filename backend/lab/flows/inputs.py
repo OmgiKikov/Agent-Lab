@@ -104,12 +104,6 @@ async def read_code() -> list[dict]:
     return collected
 
 
-def save_policy(name: str, text: str) -> None:
-    """The person's rules of communication, beside the agent's code."""
-    rules = tone.policy(name.strip(), text)
-    replace_sources([*(source for source in sources() if source['kind'] != tone.KIND), rules])
-
-
 def _clear(changed: Collection[str]) -> None:
     """The results of the checks whose inputs changed, and a deck built from them. The names stay, set to nothing: a
     repeated legacy import must not resurrect results cleared on purpose."""
