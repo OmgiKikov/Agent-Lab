@@ -6,7 +6,7 @@ import { commonText, commonTitle, type Criterion } from "../../lab/criteria";
 import { inQuotes } from "../../lab/quote";
 import { pct } from "../../lab/format";
 import { askedOf } from "../../lab/problems";
-import { humansOf, humansText } from "../../lab/problemStats";
+import { humansOf, humansText, misreadOf, misreadText } from "../../lab/problemStats";
 import { SeriousTag } from "../../product/Severity";
 import { checked, errorIn, violationsOf, type SideKey } from "./model";
 
@@ -15,7 +15,9 @@ import { checked, errorIn, violationsOf, type SideKey } from "./model";
  * frequency), its criterion's name with «важный» when its errors are serious, the kind of error the model named most
  * often when it says more than the name, one real exchange — the customer's words and the agent's reply to them,
  * marked — and «N из M» with a quiet bar. The agent's words are the evidence: the customer's take at most a third of
- * the line and are cut first. Red stays in the result above and in that quiet word.
+ * the line and are cut first. Red stays in the result above and in that quiet word. When people's answers show the
+ * model reads the criterion otherwise than they do (lab/problemStats, misreadOf), a line says so under the evidence:
+ * the count may be off.
  * Under the count (on a phone, under the text): the person's answers on its errors, once there are any, and `was` —
  * what the criterion had in the previous check of this check.
  */
@@ -37,6 +39,7 @@ export function ProblemRow({
   const e = violationsOf(c, side)[0];
   const common = commonTitle(c, side);
   const answers = humansOf(s);
+  const misread = misreadOf(s);
   const asked = e ? askedOf(e) : "";
   return (
     <Link
@@ -72,6 +75,7 @@ export function ProblemRow({
             )}
           </span>
         )}
+        {misread && <span className="mt-1 block text-body text-warn">{misreadText(misread)}</span>}
       </span>
       <span className="pt-0.5 text-right">
         <span

@@ -1,19 +1,24 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowLeft, ArrowRight, ArrowUpRight, Code2, FileText } from "lucide-react";
+import { ArrowLeft, ArrowRight, ArrowUpRight, Code2, FileText, PencilLine } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { problemLink, type Check } from "../../app/links";
 import { duty, type Criterion } from "../../lab/criteria";
 import { dialogOf, topicOf } from "../../lab/dialogs";
+import { useLabState } from "../../lab/LabProvider";
 import { askedOf, type Example } from "../../lab/problems";
-import { answeredText, humansOf, humansText, secondOf } from "../../lab/problemStats";
+import { answeredText, humansOf, humansText, misreadDetail, misreadOf, secondOf } from "../../lab/problemStats";
+import { CLARIFIED_SINCE, toneJudgedByOther, toneReadAsChecked } from "../../lab/tone";
 import { Count } from "../../product/Count";
 import { Facts } from "../../product/Facts";
 import { Reliability } from "../../product/Reliability";
 import { SeverityControl } from "../../product/Severity";
 import { shortOrigin } from "../../product/text";
+import { Button } from "../../ui/Button";
 import { Label } from "../../ui/Label";
 import { Segmented } from "../../ui/Segmented";
 import { checked, errorIn } from "../problems/model";
+import { Clarify } from "../tone/Clarify";
 import { type SideKey } from "./model";
 import { RuleText } from "./RuleText";
 
@@ -58,7 +63,8 @@ function ExampleRow({ e }: { e: Example }) {
 /**
  * The chosen criterion: what it requires, «Важный критерий» (with the automatic check's proposal, its reason and
  * «Подтвердить», while no person decided), how it went in this stage — «N из M» of the checked conversations where it
- * applies, as «Итог» counts it — and the conversations behind each count.
+ * applies, as «Итог» counts it — and the conversations behind each count. When people's answers show the model reads
+ * it otherwise than they do, it says so, with «Уточнить критерий» on the result of the criteria in force.
  */
 export function CriterionPanel({
   c,
@@ -85,10 +91,18 @@ export function CriterionPanel({
   bare?: boolean;
   className?: string;
 }) {
+  const { state } = useLabState();
+  const [clarifying, setClarifying] = useState(false);
   const r = c.r;
   const s = r[side];
   const second = secondOf(s.examples);
   const humans = humansOf(s);
+  const misread = misreadOf(s);
+  // A criterion of tone of voice is clarified on the result judged by the criteria in force, as on its problem's page.
+  const finishedAt = state?.checks.tone?.finishedAt;
+  const inForce =
+    check === "tone" && side === "log" && !!state?.toneOfVoice && !!finishedAt && !toneJudgedByOther(state);
+  const clarifiable = inForce && toneReadAsChecked(state, s.ruleIds[0]);
   // Under a tab, the verdicts its number counts (Side); the ones in conversations the check could not check as a whole
   // are said apart.
   const verdicts = s.examples.filter((e) => e.status === shown);
@@ -159,6 +173,17 @@ export function CriterionPanel({
             ]}
           />
         </div>
+        {misread && (
+          <div className="mt-4">
+            <p className="text-body text-warn">{misreadDetail(misread)}</p>
+            {clarifiable && (
+              <Button icon={PencilLine} className="mt-3" onClick={() => setClarifying(true)}>
+                Уточнить критерий
+              </Button>
+            )}
+            {inForce && !clarifiable && <p className="mt-2 text-small text-fg-3">{CLARIFIED_SINCE}</p>}
+          </div>
+        )}
         {s.failed > 0 && (
           <Link
             to={problemLink(r.id, side === "sim" ? "sim" : check, runId)}
@@ -205,6 +230,7 @@ export function CriterionPanel({
           </p>
         )}
       </div>
+      {clarifying && finishedAt && <Clarify r={r} finishedAt={finishedAt} onClose={() => setClarifying(false)} />}
     </aside>
   );
 }

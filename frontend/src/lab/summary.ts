@@ -4,6 +4,7 @@ import { CHECK_NAME, CHECKS } from "./checks";
 import { count, pct, plural } from "./format";
 import { cleanPct } from "./history";
 import { importanceTag, masked, masksLine } from "./problemReport";
+import { misreadForPeople, type Misread } from "./problemStats";
 import { inQuotes, oneLine, ruleLines, splitQuote } from "./quote";
 import type { Severity } from "./problems";
 import { lineText, type Serious, type SeverityLine } from "./severity";
@@ -72,6 +73,10 @@ export type SummaryProblem = {
   /** People's answers on its errors: «да, ошибка» and «нет». */
   yes: number;
   no: number;
+  /**
+   * The model reads the criterion otherwise than people do, by their answers (lab/problemStats): its count may be off.
+   */
+  misread: Misread | null;
   example: SummaryExample | null;
 };
 
@@ -255,6 +260,7 @@ export function summaryMarkdown(s: Summary): string {
           "",
           ...(p.common ? [p.common] : []),
           problemCount(p),
+          ...(p.misread ? [misreadForPeople(p.misread)] : []),
           "",
           "Агент должен:",
           ...ruleLines(p.duty),

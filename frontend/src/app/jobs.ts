@@ -19,8 +19,8 @@ export const JOBS: Record<string, { label: string; to: string; open: string }> =
   logs: { label: "Загрузка датасета", to: SECTIONS.data, open: "датасеты" },
   "tone-criteria": { label: "Критерии tone of voice", to: criterionLink("tone"), open: "критерии" },
   "tone-check": { label: "Проверка tone of voice", to: SECTIONS.tone, open: "итог" },
-  // «Как ответить правильно» and «Уточнить критерий» on an error's page: the model's suggestion comes in their own sheet,
-  // where it was asked for, so no notice follows it (TaskCard, SAID_ON_SCREEN).
+  // «Как ответить правильно» on an error and «Уточнить критерий» on a criterion: the model's suggestion comes in their
+  // own sheet, where it was asked for, so no notice follows it (TaskCard, SAID_ON_SCREEN).
   "tone-advice": { label: "Предложение модели", to: SECTIONS.tone, open: "итог" },
   "tone-clarification": { label: "Уточнение критерия", to: criterionLink("tone"), open: "критерии" },
   sources: { label: "Чтение кода агента", to: SECTIONS.agent, open: "агента" },

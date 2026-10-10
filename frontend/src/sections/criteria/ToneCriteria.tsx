@@ -12,6 +12,7 @@ import { useJudges, type JudgeVersion } from "../../lab/judges";
 import { useLabState } from "../../lab/LabProvider";
 import { download } from "../../lab/problemReport";
 import { useSource, type Problems } from "../../lab/problems";
+import { misreadOf, misreadText } from "../../lab/problemStats";
 import { useFirstRun } from "../../lab/compare";
 import { TONE_ID, toneJudgedByOther, toneResult } from "../../lab/tone";
 import { MarkNo } from "../../product/MarkNo";
@@ -40,7 +41,10 @@ type Card = {
   quote: string;
   condition: string;
   acceptable: string;
-  /** What people clarified about it after a check, «Уточнить критерий» on a problem's page: the judge reads them too. */
+  /**
+   * What people clarified about it after a check («Уточнить критерий» on its problem's page or here): the judge reads
+   * them too.
+   */
   clarifications: string[];
   result?: Criterion;
 };
@@ -51,13 +55,15 @@ const listed = (names: string[]) =>
 
 /**
  * One criterion as a card, as the criteria were shown before the first check: its number, name and words; after a
- * check, what it found — «45 из 100 с ошибкой» with a thin bar, «важный» when it is. Pressed, it opens. Under it,
+ * check, what it found — «45 из 100 с ошибкой» with a thin bar, «важный» when it is, and that the model reads it
+ * otherwise than people do when their answers show it (lab/problemStats, misreadOf). Pressed, it opens. Under it,
  * after a check, whether its errors are serious: switched on the card itself, with whose decision it is and the model's
  * reason, so the proposals of the automatic check are read and decided on one screen.
  */
 function CriterionCard({ card, judged, onOpen }: { card: Card; judged: boolean; onOpen: () => void }) {
   const s = card.result?.r.log;
   const checked = s ? s.failed + s.passed : 0;
+  const misread = s ? misreadOf(s) : null;
   const sim = card.result?.r.sim;
   const played = sim ? sim.failed + sim.passed : 0;
   return (
@@ -107,6 +113,7 @@ function CriterionCard({ card, judged, onOpen }: { card: Card; judged: boolean; 
                 {card.result ? "Не встретился в разговорах последней проверки" : "В последней проверке его не было"}
               </span>
             )}
+            {misread && <span className="mt-2 block text-small text-warn">{misreadText(misread)}</span>}
             {SIMULATIONS && played > 0 && (
               <span className="mt-2 block text-small text-fg-3">
                 В симуляциях: <span className="tabular-nums">{sim!.failed}</span> из {played} с ошибкой

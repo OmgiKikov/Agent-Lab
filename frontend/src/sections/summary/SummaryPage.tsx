@@ -15,7 +15,7 @@ import { pct } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { commonLine, copyReport, errorsOf, proofOf, useReportAgent } from "../../lab/problemReport";
 import { askedOf, importantByPerson, useProblems, type Example, type LogDialogue } from "../../lab/problems";
-import { humansOf } from "../../lab/problemStats";
+import { humansOf, misreadForPeople, misreadOf } from "../../lab/problemStats";
 import { splitQuote } from "../../lab/quote";
 import {
   basisText,
@@ -195,6 +195,7 @@ export function SummaryPage() {
                 checked: s.failed + s.passed,
                 yes: people.agree,
                 no: people.checked - people.agree,
+                misread: misreadOf(s),
                 example: e ? exampleOf(e, dialogueOf(e)) : null,
               };
             }),
@@ -459,6 +460,8 @@ function ProblemItem({ p, onToggle }: { p: SummaryProblem; onToggle: () => void 
             </span>
           </div>
           {p.chosen && p.common && <p className="mt-1 max-w-[68ch] text-read text-fg-2">{p.common}</p>}
+          {/* Ticked or not: whether to give the number at all is the person's decision to make with it. */}
+          {p.misread && <p className="mt-1 max-w-[68ch] text-read text-warn">{misreadForPeople(p.misread)}</p>}
         </div>
         {p.chosen && (
           <>

@@ -4,6 +4,7 @@ import { useAgents } from "./agents";
 import { CHECK_NAME } from "./checks";
 import { commonText, commonTitle, criterionName, type Criterion } from "./criteria";
 import { count, day, pct } from "./format";
+import { misreadForPeople, misreadOf } from "./problemStats";
 import { askedOf, importantByPerson, type Example, type Problems, type RuleEntry, type Side } from "./problems";
 import { clip, inQuotes, MASKS, ruleLines, showsMasks } from "./quote";
 import { seriousFirst, severityText } from "./severity";
@@ -189,6 +190,12 @@ function restLine(s: Side, assessed?: number): string | null {
   return `Ещё ${parts.join(", ")}. В счёт ${s.unknown + notApplicable === 1 ? "он не входит" : "они не входят"}.`;
 }
 
+/** That the model reads the criterion otherwise than people do, by their answers (lab/problemStats); null if not. */
+function misreadLine(s: Side): string | null {
+  const misread = misreadOf(s);
+  return misread && misreadForPeople(misread);
+}
+
 /** The same words, whatever the headings, the codes, the marks and the spaces between them. */
 const wordsOf = (text: string) =>
   ruleLines(text)
@@ -245,7 +252,9 @@ export function problemLines(c: Criterion, side: Source, proof: Example | undefi
   const s = c.r[side];
   const duty = dutyLines(c.r);
   return [
-    ...[commonLine(c, side), errorsLine(s), restLine(s, assessed)].filter((line): line is string => !!line),
+    ...[commonLine(c, side), errorsLine(s), restLine(s, assessed), misreadLine(s)].filter(
+      (line): line is string => !!line,
+    ),
     ...(duty.length ? ["", ...duty] : []),
     ...(proof ? ["", ...exampleLines(proof)] : []),
   ];

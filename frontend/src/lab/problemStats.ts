@@ -53,6 +53,49 @@ export function rightOf(side: Side): {
   return { answered: errors.answered + clean.answered, right: errors.right + clean.right, errors, clean };
 }
 
+/** How a criterion's model was wrong by people's answers, once it reads the criterion otherwise than they do. */
+export type Misread = {
+  answered: number;
+  wrong: number;
+  /** Errors it found where people say there are none. */
+  found: number;
+  /** Errors people found where it saw none. */
+  missed: number;
+};
+
+/**
+ * A criterion the model reads otherwise than people do: from RIGHT_FROM of their answers on it, it was wrong in at
+ * least one of three — an error it found that people say is none, or one it missed. «Итог», «Критерии», the problem's
+ * page and every text that leaves the product say so beside its count, and its page and «Критерии» offer «Уточнить
+ * критерий»; null otherwise.
+ */
+export function misreadOf(side: Side): Misread | null {
+  const r = rightOf(side);
+  const wrong = r.answered - r.right;
+  if (r.answered < RIGHT_FROM || wrong * 3 < r.answered) return null;
+  return {
+    answered: r.answered,
+    wrong,
+    found: r.errors.answered - r.errors.right,
+    missed: r.clean.answered - r.clean.right,
+  };
+}
+
+/** «Модель ошиблась в 4 из 10 ваших ответов»: beside a criterion's count on «Итог» and «Критерии». */
+export const misreadText = (m: Misread) =>
+  `Модель ошиблась в\u00a0${m.wrong}\u00a0из\u00a0${count(m.answered, "вашего ответа", "ваших ответов", "ваших ответов")}`;
+
+/** «Модель ошиблась в 4 из 10 ваших ответов по этому критерию: нашла 3 ошибки, которых нет, и пропустила 1.» */
+export function misreadDetail(m: Misread): string {
+  const found = m.found ? `нашла ${count(m.found, "ошибку, которой", "ошибки, которых", "ошибок, которых")} нет` : "";
+  const missed = m.missed ? `пропустила ${m.found ? m.missed : count(m.missed, "ошибку", "ошибки", "ошибок")}` : "";
+  return `${misreadText(m)} по этому критерию: ${[found, missed].filter(Boolean).join(", и ")}.`;
+}
+
+/** The same for a reader outside the product: «Модель ошиблась в 4 из 10 случаев, которые перепроверили люди: …». */
+export const misreadForPeople = (m: Misread) =>
+  `Модель ошиблась в\u00a0${m.wrong}\u00a0из\u00a0${count(m.answered, "случая", "случаев", "случаев")}, которые перепроверили люди: число по этому критерию может быть неточным.`;
+
 /**
  * «Модель права в 9 из 10 случаев, на которые вы ответили по этому критерию.» Only from RIGHT_FROM answers, and only
  * out of them; with answers on cases «без ошибки» among them, how it was right on each kind. Null with fewer answers:

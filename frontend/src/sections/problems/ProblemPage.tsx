@@ -29,8 +29,8 @@ import { Duty } from "../../product/Duty";
 import { longDay, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { answersWait, useReview, type Decision, type Example } from "../../lab/problems";
-import { humansOf, humansText, rightOf, rightText, secondOf } from "../../lab/problemStats";
-import { toneJudgedByOther } from "../../lab/tone";
+import { humansOf, humansText, misreadDetail, misreadOf, rightOf, rightText, secondOf } from "../../lab/problemStats";
+import { CLARIFIED_SINCE, toneJudgedByOther, toneReadAsChecked } from "../../lab/tone";
 import { conversationKey, exampleAt, exampleKey, inOrder, nextUnanswered } from "../../lab/verdicts";
 import { ExampleCard } from "../../product/ExampleCard";
 import { SeverityControl } from "../../product/Severity";
@@ -42,6 +42,7 @@ import { LoadFailed } from "../../ui/LoadFailed";
 import { useToast } from "../../ui/toast";
 import { NoSuchRun, useSimRuns } from "../simulations/stage";
 import { Advice } from "../tone/Advice";
+import { Clarify } from "../tone/Clarify";
 import { Handoff } from "./Handoff";
 import { Reproduce } from "./Reproduce";
 import { checked, restText, violationsOf } from "./model";
@@ -78,7 +79,8 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
   const [handoff, setHandoff] = useState(false);
   const [source, setSource] = useState(false);
   const [more, setMore] = useState(false);
-  const [advice, setAdvice] = useState<"clarify" | "rewrite" | null>(null);
+  const [advice, setAdvice] = useState(false);
+  const [clarifying, setClarifying] = useState(false);
   const dir = useRef<1 | -1>(1);
   const c = list.find((x) => x.r.id === id);
   const runId = stage === "sim" ? (data?.sim?.runId ?? null) : null;
@@ -232,6 +234,11 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
   const second = secondOf(s.examples);
   const humans = humansOf(s);
   const right = rightText(rightOf(s));
+  const misread = misreadOf(s);
+  // On the result of the criteria in force, this criterion is clarified and asked about while it reads as the check
+  // read it; clarified since, it waits for the next check, which reads it anew (toneReadAsChecked).
+  const asChecked = toneNow && toneReadAsChecked(state, s.ruleIds[0]);
+  const clarifiedSince = toneNow && !asChecked;
   const rest = restText(s, (here === "log" ? data.log?.assessed : data.sim?.assessed) ?? 0);
   const run = stage === "sim" ? state?.runs.find((x) => x.id === runId) : undefined;
   const link = `${shareBase()}${problemLink(r.id, stage, runId)}`;
@@ -317,7 +324,21 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
               {humansText(humans)}
             </Link>
           </p>
-          {right && <p className="mt-1.5 max-w-[72ch] text-read text-fg-2">{right}</p>}
+          {/* When people's answers show the model reads the criterion otherwise than they do, the page says so and
+              offers to clarify it from every case they corrected; else how often it was right by their answers. */}
+          {misread ? (
+            <div className="mt-1.5 max-w-[72ch]">
+              <p className="text-read text-warn">{misreadDetail(misread)}</p>
+              {asChecked && (
+                <Button icon={PencilLine} className="mt-3" onClick={() => setClarifying(true)}>
+                  Уточнить критерий
+                </Button>
+              )}
+              {clarifiedSince && <p className="mt-2 text-body text-fg-3">{CLARIFIED_SINCE}</p>}
+            </div>
+          ) : (
+            right && <p className="mt-1.5 max-w-[72ch] text-read text-fg-2">{right}</p>
+          )}
           {rest && <p className="mt-1.5 max-w-[72ch] text-small text-fg-3">{rest}</p>}
           {/* The same criterion on the other side: a check's last run, or the conversations of the run's check. */}
           {stage === "sim"
@@ -397,11 +418,12 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
                     onDecide={(d) => decide(example, d)}
                     actions={
                       // Tone of voice learns from people: a case that is no error clarifies its criterion for the next
-                      // check; an error can come with a better reply. Only on the result of the criteria in force.
-                      toneNow && example.status === "FAIL" ? (
+                      // check, with every other case they corrected; an error can come with a better reply. Only on
+                      // the result of the criteria in force, while this one reads as the check read it.
+                      asChecked && example.status === "FAIL" ? (
                         <div className="mt-3 flex flex-wrap gap-2">
                           {example.review === "disagree" && (
-                            <Button icon={PencilLine} onClick={() => setAdvice("clarify")}>
+                            <Button icon={PencilLine} onClick={() => setClarifying(true)}>
                               Уточнить критерий
                             </Button>
                           )}
@@ -409,15 +431,15 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
                             variant="ghost"
                             icon={WandSparkles}
                             disabled={!example.agentQuote}
-                            onClick={() => setAdvice("rewrite")}
+                            onClick={() => setAdvice(true)}
                           >
                             Как ответить правильно
                           </Button>
                         </div>
-                      ) : otherCriteria && example.status === "FAIL" ? (
+                      ) : (otherCriteria || clarifiedSince) && example.status === "FAIL" ? (
                         <p className="mt-3 text-body text-fg-3">
-                          Критерии изменились после этой проверки. Уточнить критерий и спросить, как ответить правильно,
-                          можно на итоге новой проверки.
+                          {otherCriteria ? "Критерии изменились" : "Критерий уточнён"} после этой проверки. Уточнить
+                          критерий и спросить, как ответить правильно, можно на итоге новой проверки.
                         </p>
                       ) : undefined
                     }
@@ -488,15 +510,16 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
         </div>
       </div>
       <Handoff open={handoff} onClose={() => setHandoff(false)} r={r} side={here} link={link} />
-      {advice && example && toneDraft && toneResult && (
+      {advice && example && toneResult && (
         <Advice
-          key={`${conversationKey(example)}-${advice}`}
-          mode={advice}
+          key={conversationKey(example)}
           example={example}
           finishedAt={toneResult.finishedAt}
-          draft={toneDraft}
-          onClose={() => setAdvice(null)}
+          onClose={() => setAdvice(false)}
         />
+      )}
+      {clarifying && toneResult && (
+        <Clarify r={r} finishedAt={toneResult.finishedAt} onClose={() => setClarifying(false)} />
       )}
       <SourceSheet
         open={source}

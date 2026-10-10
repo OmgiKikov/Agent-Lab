@@ -1,4 +1,4 @@
-import type { LabState } from "./types";
+import type { Criterion, LabState } from "./types";
 import { agentKey } from "../app/agent";
 
 export const TONE_ID = "tone-of-voice";
@@ -24,6 +24,25 @@ export function toneJudgedByOther(state: LabState | null): boolean {
   const used = new Set((result.topics ?? []).flatMap((t) => t.rules).map(judged));
   return used.size !== draft.criteria.length || draft.criteria.some((c) => !used.has(judged(c)));
 }
+
+/** What the judge reads of a criterion (backend domain/tone, for_judging): its words with the clarifications. */
+const readAs = (c: Criterion) =>
+  JSON.stringify([c.text, c.condition ?? "", c.acceptable ?? "", c.clarifications ?? []]);
+
+/**
+ * Whether the criterion `id` reads now as the result of tone of voice read it. Only then is it clarified, or asked how
+ * to answer by it, on that result: one clarified since waits for the next check, which reads it anew.
+ */
+export function toneReadAsChecked(state: LabState | null, id: string | undefined): boolean {
+  const now = state?.toneOfVoice?.criteria.find((c) => c.id === id);
+  const then = toneResult(state)
+    ?.topics.flatMap((t) => t.rules)
+    .find((c) => c.id === id);
+  return !!now && !!then && readAs(now) === readAs(then);
+}
+
+/** Said where a criterion is clarified or asked about, once it was clarified after the check on the screen. */
+export const CLARIFIED_SINCE = "Критерий уточнён после этой проверки: следующая проверка прочитает его с уточнением.";
 
 /** What was read from the agent's code; the rules of communication beside it are a person's own document. */
 export const accuracySources = (state: LabState | null) => state?.sources.filter((s) => s.id !== TONE_ID) ?? [];
