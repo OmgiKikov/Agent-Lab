@@ -281,7 +281,8 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
           {/* The decision belongs to the criterion of the check, the same from its run's problem. */}
           {check && <SeverityControl check={check} rule={r} className="mt-5 max-w-[68ch]" />}
 
-          <p className="mt-6 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-read text-fg-2">
+          {/* On a phone the counts stand one under another: a dot would open a wrapped line. */}
+          <p className="mt-6 flex flex-col items-start gap-x-2 gap-y-1 text-read text-fg-2 sm:flex-row sm:flex-wrap sm:items-baseline">
             <Link to={conversationsLink(stage, { run: runId, v: "fail", rule: r.id })} className={linkCls}>
               <b className="text-count font-semibold tabular-nums text-fg">{s.failed}</b>
               {"\u00a0"}из{"\u00a0"}
@@ -292,7 +293,7 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
             </Link>
             {second.checked > 0 && (
               <>
-                <span aria-hidden className="text-fg-4">
+                <span aria-hidden className="hidden text-fg-4 sm:inline">
                   ·
                 </span>
                 <span>
@@ -302,7 +303,7 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
                 </span>
               </>
             )}
-            <span aria-hidden className="text-fg-4">
+            <span aria-hidden className="hidden text-fg-4 sm:inline">
               ·
             </span>
             <Link
