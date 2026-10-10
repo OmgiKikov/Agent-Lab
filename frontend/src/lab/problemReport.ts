@@ -2,11 +2,11 @@ import { AGENT, shareBase } from "../app/agent";
 import { problemLink } from "../app/links";
 import { useAgents } from "./agents";
 import { CHECK_NAME } from "./checks";
-import { commonTitle, criterionName, type Criterion } from "./criteria";
+import { commonText, commonTitle, criterionName, type Criterion } from "./criteria";
 import { count, day, pct } from "./format";
 import { askedOf, importantByPerson, type Example, type Problems, type RuleEntry, type Side } from "./problems";
 import { clip, inQuotes, MASKS, ruleLines, showsMasks } from "./quote";
-import { severityText } from "./severity";
+import { seriousFirst, severityText } from "./severity";
 
 const SOURCE_LABEL: Record<string, string> = {
   prompt: "Инструкции агента",
@@ -139,31 +139,28 @@ const QUOTED = 300;
 export const criterionOf = (r: RuleEntry): Criterion => ({ r, n: 0, name: criterionName(r), every: false, topics: [] });
 
 /**
- * The order a text tells the problems of one side in, as «Итог» does: the criteria a person marked important first
- * (lab/problems, importantByPerson), then the most frequent; a model's proposal moves nothing.
+ * The order a text tells the problems of one side in, as «Итог» does (lab/severity, seriousFirst): the criteria a
+ * person marked important first, then the most frequent; a model's proposal moves nothing.
  */
 export const importantFirst =
   (side: Source) =>
   (a: RuleEntry, b: RuleEntry): number =>
-    Number(importantByPerson(b)) - Number(importantByPerson(a)) || b[side].failed - a[side].failed;
+    seriousFirst(a, b) || b[side].failed - a[side].failed;
 
 /**
- * « · важный критерий» after a problem's name when a person marked its criterion important, « · важный по предложению
- * модели» while only the model proposed it (lab/problems, importantByPerson), nothing for the others.
+ * « · важный критерий» after a problem's name when a person marked its criterion important, « · важный по мнению
+ * модели» while only the model proposed it, as the screens tag it (lab/severity, importantWord); nothing for the others.
  */
 export const importanceTag = (r: Pick<RuleEntry, "serious" | "severity">) =>
-  importantByPerson(r) ? " · важный критерий" : r.serious ? " · важный по предложению модели" : "";
+  importantByPerson(r) ? " · важный критерий" : r.serious ? " · важный по мнению модели" : "";
 
 /** «Простой и понятный язык · важный критерий»: a problem by its criterion's name, as a report heads it. */
 export const headingOf = (c: Criterion) => `${c.name}${importanceTag(c.r)}`;
 
-/** «Чаще всего: «Пишет „нажмите на кнопку“…» — 12 из 57 ошибок.», when it is worth a line (lab/criteria, commonTitle). */
+/** «Чаще всего: «Пишет „нажмите на кнопку“…» — 12 из 57 ошибок.», as under a problem's name on the screens. */
 export function commonLine(c: Criterion, side: Source = "log"): string | null {
   const common = commonTitle(c, side);
-  return (
-    common &&
-    `Чаще всего: ${inQuotes(common.title)} — ${common.count}\u00a0из\u00a0${count(common.of, "ошибки", "ошибок", "ошибок")}.`
-  );
+  return common && `${commonText(common)}.`;
 }
 
 /** «Ошибка в 57 из 89 проверенных разговоров, где критерий применим (64%).»: a criterion's count, as on «Итог». */

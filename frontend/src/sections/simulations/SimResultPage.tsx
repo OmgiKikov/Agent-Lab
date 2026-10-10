@@ -12,7 +12,7 @@ import { summarySentence } from "../../lab/problemReport";
 import { isRunning, runTitle, useRun } from "../../lab/runs";
 import type { Problems } from "../../lab/problems";
 import type { LabRun, LabState, RunSummary } from "../../lab/types";
-import { runAnswersPending, saysError, verdictsOf } from "../../lab/verdicts";
+import { runAnswersPending, verdictsOf } from "../../lab/verdicts";
 import { Step, Steps, STEP_ACTION, STEP_NEXT } from "../../product/Checklist";
 import { StageResult } from "../../product/StageResult";
 import { Button } from "../../ui/Button";
@@ -168,7 +168,8 @@ function RunSteps({ run, data, list }: { run: RunSummary; data: Problems; list: 
   const errors = verdicts.filter((v) => v.example.status === "FAIL");
   const answered = verdicts.filter((v) => v.example.review);
   const pending = runAnswersPending(data);
-  const said = answered.filter((v) => saysError(v.example.status, v.example.review!)).length;
+  // «Да» agrees with the model on an error it found and on a case «без ошибки» alike: what yesNoText calls confirmed.
+  const agreed = answered.filter((v) => v.example.review === "agree").length;
   const top = queueOf(list, "sim")[0];
   if (!errors.length && !top) return null;
   return (
@@ -179,7 +180,7 @@ function RunSteps({ run, data, list }: { run: RunSummary; data: Problems; list: 
           title="Проверьте оценки модели"
           text={
             answered.length
-              ? `Вы ответили на ${count(answered.length, "оценку", "оценки", "оценок")}: ${yesNoText(said, answered.length - said)}.`
+              ? `Вы ответили на ${count(answered.length, "оценку", "оценки", "оценок")}: ${yesNoText(agreed, answered.length - agreed)}.`
               : `Ошибки в прогоне нашла модель. Ответьте «да» или «нет» ${errors.length <= 10 ? "на каждую" : "хотя бы на 10 из них"}, и станет понятно, можно ли верить итогу.`
           }
           action={

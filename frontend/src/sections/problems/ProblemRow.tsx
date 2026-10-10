@@ -2,7 +2,8 @@ import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { commonText, commonTitle, quoted, type Criterion } from "../../lab/criteria";
+import { commonText, commonTitle, type Criterion } from "../../lab/criteria";
+import { inQuotes } from "../../lab/quote";
 import { pct } from "../../lab/format";
 import { askedOf } from "../../lab/problems";
 import { humansOf, humansText } from "../../lab/problemStats";
@@ -54,7 +55,7 @@ export function ProblemRow({
           <span className="mt-1 block text-body text-fg-3 sm:flex sm:items-baseline sm:gap-1.5">
             {asked && (
               <span className={cn("block truncate", e.agentQuote && "sm:max-w-[33%] sm:flex-shrink-0")}>
-                {quoted(asked)}
+                {inQuotes(asked)}
               </span>
             )}
             {e.agentQuote && (
