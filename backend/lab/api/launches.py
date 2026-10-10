@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from .. import storage
 from ..flows import launches
+from ..jobs import PerAgent
 from . import work
 from .base import Jobs
 
@@ -29,15 +30,7 @@ class LaunchCommand(BaseModel):
 
 @router.post('/api/launches')
 async def launch(jobs: Jobs, payload: LaunchCommand) -> dict:
-    if jobs.state['running']:
-        raise HTTPException(409, 'Дождитесь текущей задачи или остановите её.')
-    try:
-        given = launches.prepare(payload.model_dump())
-    except ValueError as error:
-        raise HTTPException(400, str(error)) from error
-    result = work.start(jobs, 'launch', given)
-    task = storage.tasks.latest('launch')
-    return {**result, 'id': task['id']}
+    return _started(jobs, payload)
 
 
 @router.get('/api/launches')
@@ -83,7 +76,20 @@ async def retry(launch_id: str, jobs: Jobs) -> dict:
         raise HTTPException(
             409, 'После этой проверки сменились правила или датасет. Запустите новую проверку, она пойдёт по текущим.'
         )
-    return await launch(jobs, LaunchCommand(**given))
+    return _started(jobs, LaunchCommand(**given), again=True)
+
+
+def _started(jobs: PerAgent, payload: LaunchCommand, *, again: bool = False) -> dict:
+    """A launch started from its choices (launches.prepare): a new one, or one started again as it was (again)."""
+    if jobs.state['running']:
+        raise HTTPException(409, 'Дождитесь текущей задачи или остановите её.')
+    try:
+        given = launches.prepare(payload.model_dump(), again=again)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    result = work.start(jobs, 'launch', given)
+    task = storage.tasks.latest('launch')
+    return {**result, 'id': task['id']}
 
 
 def _task(launch_id: str) -> dict:

@@ -739,6 +739,32 @@ class QuestionTests(unittest.IsolatedAsyncioTestCase):
         launches.prepare(self.given(modes=['dataset', 'questions']))
         self.assertEqual(storage.datasets.get(self.dataset['id'])['agentVersion'], 'v2.0')
 
+    async def test_a_check_started_again_keeps_the_version_a_person_gave_the_dataset_since(self):
+        """«Повторить проверку» and «Продолжить» start a launch again as it was: it keeps the version it was given, and
+        the dataset's, corrected on its page since, is not written over by it."""
+
+        async def done(mode, given, progress, launch_id):
+            return {'status': 'done', 'checkId': f'check-{launch_id}', 'metric': {}}
+
+        async def finished():
+            for _ in range(200):
+                if not self.jobs.state['running']:
+                    return
+                await asyncio.sleep(0.01)
+            self.fail('the launch did not finish')
+
+        with patch('lab.flows.launches._mode', new=AsyncMock(side_effect=done)):
+            started = await self.client.post('/api/launches', json=self.given(modes=['dataset'], agentVersion='v1'))
+            self.assertEqual(started.status_code, 200, started.text)
+            await finished()
+            corrected = {'id': self.dataset['id'], 'agentVersion': 'v1.1'}
+            self.assertEqual((await self.client.post('/api/datasets/version', json=corrected)).status_code, 200)
+            again = await self.client.post(f'/api/launches/{started.json()["id"]}/retry')
+            self.assertEqual(again.status_code, 200, again.text)
+            await finished()
+        self.assertEqual(storage.datasets.get(self.dataset['id'])['agentVersion'], 'v1.1')
+        self.assertEqual(storage.launches.get('launch', again.json()['id'])['agentVersion'], 'v1')
+
     async def test_a_launch_is_made_of_what_is_in_force_by_its_rules_or_by_none_named(self):
         """A tone launch that named no rules goes by the ones in force: starting it again puts nothing back. One of
         Точность that named none goes by the agent's code, so with a set of Точность in force it is not current."""
