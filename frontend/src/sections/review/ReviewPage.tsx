@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useIsMutating } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowRight, ChevronDown, ChevronLeft, ChevronRight, X } from "lucide-react";
@@ -7,7 +7,7 @@ import { Header } from "../../app/Header";
 import { useKeys } from "../../app/keys";
 import { side, stageLink, type Stage } from "../../app/links";
 import { yesNoText } from "../../lab/answers";
-import { criterionName } from "../../lab/criteria";
+import { criterionName, useCriteria } from "../../lab/criteria";
 import { count } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { answersWait, useProblems, useReview, type Decision, type Example } from "../../lab/problems";
@@ -52,10 +52,11 @@ export function ReviewPage({ stage }: { stage: Stage }) {
   const { run, newest, missing } = useSimRuns(state, stage === "sim" ? params.get("run") : null);
   const runId = stage === "sim" ? (run?.id ?? null) : null;
   // A check's cases are of its result; a run's, of the run, counted by the criteria of its check.
-  const { data, isPlaceholderData, error, isFetching, refetch } = useProblems(
-    stage === "sim" ? (run?.check ?? null) : stage,
-    runId,
-  );
+  const check = stage === "sim" ? (run?.check ?? null) : stage;
+  const { data, isPlaceholderData, error, isFetching, refetch } = useProblems(check, runId);
+  // The criteria numbered as on every screen: a case's mark carries its criterion's number, as on its problem's page and
+  // in its conversation.
+  const { list } = useCriteria(check, runId);
   const source = side(stage);
   const review = useReview();
   const ruleId = params.get("rule");
@@ -118,6 +119,22 @@ export function ReviewPage({ stage }: { stage: Stage }) {
     setDir(-1);
     setAt((a) => Math.max(0, a - 1));
   };
+  // A move made from inside what is on screen — an answer, «Пропустить», «Отменить», «Пройти ещё раз» — takes the
+  // pressed button away with its case, and the focus would fall to the page: it goes to the case that comes (its
+  // heading), or to the end of the queue. The arrows stay where they are, and so does their focus.
+  const heading = useRef<HTMLHeadingElement>(null);
+  const end = useRef<HTMLDivElement>(null);
+  const moved = useRef(false);
+  const shown = done ? "done" : (keys[at] ?? "");
+  useEffect(() => {
+    if (!moved.current) return;
+    moved.current = false;
+    (heading.current ?? end.current)?.focus();
+  }, [shown]);
+  const away = (move: () => void) => {
+    moved.current = true;
+    move();
+  };
   /**
    * After an answer on case `k`: the next case without an answer, from the start of the queue again when none is left
    * after it; past the end, when every case has one.
@@ -147,14 +164,16 @@ export function ReviewPage({ stage }: { stage: Stage }) {
     const finishedAt = data?.log?.finishedAt;
     review.mutateAsync({ example: e, decision: d, finishedAt }).catch(() => forget(k, d));
     setAnswered((a) => ({ ...a, [k]: d }));
-    onward(k);
+    away(() => onward(k));
     toast.notify(saysError(e.status, d) ? "Отмечено как ошибка" : "Отмечено, что ошибки нет", {
       label: "Отменить",
       run: () => {
         review.mutate({ example: e, decision: before, finishedAt, seen: d });
         forget(k);
-        setDir(-1);
-        setAt(was);
+        away(() => {
+          setDir(-1);
+          setAt(was);
+        });
       },
     });
   };
@@ -320,29 +339,33 @@ export function ReviewPage({ stage }: { stage: Stage }) {
                   : "Случаи появятся после проверки разговоров."}
             </EmptyState>
           ) : done ? (
-            <EmptyState
-              drop
-              title={made.length ? `Вы ответили ${count(made.length, "раз", "раза", "раз")}` : "Очередь пройдена"}
-              className="py-24"
-              action={
-                <>
-                  <Button
-                    onClick={() => {
-                      setDir(1);
-                      setAt(0);
-                    }}
-                  >
-                    Пройти ещё раз
-                  </Button>
-                  <Button variant="primary" onClick={() => navigate(stageLink(stage, runId))}>
-                    К итогу
-                    <ArrowRight aria-hidden className="size-4" />
-                  </Button>
-                </>
-              }
-            >
-              {made.length ? `Вы ${yesNoText(confirmed, made.length - confirmed)}. ${counted}` : counted}
-            </EmptyState>
+            <div ref={end} tabIndex={-1} className="outline-none">
+              <EmptyState
+                drop
+                title={made.length ? `Вы ответили ${count(made.length, "раз", "раза", "раз")}` : "Очередь пройдена"}
+                className="py-24"
+                action={
+                  <>
+                    <Button
+                      onClick={() =>
+                        away(() => {
+                          setDir(1);
+                          setAt(0);
+                        })
+                      }
+                    >
+                      Пройти ещё раз
+                    </Button>
+                    <Button variant="primary" onClick={() => navigate(stageLink(stage, runId))}>
+                      К итогу
+                      <ArrowRight aria-hidden className="size-4" />
+                    </Button>
+                  </>
+                }
+              >
+                {made.length ? `Вы ${yesNoText(confirmed, made.length - confirmed)}. ${counted}` : counted}
+              </EmptyState>
+            </div>
           ) : current ? (
             <div
               key={keys[at]}
@@ -352,7 +375,13 @@ export function ReviewPage({ stage }: { stage: Stage }) {
               )}
             >
               {/* A case is named by its criterion, as its problem and the conversation name it. */}
-              <h2 className="mt-8 text-balance text-page font-semibold text-fg">{criterionName(current.rule)}</h2>
+              <h2
+                ref={heading}
+                tabIndex={-1}
+                className="mt-8 text-balance text-page font-semibold text-fg outline-none"
+              >
+                {criterionName(current.rule)}
+              </h2>
               <Duty
                 key={current.rule.id}
                 text={current.rule.rule.text}
@@ -361,10 +390,11 @@ export function ReviewPage({ stage }: { stage: Stage }) {
               <div className="mt-8">
                 <ExampleCard
                   example={current.example}
+                  n={list.find((c) => c.r.id === current.rule.id)?.n}
                   lit={lit}
                   onLit={setLit}
                   onDecide={decide}
-                  onSkip={next}
+                  onSkip={() => away(next)}
                   emphasis
                 />
               </div>
@@ -373,7 +403,7 @@ export function ReviewPage({ stage }: { stage: Stage }) {
             <EmptyState
               title="Этого случая больше нет"
               className="py-24"
-              action={<Button onClick={next}>Дальше</Button>}
+              action={<Button onClick={() => away(next)}>Дальше</Button>}
             >
               Разговор могли проверить заново.
             </EmptyState>
