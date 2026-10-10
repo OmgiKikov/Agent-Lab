@@ -159,19 +159,17 @@ export function CriterionPanel({
         )}
         <div className="mt-6 flex flex-wrap items-center gap-3">
           <Label>Разговоры</Label>
+          {/* The counts are the check's own, as above (lab/problems, Side): a verdict in a conversation the check could
+              not check as a whole is listed, never counted. */}
           <Segmented<Shown>
             size="sm"
             label="Какие разговоры"
             value={shown}
             onChange={onShown}
             options={[
-              { value: "FAIL", label: "С ошибкой", count: s.examples.filter((e) => e.status === "FAIL").length },
-              { value: "PASS", label: "Без ошибки", count: s.examples.filter((e) => e.status === "PASS").length },
-              {
-                value: "UNKNOWN",
-                label: "Не проверено",
-                count: s.examples.filter((e) => e.status === "UNKNOWN").length,
-              },
+              { value: "FAIL", label: "С ошибкой", count: s.failed },
+              { value: "PASS", label: "Без ошибки", count: s.passed },
+              { value: "UNKNOWN", label: "Не проверено", count: s.unknown },
             ]}
           />
         </div>
