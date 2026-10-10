@@ -224,6 +224,9 @@ def from_run(book: Book, run: dict | None, deck: list[dict], target: str = '') -
     for index, item in enumerate(items):
         frozen = item.get('criteria') if isinstance(item.get('criteria'), list) else by_card.get(item.get('cardId'), [])
         known = {criterion['id']: criterion for criterion in frozen}
+        # A criterion of the played conversation was checked in it whatever its verdicts, as the audit's criteria are.
+        for criterion in frozen:
+            book.entry(criterion, item.get('topic', ''))['ruleIds']['sim'].add(criterion['id'])
         conversation = item.get('conversation') or []
         for row in item.get('rules') or []:
             rule = recorded_rule(book, row, known, isinstance(item.get('criteria'), list))

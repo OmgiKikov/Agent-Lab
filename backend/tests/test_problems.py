@@ -207,6 +207,20 @@ class ProblemsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([by_text['Агент здоровается']['sim'][key] for key in counted], [0, 1, 0, 1])
         self.assertEqual([by_text['Агент здоровается']['log'][key] for key in counted], [0, 0, 0, 0])
 
+    def test_a_criterion_a_run_checked_stands_on_its_side_though_it_never_applied(self) -> None:
+        """A criterion frozen in a played conversation was checked in it, whatever its verdicts: like the audit's
+        criteria, it stands on the run's side, where it did not apply in any conversation the run measured."""
+        record = played_run()
+        refund = {'id': 'c3', 'text': 'Агент называет срок возврата денег', 'quote': ''}
+        item = record['items'][0]
+        item['criteria'] = [*item['criteria'], refund]
+        item['rules'] = [*item['rules'], {'ruleId': 'c3', 'status': 'NOT_APPLICABLE', 'reason': '', 'agentQuote': ''}]
+        storage.runs.create(record)
+        found = problems.problems('code', 'run-1')
+        side = next(rule for rule in found['rules'] if rule['rule']['text'] == refund['text'])['sim']
+        counted = [side[key] for key in ('failed', 'passed', 'unknown', 'notApplicable')]
+        self.assertEqual((side['ruleIds'], counted), (['c3'], [0, 0, 0, found['sim']['assessed']]))
+
     def test_the_first_example_of_a_problem_shows_what_its_title_says(self) -> None:
         def failed(dialogue_id: str, title: str, second: dict | None = None) -> dict:
             row = {'ruleId': 't1r1', 'status': 'FAIL', 'reason': title, 'agentQuote': 'звоните', 'title': title}
