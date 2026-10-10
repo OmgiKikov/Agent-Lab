@@ -1,13 +1,19 @@
 """Select one immutable dataset as the working export; keep each dataset's compatible results and scenarios."""
 
+from collections.abc import Callable
+
 from .. import storage
 from ..domain import accuracy, checks, export
-from . import agent_context, same_work
+from . import agent_context, same_work, sources_content
 
 CONTEXT = (*checks.RESULTS.values(), checks.DECK)
 
 
-def _signatures() -> dict[str, str]:
+def _signatures(signed: Callable[[list[dict]], object] = sources_content) -> dict[str, str]:
+    """What the results of each check kept with a dataset stand on, so they come back with it only while it stands:
+    tone of voice's rules and the revision of their criteria; the agent's code, the rules of Точность in force and the
+    agent's context. The sources are told by their content (signed): rules renamed are the same rules. A Lab before
+    told them by their whole records (_activate)."""
     sources = storage.documents.load('sources.json', []) or []
 
     def is_tone(source: dict) -> bool:
@@ -15,11 +21,11 @@ def _signatures() -> dict[str, str]:
 
     return {
         checks.TONE: same_work(
-            sources=[s for s in sources if is_tone(s)],
+            sources=signed([s for s in sources if is_tone(s)]),
             revision=(storage.documents.load('tone-of-voice-criteria.json') or {}).get('revision'),
         ),
         checks.CODE: same_work(
-            sources=[s for s in sources if not is_tone(s)],
+            sources=signed([s for s in sources if not is_tone(s)]),
             judge=(storage.judges.active('code') or {}).get('criteria'),
             context=agent_context.current(),
         ),
@@ -67,8 +73,10 @@ def _activate(dataset_id: str) -> dict:
     item = storage.datasets.activate(dataset_id)
     context = storage.datasets.context(dataset_id)
     documents = context.get('documents', {})
-    signatures = _signatures()
-    valid = {kind for kind, signature in signatures.items() if context.get('signatures', {}).get(kind) == signature}
+    # Results kept by a Lab that signed the sources by their whole records stand while those records are the same.
+    now, before = _signatures(), _signatures(list)
+    kept = context.get('signatures', {})
+    valid = {kind for kind in checks.RESULTS if kept.get(kind) in (now[kind], before[kind])}
     for kind, name in checks.RESULTS.items():
         storage.documents.save(name, documents.get(name) if kind in valid else None)
     deck = documents.get(checks.DECK)

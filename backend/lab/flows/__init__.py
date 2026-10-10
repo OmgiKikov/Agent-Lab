@@ -20,6 +20,17 @@ def same_work(**parts: Any) -> str:
     return hashlib.sha256(json.dumps(parts, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:32]
 
 
+def sources_content(items: list[dict]) -> list[tuple]:
+    """What the criteria of a check stand on: each source's id, kind and text. Not where it was found nor what it is
+    called: a prompt that moved down a line (`origin` is path:line) or rules saved under another name are the same
+    sources. The id stays: criteria name their source by it (sourceId)."""
+    return [(item.get('id'), item.get('kind'), _text_hash(item)) for item in items]
+
+
+def _text_hash(item: dict) -> str:
+    return item.get('sha256') or hashlib.sha256(str(item.get('content')).encode()).hexdigest()
+
+
 def error_text(error: BaseException) -> str:
     """What went wrong, in the words of the error itself: a task group's errors are told by their own messages, each
     once, never as «unhandled errors in a TaskGroup»."""
