@@ -141,8 +141,8 @@ def judged(snapshot: dict) -> tuple[dict, dict, dict]:
 
 def criteria_fingerprint(criteria: list[dict], source: dict) -> str:
     """What the judge reads of these criteria (for_judging), in whatever order, and the rules they come from."""
-    judged = sorted(map(for_judging, criteria), key=lambda rule: rule['id'])
-    return fingerprint({'source': source['sha256'], 'criteria': judged})
+    read = sorted(map(for_judging, criteria), key=lambda rule: rule['id'])
+    return fingerprint({'source': source['sha256'], 'criteria': read})
 
 
 def compared(saved: dict) -> dict:
@@ -159,6 +159,8 @@ def named(result: dict, criteria: list[dict]) -> dict:
     """A result whose criteria go by the names of these (the ones in force) where the judge reads them the same
     (for_judging): a criterion renamed since the check is the one it judged by, under its new name. A criterion in
     force that reads otherwise is another one, whatever its id: the result keeps the name it was judged under."""
+    if not result.get('topics'):
+        return result
     by_id = {rule['id']: rule for rule in criteria}
 
     def renamed(rule: dict) -> dict:
@@ -167,8 +169,6 @@ def named(result: dict, criteria: list[dict]) -> dict:
             return rule
         return rule | {'name': now['name']}
 
-    if not result.get('topics'):
-        return result
     return result | {'topics': [topic | {'rules': list(map(renamed, topic['rules']))} for topic in result['topics']]}
 
 
