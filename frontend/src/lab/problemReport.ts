@@ -22,10 +22,20 @@ const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 const sentence = (text: string) => (/[.!?…]$/.test(text) ? text : `${text}.`);
 
 /**
- * Markdown's marks in a text a Markdown file quotes, escaped (CommonMark backslash escapes): «[…](…)», «<…>», «#», «|»
- * and «`» stay the characters they are.
+ * Markdown's marks in a text a Markdown file quotes, escaped (CommonMark backslash escapes): «[…](…)», «<…>»,
+ * «**…**», «_…_», «~~…~~», «#», «|» and «`» stay the characters they are. The copy and the plain text read them back
+ * as written (pieces).
  */
-const marks = (text: string) => text.replace(/[\\`[\]<>#|]/g, "\\$&");
+const marks = (text: string) => text.replace(/[\\`*_~[\]<>#|]/g, "\\$&");
+
+/**
+ * A line of a Markdown file that holds someone else's words: its marks escaped, and what would begin a list, a rule or
+ * a heading at its start escaped too, so it stays the line it is.
+ */
+const markdownLine = (line: string) =>
+  marks(line.trim())
+    .replace(/^([-+=])/, "\\$1")
+    .replace(/^(\d+)([.)])/, "$1\\$2");
 
 /**
  * Someone else's text inside a line of a Markdown file (a conversation saved for a ticket): on one line, since its line
@@ -34,19 +44,11 @@ const marks = (text: string) => text.replace(/[\\`[\]<>#|]/g, "\\$&");
  */
 export const inlineText = (text: string) => marks(text.replace(/\s+/g, " ").trim());
 
-/**
- * Someone else's text of several lines as a quote of a Markdown file: every line «> …», with its marks escaped, and
- * what would begin a list, a rule or a heading at its start escaped too, so each line stays a line of the quote.
- */
+/** Someone else's text of several lines as a quote of a Markdown file: every line «> …», escaped (markdownLine). */
 export const quoteText = (text: string) =>
   text
     .split("\n")
-    .map(
-      (line) =>
-        `> ${marks(line.trim())
-          .replace(/^([-+*=_~])/, "\\$1")
-          .replace(/^(\d+)([.)])/, "$1\\$2")}`,
-    )
+    .map((line) => `> ${markdownLine(line)}`)
     .join("\n");
 
 /** «Агент «Агент эквайринга».»: the first line under a report's heading, so a report never goes out about another agent. */
@@ -269,10 +271,12 @@ export function handoffText(r: RuleEntry, link: string, { side, agent }: { side:
 }
 
 /**
- * The problems of one source of a check as a file: its conversations and its simulation are never told together. It
- * names its agent first (agentLine), and the conversations name their dataset, as the tone-of-voice brief does; under
- * their numbers the conversations with an error by an important criterion with whose decision that is (lab/severity,
- * severityText). The problems a person marked important first, then the most frequent.
+ * The problems of one source of a check as a Markdown file: its conversations and its simulation are never told
+ * together. It names its agent first (agentLine), and the conversations name their dataset, as the tone-of-voice brief
+ * does; under their numbers the conversations with an error by an important criterion with whose decision that is
+ * (lab/severity, severityText). The problems a person marked important first, then the most frequent, each told as
+ * every text tells it (problemLines) with the words of others in its lines escaped (markdownLine): a reason's «**…**»
+ * or a reply's «[…](…)» stays words in a Markdown viewer, and the copy reads them back (pieces).
  */
 export function problemsReport(
   data: Problems,
@@ -283,10 +287,10 @@ export function problemsReport(
   const lines = [
     `# ${summarySentence(data, source)}`,
     "",
-    ...(agent ? [agentLine(agent)] : []),
+    ...(agent ? [markdownLine(agentLine(agent))] : []),
     `Проверка «${CHECK_NAME[data.check]}».`,
   ];
-  if (source === "log" && data.log && filename) lines.push(`Датасет ${inQuotes(filename)}.`);
+  if (source === "log" && data.log && filename) lines.push(markdownLine(`Датасет ${inQuotes(filename)}.`));
   if (source === "log" && data.log) {
     lines.push(
       `Разговоры ${day(data.log.finishedAt)}: проверено ${data.log.assessed}\u00a0из\u00a0${count(data.log.sampled, "разговора", "разговоров", "разговоров")}.`,
@@ -311,9 +315,9 @@ export function problemsReport(
   list.forEach((c, i) =>
     lines.push(
       "",
-      `## ${headingOf(c)}`,
+      `## ${markdownLine(headingOf(c))}`,
       "",
-      ...problemLines(c, source, proofs[i], assessed),
+      ...problemLines(c, source, proofs[i], assessed).map(markdownLine),
       "",
       `${base}${problemLink(c.r.id, source === "sim" ? "sim" : data.check, data.sim?.runId)}`,
     ),
@@ -352,23 +356,27 @@ const ownAddress = (href: string, base: string) =>
 /**
  * A line of a report in pieces. «[text](address)» and a bare address become links only when the address is this
  * Lab's own (`base`): the report's own links. Any other address stays the words it is, never a link a customer or the
- * agent could have written; the words of a conversation stay as written, a backslash in them too.
+ * agent could have written, and a mark a Markdown file escaped is its character again (markdownLine, inlineText,
+ * quoteText). The letter and the summary write others' words unescaped: there a backslash before a mark is read the
+ * same way.
  */
 function pieces(line: string, base: string): Piece[] {
   const out: Piece[] = [];
   let words = "";
   let at = 0;
-  for (const m of line.matchAll(/\[([^\]\\]+)\]\((https?:\/\/[^\s)\\]+)\)|(https?:\/\/[^\s<>«»"\\]+)/g)) {
+  for (const m of line.matchAll(
+    /\\([!-/:-@[-`{-~])|\[([^\]\\]+)\]\((https?:\/\/[^\s)\\]+)\)|(https?:\/\/[^\s<>«»"\\]+)/g,
+  )) {
     words += line.slice(at, m.index);
     at = m.index + m[0].length;
-    const href = m[2] ?? m[3];
-    if (!ownAddress(href, base)) {
-      words += m[0];
+    const href = m[3] ?? m[4];
+    if (!href || !ownAddress(href, base)) {
+      words += m[1] ?? m[0];
       continue;
     }
     if (words) out.push({ text: words });
     words = "";
-    out.push({ text: m[1] ?? href, href });
+    out.push({ text: m[2] ?? href, href });
   }
   words += line.slice(at);
   return words ? [...out, { text: words }] : out;
@@ -393,13 +401,16 @@ export function reportHtml(markdown: string, base = shareBase()): string {
   return `<div>${html.join("\n")}</div>`;
 }
 
-/** A line of a report as plain words, without Markdown marks: a link of its own is its words and its address. */
+/**
+ * A line of a report as plain words, without Markdown marks: a link of its own is its words and its address, an
+ * escaped mark its character; anything else stays as written.
+ */
 export const plainLine = (line: string, base = shareBase()) =>
   pieces(line, base)
     .map((p) => (p.href && p.text !== p.href ? `${p.text}: ${p.href}` : p.text))
     .join("");
 
-/** The report as text, without Markdown marks: no «#», «>» or «[…](…)» (plainLine). */
+/** The report as text, without Markdown marks: no «#», «>», «[…](…)» or escapes (plainLine). */
 export function reportText(markdown: string, base = shareBase()): string {
   return blocksOf(markdown)
     .map((b) => (b.kind === "h" ? [b.text] : b.lines).map((line) => plainLine(line, base)).join("\n"))
