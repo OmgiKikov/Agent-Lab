@@ -3,7 +3,7 @@ import { ArrowLeft, ArrowRight, ArrowUpRight, Code2, FileText } from "lucide-rea
 import { cn } from "@/lib/utils";
 import { problemLink, type Check } from "../../app/links";
 import { duty, type Criterion } from "../../lab/criteria";
-import { dialogOf } from "../../lab/dialogs";
+import { dialogOf, topicOf } from "../../lab/dialogs";
 import { askedOf, type Example } from "../../lab/problems";
 import { answeredText, humansOf, humansText, secondOf } from "../../lab/problemStats";
 import { Count } from "../../product/Count";
@@ -19,7 +19,10 @@ import { RuleText } from "./RuleText";
 
 export type Shown = "FAIL" | "PASS" | "UNKNOWN";
 
+/** One verdict of the criterion: how it is backed, where it was said when that says something, and its words. */
 function ExampleRow({ e }: { e: Example }) {
+  // Tone of voice names its one topic as the check itself, which says nothing in the check's own section (topicOf).
+  const place = e.source === "log" ? topicOf({ check: e.check, topic: e.topic }) : `Симуляции · ${e.name ?? ""}`;
   return (
     <li className="py-4">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-small text-fg-3">
@@ -28,8 +31,12 @@ function ExampleRow({ e }: { e: Example }) {
         ) : (
           <span>{e.status === "PASS" ? "без ошибки" : "не удалось проверить"}</span>
         )}
-        <span aria-hidden>·</span>
-        <span className="truncate">{e.source === "log" ? e.topic || "Датасет" : `Симуляции · ${e.name ?? ""}`}</span>
+        {place && (
+          <>
+            <span aria-hidden>·</span>
+            <span className="truncate">{place}</span>
+          </>
+        )}
         <Link to={dialogOf(e)} className="ml-auto inline-flex items-center gap-1 text-fg-2 hover:text-fg">
           разговор
           <ArrowUpRight aria-hidden className="size-3" />
@@ -82,7 +89,11 @@ export function CriterionPanel({
   const s = r[side];
   const second = secondOf(s.examples);
   const humans = humansOf(s);
-  const list = s.examples.filter((e) => e.status === shown);
+  // Under a tab, the verdicts its number counts (Side); the ones in conversations the check could not check as a whole
+  // are said apart.
+  const verdicts = s.examples.filter((e) => e.status === shown);
+  const list = verdicts.filter((e) => e.counted !== false);
+  const apart = verdicts.length - list.length;
   return (
     <aside
       className={cn("min-h-0 overflow-auto border-line bg-side lg:border-l", className)}
@@ -159,8 +170,7 @@ export function CriterionPanel({
         )}
         <div className="mt-6 flex flex-wrap items-center gap-3">
           <Label>Разговоры</Label>
-          {/* The counts are the check's own, as above (lab/problems, Side): a verdict in a conversation the check could
-              not check as a whole is listed, never counted. */}
+          {/* The counts are the check's own, as above (lab/problems, Side), and so are the rows under them. */}
           <Segmented<Shown>
             size="sm"
             label="Какие разговоры"
@@ -185,6 +195,13 @@ export function CriterionPanel({
               : shown === "PASS"
                 ? "Разговоров без ошибки нет."
                 : "Критерий удалось проверить во всех разговорах, где он встречался."}
+          </p>
+        )}
+        {apart > 0 && (
+          <p className="mt-3 text-small text-fg-3">
+            {apart === 1
+              ? "Ещё 1 — в разговоре, который не удалось проверить целиком; в счёт он не входит."
+              : `Ещё ${apart} — в\u00a0разговорах, которые не удалось проверить целиком; в счёт они не входят.`}
           </p>
         )}
       </div>
