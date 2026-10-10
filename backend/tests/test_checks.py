@@ -103,14 +103,16 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
         await self.check_tone(status='PASS')
         state = (await self.client.get('/api/state')).json()
         self.assertNotIn('discover', state)
-        # Each result in brief, its rules by set and version; its verdicts come from GET /api/checks/{check}.
+        # Each result in brief, its rules by set and version; its verdicts come from GET /api/checks/{check}, the kinds
+        # of its errors with the problems: the brief says only how many criteria have them.
         for check, name in (('tone', TONE_RESULT), ('code', CODE_RESULT)):
             stored, brief = storage.documents.load(name), state['checks'][check]
             self.assertEqual(
-                {key: value for key, value in brief.items() if key not in ('summary', 'conversations', 'answers')},
-                {key: value for key, value in stored.items() if key not in ('summary', 'results')}
+                {k: v for k, v in brief.items() if k not in ('summary', 'conversations', 'answers', 'grouped')},
+                {key: value for key, value in stored.items() if key not in ('summary', 'results', 'kinds')}
                 | ({'judge': rules.brief(stored['judge'])} if stored.get('judge') else {}),
             )
+            self.assertEqual(brief['grouped'], len(stored.get('kinds') or {}))
             if stored.get('judge'):
                 self.assertNotIn('policy', brief['judge'])
             self.assertEqual(brief['conversations'], len(stored['results']))

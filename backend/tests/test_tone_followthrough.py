@@ -737,6 +737,74 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(reply.await_count, 1)
 
+    @staticmethod
+    def named(titles: dict[str, str]):
+        """A judge that finds an error by every criterion, named for «pronouns» in each conversation as `titles` say."""
+
+        async def judge(dialogue, topic):
+            found = await judged('FAIL')(dialogue, topic)
+            for row in found['rules']:
+                if row['ruleId'] == 'pronouns':
+                    row['title'] = titles[dialogue['id']]
+            return found
+
+        return judge
+
+    @staticmethod
+    def grouping(word: str, name: str):
+        """The model as roles.kinds asks it: the names with `word` in them are one kind, `name`."""
+
+        async def model(system, payload, **kwargs):
+            numbers = [t['n'] for t in json.loads(payload)['titles'] if word in t['title']]
+            return models.Reply(json.dumps({'kinds': [{'name': name, 'titles': numbers}]}), 'model-a')
+
+        return model
+
+    async def test_a_check_groups_the_names_of_a_criterion_s_errors_by_the_mistake(self):
+        """The judge names one mistake in different words: the check comes with its kinds, the names grouped by the
+        model, which is asked only of a criterion whose errors bear two names or more; the record of the check keeps
+        them, and every rule of the problems carries its criterion's."""
+        await self.upload(self.talk(1), self.talk(2), self.talk(3))
+        titles = {'c1': 'Ставит точку в конце', 'c2': 'Точка в конце ответа', 'c3': 'Пишет «на кнопку»'}
+        model = AsyncMock(side_effect=self.grouping('очк', 'Ставит точку в конце ответа'))
+        with patch.object(models, 'chat', model):
+            await self.start_check(self.named(titles), count=3)
+        self.assertIsNone(self.jobs.state['error'])
+        self.assertEqual(model.await_count, 1)
+        asked = json.loads(model.call_args.args[1])
+        self.assertEqual(asked['criterion']['text'], storage.documents.load(tone.DRAFT)['criteria'][0]['text'])
+        self.assertEqual(sorted(t['title'] for t in asked['titles']), sorted(titles.values()))
+        dots = sorted(['Ставит точку в конце', 'Точка в конце ответа'])
+        result = storage.documents.load(tone.RESULT)
+        self.assertEqual(list(result['kinds']), ['pronouns'])
+        [kind] = result['kinds']['pronouns']
+        self.assertEqual((kind['name'], sorted(kind['titles'])), ('Ставит точку в конце ответа', dots))
+        self.assertEqual(storage.history.get('tone', result['checkId'])['result']['kinds'], result['kinds'])
+        rules = {r['log']['ruleIds'][0]: r for r in (await self.client.get('/api/problems?check=tone')).json()['rules']}
+        self.assertEqual(rules['pronouns']['kinds'], result['kinds']['pronouns'])
+        self.assertEqual(rules['simple_language']['kinds'], [])
+
+    async def test_a_check_the_model_could_not_group_is_published_and_grouped_on_request(self):
+        """The model out of reach while the check groups: the check is published all the same, its errors under their
+        names; «Сгруппировать ошибки» groups them later, kept in the result in force."""
+        await self.upload(self.talk(1), self.talk(2))
+        titles = {'c1': 'Ставит точку в конце', 'c2': 'Точка в конце ответа'}
+        down = AsyncMock(side_effect=models.ModelError('Модель недоступна: ConnectError'))
+        with patch.object(models, 'chat', down):
+            await self.start_check(self.named(titles), count=2)
+        self.assertIsNone(self.jobs.state['error'])
+        result = storage.documents.load(tone.RESULT)
+        self.assertEqual(result['kinds'], {})
+        with patch.object(models, 'chat', AsyncMock(side_effect=self.grouping('очк', 'Ставит точку в конце ответа'))):
+            response = await self.client.post('/api/tone-of-voice/kinds')
+            self.assertEqual(response.status_code, 200, response.text)
+            await self.wait_job()
+        self.assertIsNone(self.jobs.state['error'])
+        grouped = storage.documents.load(tone.RESULT)
+        self.assertEqual([kind['name'] for kind in grouped['kinds']['pronouns']], ['Ставит точку в конце ответа'])
+        self.assertEqual(grouped | {'kinds': {}}, result)
+        self.assertEqual(storage.history.get('tone', result['checkId'])['result']['kinds'], {})
+
     async def test_a_clarification_reads_at_most_ten_cases_the_two_kinds_in_turn(self):
         talks = [self.talk(n) for n in range(1, 15)]
         await self.upload(*talks)

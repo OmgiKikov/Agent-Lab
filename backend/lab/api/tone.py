@@ -129,6 +129,17 @@ async def check_tone(jobs: Jobs, payload: ToneCheckCommand) -> dict:
     return work.start(jobs, 'tone-check', given)
 
 
+@router.post('/api/tone-of-voice/kinds')
+async def group_tone_kinds(jobs: Jobs) -> dict:
+    """«Сгруппировать ошибки»: the model groups the errors of each criterion of the current result by the mistake
+    (flows.kinds), for a result checked before checks grouped them; refused before it starts without models."""
+    try:
+        models.ensure_set_up()
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+    return work.start(jobs, 'tone-kinds', {})
+
+
 @router.get('/api/tone-of-voice/history')
 def tone_history() -> dict:
     result = storage.documents.load(tone.RESULT) or {}

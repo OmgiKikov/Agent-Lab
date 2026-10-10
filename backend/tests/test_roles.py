@@ -10,7 +10,7 @@ import httpx
 import support
 
 from lab import models, roles, storage
-from lab.roles import advice, customer, judge, planner, scenario, severity, tone, world
+from lab.roles import advice, customer, judge, kinds, planner, scenario, severity, tone, world
 
 Client = httpx.AsyncClient
 POLICY = {'id': 'tone-of-voice', 'content': 'Обращайтесь к клиенту на вы и отвечайте вежливо.'}
@@ -150,6 +150,20 @@ class EachRoleTests(RoleCase):
         )
         self.assertEqual(answer.value['text'], 'Пожалуйста, оплатите 100 рублей до 5 октября.')
 
+    async def test_kinds_take_every_name_once(self):
+        """A name in two kinds, or a number no name has, is no grouping: asked again; the names come back as words."""
+        names = [('Ставит точку в конце', 3), ('Точка в конце ответа', 2), ('Пишет «на кнопку»', 1)]
+        answer = await self.asked(
+            kinds.KINDS,
+            lambda: kinds.grouped({'name': 'Типографика', 'text': 'Без точки в конце.'}, names),
+            {'kinds': [{'name': 'Точка в конце', 'titles': [1, 2]}, {'name': 'Кнопка', 'titles': [2, 4]}]},
+            {'kinds': [{'name': ' Ставит точку в конце ответа ', 'titles': [2, 1]}]},
+        )
+        self.assertEqual(
+            answer.value,
+            [{'name': 'Ставит точку в конце ответа', 'titles': ['Точка в конце ответа', 'Ставит точку в конце']}],
+        )
+
     async def test_the_customer_answers_in_words_once(self):
         client, requests = answering(' «Какой у меня тариф?» ', '"Какой тариф?"')
         with client, models.about('run:test'):
@@ -249,9 +263,10 @@ class VersionTests(unittest.TestCase):
             customer.OPENING,
             advice.ADVICE,
             advice.CLARIFY,
+            kinds.KINDS,
         ]
-        self.assertEqual(len({role.name for role in every}), 12)
-        self.assertEqual(len({role.version for role in every}), 12)
+        self.assertEqual(len({role.name for role in every}), 13)
+        self.assertEqual(len({role.version for role in every}), 13)
         self.assertTrue(all(role.instructions.strip() and not role.instructions.endswith('\n') for role in every))
 
 

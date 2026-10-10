@@ -15,7 +15,7 @@ from ..domain import answers, checks, quotes, results, tone
 from ..domain.comparison import dataset_fingerprint
 from ..roles import tone as role
 from ..storage import registry
-from . import Progress, conversations, inputs, provenance, same_work, severity
+from . import Progress, conversations, inputs, kinds, provenance, same_work, severity
 from .checks import current
 
 DRAFT = inputs.TONE_DRAFT  # the criteria of the current rules, with their revision
@@ -309,7 +309,7 @@ async def _assess(check_id: str, criteria: list[dict], count: int, progress: Pro
     if previous.get('criteriaRevision') == draft['revision']:
         results.carry_reviews(previous, judged)
     carry_decisions(judged, criteria, dialogues)
-    return {
+    result = {
         'purpose': tone.KIND,
         'checkId': check_id,
         'criteriaRevision': draft['revision'],
@@ -330,6 +330,9 @@ async def _assess(check_id: str, criteria: list[dict], count: int, progress: Pro
         ],
         'summary': results.summarize(judged, [topic], len(dialogues)),
     }
+    # The kinds of each criterion's errors come with the result (flows.kinds): «Итог» says what is most frequent by the
+    # mistake, not by its wording. A criterion the model could not group is left without them, to be grouped later.
+    return result | {'kinds': await kinds.grouped(result, progress)}
 
 
 def commit(result: dict) -> None:

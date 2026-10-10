@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from fastapi import HTTPException
 
 from .. import storage
-from ..flows import accuracy, inputs, launches, scenarios, severity, simulation, tone
+from ..flows import accuracy, inputs, kinds, launches, scenarios, severity, simulation, tone
 from ..jobs import BusyError, PerAgent, Work, view
 
 
@@ -58,6 +58,7 @@ KINDS: dict[str, Kind] = {
     'severity': Kind(
         lambda given: lambda progress: severity.propose_again(given['check'], progress, again=given['again'])
     ),
+    'tone-kinds': Kind(lambda given: kinds.regroup),
 }
 # What a Lab taking up the tasks a process before it left running needs (jobs.recover).
 RESUME: dict[str, Callable[[dict], Work]] = {name: kind.work for name, kind in KINDS.items()}

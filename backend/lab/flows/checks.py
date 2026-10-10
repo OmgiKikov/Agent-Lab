@@ -42,13 +42,16 @@ def head(check: str) -> dict | None:
     if not result:
         return None
     summary = {key: value for key, value in _counted(result).items() if key != 'patterns'}
-    brief = {key: value for key, value in result.items() if key != 'results'}
+    brief = {key: value for key, value in result.items() if key not in ('results', 'kinds')}
     if brief.get('judge'):  # the rules by their set and version: their text stays in the result
         brief['judge'] = judges.brief(brief['judge'])
     return brief | {
         'summary': summary,
         'conversations': len(result.get('results') or []),
         'answers': answers.counts(result),
+        # How many criteria have their errors grouped by kind (flows.kinds): the problems change when it does, and
+        # the kinds themselves come with them.
+        'grouped': len(result.get('kinds') or {}),
     }
 
 
@@ -87,7 +90,8 @@ def problems(check: str, run_id: str | None = None) -> dict:
     marks = storage.severity.marks()[check]
     proposed = storage.severity.proposed()[check]
     book = problem_book.Book(inputs.sources())
-    log = problem_book.from_logs(book, current(check) or {}, serious)
+    result = current(check) or {}
+    log = problem_book.from_logs(book, result, serious)
     run = chosen_run(check, run_id)
     sim = problem_book.from_run(book, run, deck, agents.run_name(run) if run else '')
     built = deck if document.get('check') == check else []
@@ -102,6 +106,10 @@ def problems(check: str, run_id: str | None = None) -> dict:
             r['rule']['text'],
         )
     )
+    # The kinds the model grouped each criterion's errors into, as the result of tone of voice keeps them (flows.kinds).
+    kinds = result.get('kinds') or {}
+    for rule in rules:
+        rule['kinds'] = next((kinds[i] for i in rule['log']['ruleIds'] if i in kinds), [])
     # The criteria of the result: the model proposes for these and «Подтвердить все» confirms them; one only a run has
     # is listed, but nobody proposes for it.
     by = [rule['severity']['by'] for rule in rules if rule['log']['ruleIds']]
