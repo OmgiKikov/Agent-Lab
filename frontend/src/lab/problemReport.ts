@@ -2,11 +2,11 @@ import { AGENT, shareBase } from "../app/agent";
 import { problemLink } from "../app/links";
 import { useAgents } from "./agents";
 import { CHECK_NAME } from "./checks";
-import { commonText, commonTitle, criterionName, type Criterion } from "./criteria";
+import { commonText, commonTitle, criterionName, kindsOf, otherKinds, type Criterion } from "./criteria";
 import { count, day, pct } from "./format";
 import { misreadForPeople, misreadOf } from "./problemStats";
 import { askedOf, importantByPerson, type Example, type Problems, type RuleEntry, type Side } from "./problems";
-import { clip, inQuotes, MASKS, ruleLines, showsMasks } from "./quote";
+import { clip, inQuotes, MASKS, oneLine, ruleLines, showsMasks } from "./quote";
 import { seriousFirst, severityText } from "./severity";
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -196,6 +196,17 @@ function misreadLine(s: Side): string | null {
   return misread && misreadForPeople(misread);
 }
 
+/**
+ * «Какие это ошибки:» with every kind of the criterion's errors and how many errors it holds, the most first, then how
+ * many are of none (lab/criteria, kindsOf); nothing before the model grouped them.
+ */
+function kindLines(c: Criterion, side: Source): string[] {
+  const kinds = kindsOf(c, side);
+  if (!kinds.length) return [];
+  const rest = otherKinds(kinds, errorsOf(c.r[side]).length);
+  return ["Какие это ошибки:", ...kinds.map((k) => `• ${oneLine(k.name)} — ${k.count}`), ...(rest ? [`${rest}.`] : [])];
+}
+
 /** The same words, whatever the headings, the codes, the marks and the spaces between them. */
 const wordsOf = (text: string) =>
   ruleLines(text)
@@ -248,13 +259,22 @@ function exampleLines(e: Example): string[] {
  * the agent must do as points, and one error (`proof`). Blocks are parted by an empty line; no line begins with a mark
  * of Markdown, so the text reads the same as plain text and as Markdown.
  */
-export function problemLines(c: Criterion, side: Source, proof: Example | undefined, assessed?: number): string[] {
+export function problemLines(
+  c: Criterion,
+  side: Source,
+  proof: Example | undefined,
+  assessed?: number,
+  { kinds = false }: { kinds?: boolean } = {},
+): string[] {
   const s = c.r[side];
   const duty = dutyLines(c.r);
+  // Every kind of its errors, for the one who fixes them (kindLines); then the most frequent needs no line of its own.
+  const sorts = kinds ? kindLines(c, side) : [];
   return [
-    ...[commonLine(c, side), errorsLine(s), restLine(s, assessed), misreadLine(s)].filter(
+    ...[sorts.length ? null : commonLine(c, side), errorsLine(s), restLine(s, assessed), misreadLine(s)].filter(
       (line): line is string => !!line,
     ),
+    ...(sorts.length ? ["", ...sorts] : []),
     ...(duty.length ? ["", ...duty] : []),
     ...(proof ? ["", ...exampleLines(proof)] : []),
   ];
@@ -272,7 +292,7 @@ export function handoffText(r: RuleEntry, link: string, { side, agent }: { side:
     headingOf(c),
     "",
     ...(agent ? [agentLine(agent)] : []),
-    ...problemLines(c, side, proof),
+    ...problemLines(c, side, proof, undefined, { kinds: true }),
     ...(proof && masked([quotedOf(proof)]) ? [masksLine(1)] : []),
     "",
     `Проблема в Agent Lab: ${link}`,

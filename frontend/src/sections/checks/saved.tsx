@@ -236,6 +236,8 @@ function savedCriteria(saved: Saved, check: Check): Criterion[] {
         disagree: answered.filter((e) => e.review === "disagree").length,
       },
       scenarioIds: [],
+      // The kinds of its errors, when the check grouped them (lab/criteria, kindsOf).
+      kinds: side.ruleIds.map((id) => saved.result.kinds?.[id]).find(Boolean),
     } satisfies RuleEntry;
     return { r, n: i + 1, name: criterion.name, every: false, topics: [] };
   });

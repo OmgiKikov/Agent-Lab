@@ -24,8 +24,9 @@ import {
 } from "../../app/links";
 import { CHECK_NAME } from "../../lab/checks";
 import { dialogOf } from "../../lab/dialogs";
-import { commonText, commonTitle, useCriteria } from "../../lab/criteria";
+import { commonText, commonTitle, kindsOf, ofKind, useCriteria } from "../../lab/criteria";
 import { Duty } from "../../product/Duty";
+import { inQuotes } from "../../lab/quote";
 import { longDay, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { answersWait, useReview, type Decision, type Example } from "../../lab/problems";
@@ -44,6 +45,7 @@ import { NoSuchRun, useSimRuns } from "../simulations/stage";
 import { Advice } from "../tone/Advice";
 import { Clarify } from "../tone/Clarify";
 import { Handoff } from "./Handoff";
+import { GroupKinds, KindList } from "./Kinds";
 import { Reproduce } from "./Reproduce";
 import { checked, restText, violationsOf } from "./model";
 import { shareBase } from "../../app/agent";
@@ -86,12 +88,15 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
   const runId = stage === "sim" ? (data?.sim?.runId ?? null) : null;
 
   const fresh = useMemo(() => (c ? violationsOf(c, here) : []), [c, here]);
+  // The kinds of its errors, once the model grouped them; the one chosen in the address shows only its examples.
+  const kinds = useMemo(() => (c ? kindsOf(c, here) : []), [c, here]);
+  const kind = kinds.find((k) => k.name === params.get("k")) ?? null;
   // The order of the examples when the page opened: an answer makes the service sort them again, the page keeps it.
   const [order, setOrder] = useState<string[]>([]);
   useEffect(() => {
     if (!order.length && fresh.length) setOrder(fresh.map(exampleKey));
   }, [order.length, fresh]);
-  const examples = useMemo(() => inOrder(fresh, order), [fresh, order]);
+  const examples = useMemo(() => ofKind(inOrder(fresh, order), kind), [fresh, order, kind]);
   const toneDraft = state?.toneOfVoice ?? null;
   const toneResult = state?.checks.tone ?? null;
   // A criterion is clarified, and asked how to answer, on the result judged by the criteria in force: one judged by
@@ -115,6 +120,18 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
       (prev) => {
         const p = new URLSearchParams(prev);
         p.set("e", conversationKey(e));
+        return p;
+      },
+      { replace: true },
+    );
+  /** A kind of the errors chosen, its examples from the first one; null, every error again. */
+  const choose = (name: string | null) =>
+    setParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        if (name) p.set("k", name);
+        else p.delete("k");
+        p.delete("e");
         return p;
       },
       { replace: true },
@@ -240,6 +257,9 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
   const asChecked = toneNow && toneReadAsChecked(state, s.ruleIds[0]);
   const clarifiedSince = toneNow && !asChecked;
   const rest = restText(s, (here === "log" ? data.log?.assessed : data.sim?.assessed) ?? 0);
+  // The errors of the result in force bear names the model has not grouped yet: it can be asked to (flows/kinds).
+  const groupable =
+    stage === "tone" && !kinds.length && new Set(fresh.map((e) => e.title?.trim()).filter(Boolean)).size > 1;
   const run = stage === "sim" ? state?.runs.find((x) => x.id === runId) : undefined;
   const link = `${shareBase()}${problemLink(r.id, stage, runId)}`;
   const { condition, acceptable, quote, origin } = r.rule;
@@ -258,7 +278,8 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
               : `Проблема в разговорах · ${CHECK_NAME[stage]}`}
           </p>
           <h2 className="mt-1 text-balance text-page font-semibold text-fg">{c.name}</h2>
-          {common && <p className="mt-2 max-w-[68ch] text-read text-fg-2">{commonText(common)}</p>}
+          {/* The kinds of its errors say what is most frequent below, in full; without them, one line here. */}
+          {common && !kinds.length && <p className="mt-2 max-w-[68ch] text-read text-fg-2">{commonText(common)}</p>}
           <Duty key={r.id} text={r.rule.text} className="mt-4 max-w-[68ch] text-lead text-fg-2" />
           {(condition || acceptable) && !more && (
             <button
@@ -284,6 +305,17 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
                 </div>
               )}
             </dl>
+          )}
+          {kinds.length > 0 ? (
+            <KindList
+              kinds={kinds}
+              of={fresh.length}
+              chosen={kind?.name ?? null}
+              onChoose={choose}
+              className="mt-6 max-w-[68ch]"
+            />
+          ) : (
+            groupable && <GroupKinds className="mt-6 max-w-[68ch]" />
           )}
           {/* The decision belongs to the criterion of the check, the same from its run's problem. */}
           {check && <SeverityControl check={check} rule={r} className="mt-5 max-w-[68ch]" />}
@@ -394,6 +426,18 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
                 onClick={() => go(at + 1)}
               />
             </div>
+            {kind && (
+              <p className="mt-2 text-read text-fg-2">
+                Только {inQuotes(kind.name)} ·{" "}
+                <button
+                  type="button"
+                  onClick={() => choose(null)}
+                  className="rounded-sm font-medium text-run hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
+                >
+                  Все ошибки
+                </button>
+              </p>
+            )}
             {/* The case an address names is not among the examples now: another one is shown, and that is said. */}
             {lostExample && example && (
               <p role="status" className="mt-3 text-read text-fg-3">

@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { plural } from "./format";
+import { count, plural } from "./format";
 import { useLabState } from "./LabProvider";
 import { useProblems, type Problems, type RuleEntry } from "./problems";
 import { inQuotes } from "./quote";
@@ -46,18 +46,49 @@ export function duty(text: string) {
 /** The name a criterion and its problem go by on every screen and in every report. */
 export const criterionName = (r: RuleEntry) => r.rule.name?.trim() || nameFromText(r.rule.text);
 
+/** One kind of a criterion's errors with the errors it holds, by the judge's names of them (lab/problems, ErrorKind). */
+export type Kind = { name: string; count: number; titles: Set<string> };
+
 /**
- * What the model most often wrote about a criterion's errors on one side, as a line under the criterion's name:
- * «Чаще всего: «…» — 12 из 57 ошибок». The problem is the whole criterion; its most frequent short verdict title is one
- * kind of its errors, so it is shown only when it names at least two of them and says more than the name itself.
+ * The kinds of a criterion's errors in the conversations, the one holding the most errors first, each with how many
+ * of the errors shown it holds; none before the model grouped them, and none in a simulation, which it does not group.
+ */
+export function kindsOf(c: Criterion, side: "log" | "sim" = "log"): Kind[] {
+  if (side !== "log") return [];
+  const fails = c.r.log.examples.filter((e) => e.status === "FAIL");
+  return (c.r.kinds ?? [])
+    .map(({ name, titles }) => {
+      const named = new Set(titles);
+      return { name, titles: named, count: fails.filter((e) => named.has(e.title?.trim() ?? "")).length };
+    })
+    .filter((k) => k.count > 0)
+    .sort((a, b) => b.count - a.count);
+}
+
+/** «Ещё 54 ошибки других видов»: how many of `of` errors are of none of the kinds; null when every one is. */
+export function otherKinds(kinds: Kind[], of: number): string | null {
+  const other = of - kinds.reduce((sum, k) => sum + k.count, 0);
+  return other > 0 ? `Ещё ${count(other, "ошибка другого вида", "ошибки других видов", "ошибок других видов")}` : null;
+}
+
+/** The errors of a criterion's kind, or every error when no kind is chosen. */
+export const ofKind = <E extends { title?: string }>(examples: E[], kind: Kind | null) =>
+  kind ? examples.filter((e) => kind.titles.has(e.title?.trim() ?? "")) : examples;
+
+/**
+ * What is most frequent among a criterion's errors on one side, as a line under the criterion's name: «Чаще всего:
+ * «…» — 12 из 57 ошибок». The kind holding the most errors once the model grouped them (kindsOf), so a mistake counts
+ * whatever words the judge named it in; else the judge's most frequent name of them. Shown only when it holds at
+ * least two errors and says more than the criterion's name: the problem is the whole criterion.
  */
 export function commonTitle(
   c: Criterion,
   side: "log" | "sim" = "log",
 ): { title: string; count: number; of: number } | null {
   const fails = c.r[side].examples.filter((e) => e.status === "FAIL");
-  const title = c.r.title.trim();
-  const count = fails.filter((e) => e.title?.trim() === title).length;
+  const kind = kindsOf(c, side)[0];
+  const title = kind ? kind.name : c.r.title.trim();
+  const count = kind ? kind.count : fails.filter((e) => e.title?.trim() === title).length;
   if (count < 2 || quoteKey(title) === quoteKey(c.name) || quoteKey(title) === quoteKey(c.r.rule.text)) return null;
   return { title, count, of: fails.length };
 }

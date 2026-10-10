@@ -153,6 +153,11 @@ export type Models = {
 /** What one try of a connection or a model answered. */
 export type Probe = { ok: boolean; error?: string; status?: string; text?: string; seconds?: number; version?: string };
 export type Topic = { id: string; title: string; rules: Criterion[] };
+/**
+ * One kind of a criterion's errors: the judge names every error in its own words, the model grouped the names that
+ * name one mistake (backend flows/kinds) under the kind's name.
+ */
+export type ErrorKind = { name: string; titles: string[] };
 export type Discover = {
   checkId?: string;
   criteriaFingerprint?: string;
@@ -168,6 +173,8 @@ export type Discover = {
   sources?: Source[];
   topics: Topic[];
   results: LogResult[];
+  /** Tone of voice: the kinds of each criterion's errors, by criterion id, once the model grouped them. */
+  kinds?: Record<string, ErrorKind[]>;
   summary: {
     measured: number;
     checked: number;
@@ -243,10 +250,15 @@ export type Answers = {
  * the recurring errors, with how many conversations it judged and its count with people's answers. The verdicts come
  * from the result itself (lab/checks, useResult).
  */
-export type ResultBrief = ResultHead & { conversations: number; answers: Answers };
+export type ResultBrief = ResultHead & {
+  conversations: number;
+  answers: Answers;
+  /** How many criteria have their errors grouped by kind: the kinds come with the problems (/api/problems). */
+  grouped?: number;
+};
 
-/** What a result and its brief share: everything but the verdicts on the conversations. */
-export type ResultHead = Omit<Discover, "results">;
+/** What a result and its brief share: everything but the verdicts on the conversations and the kinds of errors. */
+export type ResultHead = Omit<Discover, "results" | "kinds">;
 
 export type LabState = {
   toneOfVoice?: ToneDraft | null;

@@ -3,7 +3,7 @@ import { useLabState } from "./LabProvider";
 import { useToast } from "../ui/toast";
 import { api } from "./api";
 import { JOB_OF } from "./checks";
-import type { Check, LabRun, LabState, Turn } from "./types";
+import type { Check, ErrorKind, LabRun, LabState, Turn } from "./types";
 
 /** The service's record of rules and problems (backend/lab/flows/checks.py, problems; spec, section 8). */
 export type Decision = "agree" | "disagree";
@@ -94,6 +94,8 @@ export type RuleEntry = {
   secondJudge: { checked: number; agree: number; byDialogue: number };
   human: { agree: number; disagree: number };
   scenarioIds: string[];
+  /** The kinds of its errors in the conversations, once the model grouped them; none before (lab/criteria, kindsOf). */
+  kinds?: ErrorKind[];
 };
 
 /** The customer's words shown beside a quoted reply: the ones it answered, else the conversation's first message. */
@@ -160,7 +162,8 @@ export function problemsStamp(state: LabState | null): string {
   if (!state) return "";
   const runs = state.runs.map((r) => `${r.id}:${r.status}:${r.finishedAt ?? ""}:${r.revision ?? ""}`).join(",");
   const sources = state.sources.map((s) => `${s.id}:${s.sha256 ?? ""}`).join(",");
-  const results = `${state.checks.tone?.finishedAt ?? ""}|${state.checks.code?.finishedAt ?? ""}`;
+  // A result grouped by kind of error since (flows/kinds) changes its problems as a new result does.
+  const results = `${state.checks.tone?.finishedAt ?? ""}:${state.checks.tone?.grouped ?? ""}|${state.checks.code?.finishedAt ?? ""}`;
   return `${state.logs.updatedAt ?? ""}|${results}|${state.cards?.createdAt ?? ""}|${sources}|${runs}|${state.job.running}|${severityStamp(state)}|${state.reviewsStamp ?? ""}`;
 }
 
