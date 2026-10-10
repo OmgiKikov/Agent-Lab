@@ -2,11 +2,13 @@ import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import type { Criterion, Loading } from "../../lab/criteria";
 import { count } from "../../lab/format";
+import { askedOf } from "../../lab/problems";
+import { MASKS, showsMasks } from "../../lab/quote";
 import { criterionLink, problemLink, side, type Stage } from "../../app/links";
 import { ENTER, stagger } from "../../product/motion";
 import { Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
-import { queueOf } from "./model";
+import { queueOf, violationsOf } from "./model";
 import { ProblemRow } from "./ProblemRow";
 
 /**
@@ -41,6 +43,11 @@ export function ProblemList({
   const rows = queueOf(list, where);
   const shown = limit ? rows.slice(0, limit) : rows;
   const clean = list.filter((c) => c.r[where].passed > 0 && !c.r[where].failed).length;
+  // The words a row quotes, the customer's and the agent's (ProblemRow), may show the export's masks: said once.
+  const masked = shown.some((c) => {
+    const e = violationsOf(c, where)[0];
+    return !!e && (showsMasks(askedOf(e), true) || showsMasks(e.agentQuote, false));
+  });
   if (!rows.length)
     return (
       <p className="py-6 text-read text-fg-3">
@@ -54,6 +61,7 @@ export function ProblemList({
     <>
       {/* «6 из 52» next to «53 проверенных разговоров» read as a slip: what the second number counts is said once. */}
       <p className="pt-2 text-small text-fg-3">Второе число — в скольких проверенных разговорах критерий применим.</p>
+      {masked && <p className="text-small text-fg-3">{MASKS}</p>}
       <ol className="divide-y divide-line">
         {shown.map((c, i) => (
           <li key={c.r.id} className={ENTER} style={stagger(i + 2)}>
