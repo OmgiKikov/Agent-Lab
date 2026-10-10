@@ -45,7 +45,9 @@ import { Button, buttonClass } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { useToast } from "../../ui/toast";
 import { useComparison } from "../checks/Compare";
+import { fileName } from "../checks/origin";
 import { RuleText } from "../criteria/RuleText";
+import { shownName } from "../data/DatasetInfo";
 import { queueOf } from "../problems/model";
 
 /**
@@ -142,8 +144,10 @@ export function SummaryPage() {
     })),
   });
   const dialogueOf = (e: Example) => dialogues[examples.indexOf(e)]?.data;
-  // The dataset by its name; its file only while the list of datasets is not at hand.
-  const dataset = datasets.data?.datasets.find((d) => d.id === state?.logs.datasetId)?.name ?? state?.logs.file;
+  // The dataset as every screen calls it (data/DatasetInfo, shownName); while the list of datasets is not at hand, its
+  // file without the extension (checks/origin, fileName).
+  const inUse = datasets.data?.datasets.find((d) => d.id === state?.logs.datasetId);
+  const dataset = inUse ? shownName(inUse) : state?.logs.file ? fileName(state.logs.file) : null;
 
   const toggle = (check: Check, id: string) => {
     const ids = [...ticked[check]];
@@ -156,7 +160,7 @@ export function SummaryPage() {
     ? {
         // Told only once the name is at hand (`ready`): the page waits for it, never shows another.
         agent: agent.name ?? "",
-        dataset: dataset ?? null,
+        dataset,
         days: [...new Set(checks.map((c) => fullDay(resultOf(state, c)!.finishedAt)))],
         madeAt: new Date().toISOString(),
         checks: checks.map((check): SummaryCheck => {
