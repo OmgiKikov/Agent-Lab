@@ -23,6 +23,7 @@ import { useDatasets } from "../../lab/datasets";
 import { count, longDay } from "../../lab/format";
 import { useJudges } from "../../lab/judges";
 import { useLabState } from "../../lab/LabProvider";
+import { inQuotes } from "../../lab/quote";
 import { isRunning } from "../../lab/runs";
 import { seriousOf } from "../../lab/severity";
 import { codeSources } from "../../lab/tone";
@@ -126,7 +127,7 @@ function useCheckModel(check: Check, state: LabState | null): Model | null {
   const rules = judges.data?.versions.find((v) => v.id === judges.data?.selectedId);
   const code = check === "code" && codeSources(state).length > 0;
   const ready = rules?.criteria.length
-    ? `${count(rules.criteria.length, "критерий", "критерия", "критериев")} из правил «${rules.name}» готовы.`
+    ? `${count(rules.criteria.length, "критерий", "критерия", "критериев")} из правил ${inQuotes(rules.name)} готовы.`
     : code
       ? "Критерии соберутся из кода агента при первой проверке."
       : null;
@@ -303,7 +304,7 @@ function DatasetLine() {
       className="group mt-6 inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 rounded-control text-read text-fg-3 transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
     >
       <Database aria-hidden className="size-4 shrink-0" />
-      <span className="min-w-0 break-words font-medium text-fg">«{shownName(d)}»</span>
+      <span className="min-w-0 break-words font-medium text-fg">{inQuotes(shownName(d))}</span>
       <span>· {count(d.total, "разговор", "разговора", "разговоров")}</span>
       <span>· загружен {longDay(d.createdAt)}</span>
       <ArrowRight aria-hidden className="size-4 shrink-0 transition-transform group-hover:translate-x-0.5" />

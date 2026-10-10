@@ -11,6 +11,7 @@ import { useDatasets, type Dataset } from "../../lab/datasets";
 import { count, longDay, pct, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { useLaunches, type Launch } from "../../lab/launches";
+import { inQuotes } from "../../lab/quote";
 import type { LabState } from "../../lab/types";
 import { ExportFormat } from "../../product/ExportFormat";
 import { UploadButton } from "../../product/UploadLogs";
@@ -162,7 +163,7 @@ export function DataPage() {
   const choose = (d: Dataset) =>
     library
       .change("select", d.id)
-      .then(() => toast.notify(`Для проверки выбран датасет «${shownName(d)}»`))
+      .then(() => toast.notify(`Для проверки выбран датасет ${inQuotes(shownName(d))}`))
       .catch(toast.error);
 
   const all = library.data?.datasets ?? [];
@@ -400,7 +401,7 @@ function DatasetPage({
   const archivedNow = (gone: Dataset, wasInWork: boolean) => {
     setInfo(false);
     void navigate(SECTIONS.data);
-    toast.notify(`«${shownName(gone)}» в архиве`, {
+    toast.notify(`Датасет ${inQuotes(shownName(gone))} в архиве`, {
       label: "Вернуть",
       run: () =>
         void (async () => {

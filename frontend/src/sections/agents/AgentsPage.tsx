@@ -6,6 +6,7 @@ import { agentHref, forgetAgent } from "../../app/agent";
 import { Mark } from "../../app/Mark";
 import { deleteAgent, useAgents, type Agent } from "../../lab/agents";
 import { CHECK_NAME, CHECKS } from "../../lab/checks";
+import { inQuotes } from "../../lab/quote";
 import { Button } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { Modal } from "../../ui/Modal";
@@ -51,7 +52,7 @@ function AgentCard({ agent, onDelete }: { agent: Agent; onDelete: () => void }) 
       <button
         type="button"
         onClick={onDelete}
-        aria-label={`Удалить агента «${agent.name}»`}
+        aria-label={`Удалить агента ${inQuotes(agent.name)}`}
         title="Удалить агента"
         className="absolute right-3 top-3 inline-flex size-8 items-center justify-center rounded-control text-fg-3 opacity-0 transition hover:bg-hover hover:text-fg focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
       >
@@ -93,7 +94,7 @@ function DeleteAgent({ agent, onClose }: { agent: Agent | null; onClose: () => v
     <Modal
       open={!!agent}
       onClose={close}
-      title={`Удалить агента «${agent?.name ?? ""}»?`}
+      title={`Удалить агента ${inQuotes(agent?.name ?? "")}?`}
       footer={
         <>
           <Button onClick={close} disabled={busy}>
@@ -156,7 +157,7 @@ export function AgentsPage() {
         </p>
         {unknown && (
           <p role="status" className="mt-6 max-w-[64ch] rounded-block bg-inset px-4 py-3 text-read text-fg-2">
-            Агент «{unknown}» не найден.{data?.length ? " Откройте агента из списка." : ""}
+            Агент {inQuotes(unknown)} не найден.{data?.length ? " Откройте агента из списка." : ""}
           </p>
         )}
         {error ? (
