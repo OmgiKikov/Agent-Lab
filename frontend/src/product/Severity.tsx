@@ -1,10 +1,13 @@
+import { Link } from "react-router-dom";
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { criterionLink } from "../app/links";
 import { JOB_OF } from "../lab/checks";
 import { useLabState } from "../lab/LabProvider";
-import type { Problems, RuleEntry } from "../lab/problems";
+import { importantByPerson, type Problems, type RuleEntry } from "../lab/problems";
 import {
   hintOf,
+  importantWord,
   PROPOSING,
   proposalCheck,
   reasonText,
@@ -13,6 +16,7 @@ import {
   useProposeSeverity,
   useSeverity,
   useSeverityBusy,
+  type Serious,
 } from "../lab/severity";
 import type { Check } from "../lab/types";
 import { Switch } from "../ui/Switch";
@@ -24,37 +28,57 @@ const ACTION =
 
 /** What an important criterion is, and what marking one changes: said beside the switch and the tag. */
 export const IMPORTANT =
-  "Важный критерий — одно его нарушение может навредить клиенту или банку. Такие проблемы идут первыми, а «Итог» отдельно считает разговоры, где нарушен важный критерий.";
+  "Важный критерий — одно его нарушение может навредить клиенту или банку. Отмеченные вами идут первыми, а «Итог» отдельно считает разговоры, где нарушен важный критерий.";
 
 /**
- * «важный» beside the problem of an important criterion: a quiet red word in the colour of errors, never a badge that
- * shouts. It says whose decision it is: the model's, which no person has checked yet, with its reason, or the person's.
- * On the paper of a report (`paper`) in the ink of the paper.
+ * The word beside the problem of an important criterion (lab/severity, importantWord): «важный», a quiet red word in
+ * the colour of errors when a person marked it, never a badge that shouts; «важный по мнению модели», grey and dashed,
+ * while it is the model's proposal no person has checked yet, with its reason. On the paper of a report (`paper`) in
+ * the ink of the paper.
  */
 export function SeriousTag({
   rule,
   paper,
   className,
 }: {
-  rule?: Pick<RuleEntry, "severity">;
+  rule: Pick<RuleEntry, "serious" | "severity">;
   paper?: boolean;
   className?: string;
 }) {
-  const proposed = rule?.severity.by === "model" ? rule.severity.proposed : null;
+  const word = importantWord(rule);
+  if (!word) return null;
+  if (!importantByPerson(rule)) {
+    const reason = rule.severity.proposed?.reason;
+    return (
+      <Tag
+        title={`Так считает модель.${reason ? ` ${reasonText(reason)}` : ""} Вы ещё не проверили.`}
+        className={cn("border-dashed", paper && "border-ink-line text-ink-2", className)}
+      >
+        {word}
+      </Tag>
+    );
+  }
   return (
     <Tag
       tone="bad"
-      title={
-        proposed
-          ? `Важный критерий, так считает модель. ${reasonText(proposed.reason)} Вы ещё не проверили.`
-          : rule?.severity.by === "person"
-            ? `Отметили вы. ${IMPORTANT}`
-            : IMPORTANT
-      }
+      title={`Отметили вы. ${IMPORTANT}`}
       className={cn(paper && "border-ink-bad/35 text-ink-bad", className)}
     >
-      важный
+      {word}
     </Tag>
+  );
+}
+
+/**
+ * «важные предложила модель», after the count of the conversations with an important criterion broken: that count
+ * rests on the model's proposals, wholly or in part, until a person confirms or changes them on «Критерии», where it
+ * leads. Shown only for a count that rests on a proposal (`serious.proposed`).
+ */
+export function ProposedImportant({ check, serious }: { check: Check; serious: Serious }) {
+  return (
+    <Link to={criterionLink(check)} className="whitespace-nowrap rounded-sm font-medium text-run hover:underline">
+      {serious.proposed < serious.marked ? "часть важных предложила модель" : "важные предложила модель"}
+    </Link>
   );
 }
 
@@ -91,9 +115,9 @@ export function SeveritySwitch({
 }
 
 /**
- * The line under a criterion's switch: whose decision it is. The model's, with its reason and «Подтвердить», which
- * makes it the person's decision; the person's own («Так решили вы.»), with the model's reason when it thought
- * otherwise; or, with neither, that nothing is decided and the error is minor for now.
+ * The line under a criterion's switch, only where it tells something the switch does not: the model's proposal, with
+ * its reason and «Подтвердить», which makes it the person's decision; or, on a person's decision, the model's reason
+ * when it thought otherwise. A person's own decision and a criterion nobody decided say nothing: the switch shows them.
  */
 export function SeverityNote({
   check,
@@ -124,17 +148,12 @@ export function SeverityNote({
         </button>
       </p>
     );
-  if (by === "person")
-    return (
-      <p className={cls}>
-        Так решили вы.
-        {proposed && proposed.serious !== rule.serious && <> Модель считала иначе. {reasonText(proposed.reason)}</>}
-      </p>
-    );
-  return <p className={cls}>Ещё не решено. Пока критерий обычный.</p>;
+  if (by === "person" && proposed && proposed.serious !== rule.serious)
+    return <p className={cls}>Модель считала иначе. {reasonText(proposed.reason)}</p>;
+  return null;
 }
 
-/** A criterion's switch with its line of whose decision it is: in the criterion's panel and on its problem's page. */
+/** A criterion's switch with the line under it, where it has one: in the criterion's panel and on its problem's page. */
 export function SeverityControl({
   check,
   rule,

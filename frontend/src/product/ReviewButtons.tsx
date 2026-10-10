@@ -5,10 +5,11 @@ import { answersWait, type Decision, type Example } from "../lab/problems";
 import { Button } from "../ui/Button";
 
 /**
- * A person's word on what the checks found, asked as one plain question with two answers. Saved at once; the answer
- * stays lit, and pressing it again takes it back. In the check queue «Пропустить» moves on without a word. V, N and → do
- * the same. Big where the answer is the point of the page, small inside a list of criteria. While a check of the
- * conversations runs, the answers wait, and one line says why.
+ * A person's word on what the checks found, asked as one plain question with two answers of one weight: neither is
+ * offered as the expected one, the chosen one shows its state. Saved at once; pressing it again takes it back. In the
+ * check queue «Пропустить» moves on without a word. V, N and → do the same. Big where the answer is the point of the
+ * page, small inside a list of criteria. While a check of the conversations runs, the answers wait, and one line says
+ * why.
  */
 export function ReviewButtons({
   example,

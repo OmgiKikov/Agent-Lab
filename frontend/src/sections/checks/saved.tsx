@@ -5,7 +5,8 @@ import { nameFromText, quoteKey, type Criterion } from "../../lab/criteria";
 import { count } from "../../lab/format";
 import { loadSaved, type CodeSnapshot, type SavedCheck, type ToneSnapshot } from "../../lab/history";
 import type { Example, LogDialogue, RuleEntry, Side } from "../../lab/problems";
-import type { Discover, Rule } from "../../lab/types";
+import type { Discover, LogResult, Rule } from "../../lab/types";
+import type { Measured } from "./ResultView";
 
 export type SavedCriterion = {
   id: string;
@@ -110,33 +111,62 @@ export function useSaved(check: Check, id: string | null) {
   return { ...query, saved };
 }
 
-const empty = (): Side => ({ failed: 0, passed: 0, unknown: 0, examples: [], ruleIds: [] });
-/** Which verdict stands for a conversation when several rules of one criterion judged it: an error, then «без ошибки». */
-const weight = (rule: Rule) => (rule.status === "FAIL" ? 0 : rule.status === "PASS" ? 1 : 2);
+const empty = (): Side => ({ failed: 0, passed: 0, unknown: 0, notApplicable: 0, examples: [], ruleIds: [] });
+/**
+ * How a verdict ranks when several rules of one criterion judged a conversation: an error, then «без ошибки», then
+ * not decided. A criterion that did not apply there has no verdict.
+ */
+const RANK: Record<string, number> = { FAIL: 0, PASS: 1, UNKNOWN: 2 };
+/** A conversation the check counts as checked: an error found, or every criterion that applied decided. */
+const counted = (result: LogResult) => result.status === "PASS" || result.status === "FAIL";
+
+/**
+ * The customer's words a quoted reply answered, for an error saved without them: the customer's message right before
+ * the agent's message that holds the quote, its words matched as criteria's quotes are (quoteKey); empty when the
+ * quote is not found.
+ */
+function askedIn(dialogue: LogDialogue | undefined, quote: string): string {
+  const words = quoteKey(quote);
+  const messages = dialogue?.messages ?? [];
+  const at = words ? messages.findIndex((m) => m.role === "assistant" && quoteKey(m.content).includes(words)) : -1;
+  return (
+    messages
+      .slice(0, Math.max(0, at))
+      .reverse()
+      .find((m) => m.role === "user")?.content ?? ""
+  );
+}
 
 /**
  * The criteria of a saved check as the product shows any check's (lab/criteria, Criterion): numbered as it saved them,
- * each with its counts and its verdicts in the conversations — one per conversation, so its problems and conversations
- * read as «Итог» does. A problem is named by its most frequent error. Nothing is serious here: a decision of today is
- * not laid on a check of the past.
+ * each with its verdicts in the conversations — the worst one per conversation — and its counts of the conversations
+ * the check counts as checked, as «Итог» counts them: `failed + passed` where it applies, `unknown` where it could not
+ * be decided, `notApplicable` the rest. Its verdicts in the conversations the check could not check stay its examples.
+ * A problem is named by its criterion; its most frequent error is its `title`. Nothing is serious here: a decision of
+ * today is not laid on a check of the past.
  */
-export function savedCriteria(saved: Saved, check: Check): Criterion[] {
+function savedCriteria(saved: Saved, check: Check): Criterion[] {
   const sides = saved.criteria.map(empty);
   const titles = saved.criteria.map(() => new Map<string, number>());
+  const dialogues = new Map(saved.dialogues.map((d) => [d.id, d]));
+  const checked = saved.result.results.filter(counted).length;
   for (const result of saved.result.results) {
     const standing = new Map<number, Rule>();
     for (const rule of result.rules) {
       const n = saved.numberOf(rule.ruleId);
       if (!n) continue;
       if (!sides[n - 1].ruleIds.includes(rule.ruleId)) sides[n - 1].ruleIds.push(rule.ruleId);
+      if (!(rule.status in RANK)) continue;
       const was = standing.get(n);
-      if (!was || weight(rule) < weight(was)) standing.set(n, rule);
+      if (!was || RANK[rule.status] < RANK[was.status]) standing.set(n, rule);
     }
     for (const [n, rule] of standing) {
       const side = sides[n - 1];
-      if (rule.status === "FAIL") side.failed++;
-      else if (rule.status === "PASS") side.passed++;
-      else side.unknown++;
+      if (counted(result)) {
+        if (rule.status === "FAIL") side.failed++;
+        else if (rule.status === "PASS") side.passed++;
+        else side.unknown++;
+      }
       if (rule.status === "FAIL" && rule.title) titles[n - 1].set(rule.title, (titles[n - 1].get(rule.title) ?? 0) + 1);
       const example: Example = {
         source: "log",
@@ -145,6 +175,10 @@ export function savedCriteria(saved: Saved, check: Check): Criterion[] {
         ruleId: rule.ruleId,
         status: rule.status === "FAIL" || rule.status === "PASS" ? rule.status : "UNKNOWN",
         opening: result.opening,
+        // The customer's words beside an error: kept with the verdict, else found in the conversation it judged.
+        asked:
+          rule.asked ??
+          (rule.status === "FAIL" ? askedIn(dialogues.get(String(result.dialogueId)), rule.agentQuote) : undefined),
         topic: "",
         agentQuote: rule.agentQuote,
         reason: rule.reason,
@@ -158,7 +192,7 @@ export function savedCriteria(saved: Saved, check: Check): Criterion[] {
     }
   }
   return saved.criteria.map((criterion, i) => {
-    const side = sides[i];
+    const side = { ...sides[i], notApplicable: checked - sides[i].failed - sides[i].passed - sides[i].unknown };
     const answered = side.examples.filter((e) => e.review);
     const r = {
       id: criterion.id,
@@ -187,4 +221,31 @@ export function savedCriteria(saved: Saved, check: Check): Criterion[] {
     } satisfies RuleEntry;
     return { r, n: i + 1, name: criterion.name, every: false, topics: [] };
   });
+}
+
+/**
+ * A saved check as the service's record of a check's problems (lab/problems, Problems) and its numbered criteria, so
+ * it reads as a current result does (checks/ResultView): its line of counts is the history's.
+ */
+export function savedRecord(saved: Saved, check: Check): { data: Measured; list: Criterion[] } {
+  const list = savedCriteria(saved, check);
+  const { finishedAt, sampled, summary } = saved.check;
+  return {
+    list,
+    data: {
+      check,
+      log: {
+        sampled,
+        assessed: summary.measured,
+        withViolations: summary.failed,
+        unassessed: summary.unmeasured,
+        finishedAt,
+        rulesSince: null,
+      },
+      sim: null,
+      rules: list.map((c) => c.r),
+      problems: list.filter((c) => c.r.log.failed > 0).map((c) => c.r.id),
+      severity: { criteria: list.length, proposed: 0, decided: 0, error: null },
+    },
+  };
 }

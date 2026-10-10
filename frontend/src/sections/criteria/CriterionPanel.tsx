@@ -2,12 +2,10 @@ import { Link } from "react-router-dom";
 import { ArrowLeft, ArrowRight, ArrowUpRight, Code2, FileText } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { problemLink, type Check } from "../../app/links";
-import { yesNoText } from "../../lab/answers";
 import { duty, type Criterion } from "../../lab/criteria";
 import { dialogOf } from "../../lab/dialogs";
-import { plural } from "../../lab/format";
-import type { Example } from "../../lab/problems";
-import { humansOf, secondOf } from "../../lab/problemStats";
+import { askedOf, type Example } from "../../lab/problems";
+import { answeredText, humansOf, humansText, secondOf } from "../../lab/problemStats";
 import { Count } from "../../product/Count";
 import { Facts } from "../../product/Facts";
 import { Reliability } from "../../product/Reliability";
@@ -15,6 +13,7 @@ import { SeverityControl } from "../../product/Severity";
 import { shortOrigin } from "../../product/text";
 import { Label } from "../../ui/Label";
 import { Segmented } from "../../ui/Segmented";
+import { checked, errorIn } from "../problems/model";
 import { type SideKey } from "./model";
 import { RuleText } from "./RuleText";
 
@@ -30,15 +29,13 @@ function ExampleRow({ e }: { e: Example }) {
           <span>{e.status === "PASS" ? "без ошибки" : "не удалось проверить"}</span>
         )}
         <span aria-hidden>·</span>
-        <span className="truncate">
-          {e.source === "log" ? `Диалоги${e.topic ? ` · ${e.topic}` : ""}` : `Симуляции · ${e.name ?? ""}`}
-        </span>
+        <span className="truncate">{e.source === "log" ? e.topic || "Датасет" : `Симуляции · ${e.name ?? ""}`}</span>
         <Link to={dialogOf(e)} className="ml-auto inline-flex items-center gap-1 text-fg-2 hover:text-fg">
           разговор
           <ArrowUpRight aria-hidden className="size-3" />
         </Link>
       </div>
-      <p className="mt-1.5 text-small text-fg-3">Клиент: {e.opening}</p>
+      <p className="mt-1.5 text-small text-fg-3">Клиент: {askedOf(e)}</p>
       {e.agentQuote && (
         <p className="mt-1.5 text-body text-fg">
           <mark className={cn("rounded-sm px-0.5 text-fg", e.status === "FAIL" ? "bg-mark/70" : "bg-well")}>
@@ -52,9 +49,9 @@ function ExampleRow({ e }: { e: Example }) {
 }
 
 /**
- * The chosen criterion: what it requires, «Важный критерий» with whose decision it is (the automatic check's proposal
- * with its reason and «Подтвердить», or the person's), how it went in this stage, and the conversations behind each
- * count.
+ * The chosen criterion: what it requires, «Важный критерий» (with the automatic check's proposal, its reason and
+ * «Подтвердить», while no person decided), how it went in this stage — «N из M» of the checked conversations where it
+ * applies, as «Итог» counts it — and the conversations behind each count.
  */
 export function CriterionPanel({
   c,
@@ -129,14 +126,9 @@ export function CriterionPanel({
           <Facts
             facts={[
               {
-                label: side === "log" ? "Ошибка в диалогах" : "Ошибка в симуляции",
-                value: <Count n={s.failed} of={s.failed + s.passed} bad />,
-              },
-              {
-                label: "Не удалось проверить",
-                value: s.unknown
-                  ? `в ${s.unknown}\u00a0${plural(s.unknown, "разговоре", "разговорах", "разговорах")}`
-                  : "—",
+                label: side === "log" ? "Ошибка в разговорах, где он применим" : "Ошибка в симуляции",
+                value: <Count n={s.failed} of={checked(s)} bad />,
+                title: `Ошибка ${errorIn(s)}`,
               },
               ...(twice
                 ? [
@@ -152,10 +144,7 @@ export function CriterionPanel({
                     },
                   ]
                 : []),
-              {
-                label: "Ваши ответы",
-                value: humans.checked ? yesNoText(humans.agree, humans.checked - humans.agree) : "ещё нет",
-              },
+              { label: "Ваши ответы", value: humans.checked ? answeredText(humans) : humansText(humans) },
             ]}
           />
         </div>
@@ -170,19 +159,17 @@ export function CriterionPanel({
         )}
         <div className="mt-6 flex flex-wrap items-center gap-3">
           <Label>Разговоры</Label>
+          {/* The counts are the check's own, as above (lab/problems, Side): a verdict in a conversation the check could
+              not check as a whole is listed, never counted. */}
           <Segmented<Shown>
             size="sm"
             label="Какие разговоры"
             value={shown}
             onChange={onShown}
             options={[
-              { value: "FAIL", label: "С ошибкой", count: s.examples.filter((e) => e.status === "FAIL").length },
-              { value: "PASS", label: "Без ошибки", count: s.examples.filter((e) => e.status === "PASS").length },
-              {
-                value: "UNKNOWN",
-                label: "Не проверено",
-                count: s.examples.filter((e) => e.status === "UNKNOWN").length,
-              },
+              { value: "FAIL", label: "С ошибкой", count: s.failed },
+              { value: "PASS", label: "Без ошибки", count: s.passed },
+              { value: "UNKNOWN", label: "Не проверено", count: s.unknown },
             ]}
           />
         </div>

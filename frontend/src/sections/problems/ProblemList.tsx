@@ -10,10 +10,12 @@ import { queueOf } from "./model";
 import { ProblemRow } from "./ProblemRow";
 
 /**
- * The problems of a stage, the serious ones first, then the most frequent, with how many criteria have no error found;
- * `limit` for the overview, `was` for what each problem had in the previous check of a check. `record` — how the
- * record of the criteria stands (lab/criteria, useCriteria): while it loads or after it failed the list says so, and
- * an empty list is never shown for a record that has not come.
+ * The problems of a stage, the ones a person marked important first, then the most frequent, with how many criteria
+ * have no error found; `limit` for the overview, `was` for what each problem had in the previous check of a check.
+ * `to` — where a problem opens when it is of a saved check (its conversations by that criterion), which names its
+ * criteria itself: no «Все критерии» then. `record` — how the record of the criteria stands (lab/criteria,
+ * useCriteria): while it loads or after it failed the list says so, and an empty list is never shown for a record that
+ * has not come.
  */
 export function ProblemList({
   list,
@@ -21,6 +23,7 @@ export function ProblemList({
   runId,
   limit,
   was,
+  to,
   record,
 }: {
   list: Criterion[];
@@ -28,6 +31,7 @@ export function ProblemList({
   runId?: string | null;
   limit?: number;
   was?: (id: string) => ReactNode;
+  to?: (id: string) => string;
   record?: Loading;
 }) {
   if (record?.error)
@@ -49,20 +53,24 @@ export function ProblemList({
   return (
     <>
       {/* «6 из 52» next to «53 проверенных разговоров» read as a slip: what the second number counts is said once. */}
-      <p className="pt-2 text-small text-fg-3">
-        Второе число показывает, в скольких разговорах удалось проверить критерий.
-      </p>
+      <p className="pt-2 text-small text-fg-3">Второе число — в скольких проверенных разговорах критерий применим.</p>
       <ol className="divide-y divide-line">
         {shown.map((c, i) => (
           <li key={c.r.id} className={ENTER} style={stagger(i + 2)}>
-            <ProblemRow c={c} side={where} rank={i + 1} to={problemLink(c.r.id, stage, runId)} was={was?.(c.r.id)} />
+            <ProblemRow
+              c={c}
+              side={where}
+              rank={i + 1}
+              to={to ? to(c.r.id) : problemLink(c.r.id, stage, runId)}
+              was={was?.(c.r.id)}
+            />
           </li>
         ))}
       </ol>
       {!limit && clean > 0 && (
         <p className="mt-4 border-t border-line pt-4 text-body text-fg-3">
           По {count(clean, "критерию", "критериям", "критериям")} ошибок не найдено.{" "}
-          {stage !== "sim" && (
+          {stage !== "sim" && !to && (
             <Link to={criterionLink(stage)} className="font-medium text-run hover:underline">
               Все критерии
             </Link>

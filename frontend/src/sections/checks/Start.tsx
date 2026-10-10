@@ -1,19 +1,25 @@
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { ArrowRight, Check as CheckMark } from "lucide-react";
 import { Mark } from "../../app/Mark";
-import { launchLink, SECTIONS, type Check } from "../../app/links";
+import { historyLink, launchLink, SECTIONS, type Check } from "../../app/links";
 import { count } from "../../lab/format";
+import { useLaunches, type Launch } from "../../lab/launches";
 import { useLabState } from "../../lab/LabProvider";
+import { reasonText } from "../../lab/severity";
 import { codeSources, customAccuracy, TONE_ID } from "../../lab/tone";
 import type { LabState } from "../../lab/types";
 import { UploadButton } from "../../product/UploadLogs";
 import { buttonClass } from "../../ui/Button";
+import { Skeleton } from "../../ui/EmptyState";
+import { LoadFailed } from "../../ui/LoadFailed";
 import { previousOf } from "../../lab/compare";
 import { useDatasets } from "../../lab/datasets";
 import { shownName } from "../data/DatasetInfo";
-import { PreviousCheck, useComparison } from "./Compare";
-import { PastCheck } from "./RunPage";
+import { PreviousCheck, SavedDelta, useComparison } from "./Compare";
+import { useOrigins } from "./origin";
+import { PART, ResultView } from "./ResultView";
+import { savedRecord, useSaved } from "./saved";
 
 export type Need = { label: string; value: string | null; later: string };
 
@@ -101,13 +107,15 @@ function usePrevious(check: Check) {
 }
 
 /**
- * Tone of voice before its result: the check under way; a new dataset not checked yet, with the previous check in full
- * under it — «Итог» never goes blank because new conversations came; the check begun, or how to begin it.
+ * Tone of voice before its result: the check under way; a new dataset not checked yet, with «Итог» of the check before
+ * it — «Итог» never goes blank because new conversations came; the check begun, or how to begin it, with why the last
+ * check failed when it did.
  */
 export function ToneStart() {
   const { state } = useLabState();
   const previous = usePrevious("tone");
   const library = useDatasets();
+  const launches = useLaunches("tone", `${state?.job.id}-${state?.job.running}`);
   const fresh = library.data?.datasets.find((d) => d.id === library.data?.activeId);
   const job = state?.job;
   // A launch of this check is a check under way too: its report shows how far it got.
@@ -126,17 +134,16 @@ export function ToneStart() {
         }
       >
         {asking
-          ? "Новые ответы агента и их оценка будут на странице запуска. Итог проверки разговоров здесь не изменится."
+          ? "Новые ответы агента и их оценка будут на странице проверки. Итог проверки разговоров здесь не изменится."
           : "Итог появится здесь, когда модель проверит разговоры. Страницу можно закрыть, итог сохранится."}
       </Empty>
     );
   if (previous?.newExport)
     return (
-      <PastCheck
-        check="tone"
+      <PreviousResult
         id={previous.line.id}
         lead={
-          <div className="flex max-w-[760px] flex-wrap items-center gap-x-4 gap-y-2 rounded-block bg-inset px-4 py-3">
+          <div className="mb-8 flex max-w-[760px] flex-wrap items-center gap-x-4 gap-y-2 rounded-block bg-inset px-4 py-3">
             <p className="min-w-[min(100%,18rem)] flex-1 text-body text-fg-2">
               {fresh ? `Новый датасет «${shownName(fresh)}» ещё не проверен.` : "Новый датасет ещё не проверен."} Ниже —
               итог прошлой проверки.
@@ -148,22 +155,82 @@ export function ToneStart() {
         }
       />
     );
+  const last = launches.data?.launches[0];
   return (
     <Empty
       title="Здесь появится итог tone of voice"
       needs={needsOf("tone", state)}
       action={
         <Link to={launchLink("tone")} className={primary}>
-          Настроить проверку
+          Новая проверка
           <ArrowRight aria-hidden className="size-4" />
         </Link>
       }
     >
+      {last?.status === "failed" && <Failed launch={last} />}
       {needsOf("tone", state).every((need) => need.value)
         ? "Разговоры и критерии готовы. В «Новой проверке» выберите, сколько разговоров проверить и что именно."
         : "Загрузите датасет разговоров и правила общения. Из правил соберём критерии и проверим по ним настоящие разговоры. Подключать агента не нужно."}
       {previous && <PreviousCheck check="tone" line={previous.line} className="mt-3" />}
     </Empty>
+  );
+}
+
+/**
+ * «Последняя проверка не удалась: …» over an empty «Итог», with the reason the check gave — of the way that failed, or
+ * its own — and the way to it.
+ */
+function Failed({ launch }: { launch: Launch }) {
+  const reason = Object.values(launch.modes).find((mode) => mode?.status === "failed")?.error || launch.error;
+  return (
+    <p className="mb-3 text-read text-fg-2">
+      Последняя проверка не удалась{reason ? `: ${reasonText(reason)}` : "."}{" "}
+      <Link to={launchLink(launch.check, launch.id)} className="whitespace-nowrap font-medium text-run hover:underline">
+        Открыть проверку
+      </Link>
+    </p>
+  );
+}
+
+/**
+ * «Итог» while a new dataset waits for its first check: the check before it, as «Итог» showed it (checks/ResultView),
+ * under the line that says so (`lead`). Its parts, its problems and «Все разговоры» open its own page, where its
+ * conversations are kept. Which criteria a person marked important is known of a current result only: this one comes
+ * by its frequency.
+ */
+function PreviousResult({ id, lead }: { id: string; lead: ReactNode }) {
+  const { saved, error, refetch } = useSaved("tone", id);
+  const record = useMemo(() => (saved ? savedRecord(saved, "tone") : null), [saved]);
+  const origins = useOrigins("tone");
+  if (error)
+    return (
+      <div className="max-w-[1040px] px-4 pt-8 lg:px-10 lg:pt-12">
+        {lead}
+        <LoadFailed title="Не удалось загрузить итог прошлой проверки" error={error} onRetry={() => void refetch()} />
+      </div>
+    );
+  if (!saved || !record)
+    return (
+      <div className="max-w-[1040px] space-y-6 px-4 pt-8 lg:px-10 lg:pt-12">
+        {lead}
+        <Skeleton className="h-36 max-w-3xl" />
+        <Skeleton className="h-80" />
+      </div>
+    );
+  const self = historyLink("tone", id);
+  return (
+    <ResultView
+      check="tone"
+      data={record.data}
+      list={record.list}
+      origin={origins(id, null, saved.check.file)}
+      lead={lead}
+      compare={null}
+      delta={<SavedDelta check="tone" line={saved.check} />}
+      part={(part) => `${self}?v=${PART[part]}`}
+      all={`${self}#conversations`}
+      problem={(rule) => `${self}?rule=${encodeURIComponent(rule)}`}
+    />
   );
 }
 
@@ -190,7 +257,7 @@ export function AccuracyStart() {
         needs={needsOf("code", state)}
         action={
           <Link to={launchLink("code")} className={primary}>
-            Настроить проверку
+            Новая проверка
             <ArrowRight aria-hidden className="size-4" />
           </Link>
         }
@@ -211,7 +278,7 @@ export function AccuracyStart() {
       needs={needsOf("code", state)}
       action={
         <Link to={launchLink("code")} className={primary}>
-          Настроить проверку
+          Новая проверка
           <ArrowRight aria-hidden className="size-4" />
         </Link>
       }

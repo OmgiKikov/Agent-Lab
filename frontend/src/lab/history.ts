@@ -1,6 +1,9 @@
+import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
+import { resultOf } from "./checks";
 import { pct } from "./format";
 import { VERDICT, type Direction, type Verdict } from "./compare";
+import { useLabState } from "./LabProvider";
 import type { LogDialogue } from "./problems";
 import type { Check, Discover, ToneCriterion } from "./types";
 
@@ -56,9 +59,23 @@ export type ToneSnapshot = {
 /** A saved check of Точность: the result as it was when the check finished, and the conversations it judged. */
 export type CodeSnapshot = { check: SavedCheck; result: Discover; dialogues: LogDialogue[] };
 
-export const loadHistory = (check: Check) => api<{ checks: SavedCheck[] }>(`/api/history/${check}`);
 export const loadSaved = (check: Check, id: string) =>
   api<ToneSnapshot | CodeSnapshot>(`/api/history/${check}/${encodeURIComponent(id)}`);
+
+/**
+ * The saved checks of a check, newest first, each with how it stands to the one before it: asked again when the
+ * check's result changes and when a task starts or ends.
+ */
+export function useHistory(check: Check) {
+  const { state } = useLabState();
+  const result = resultOf(state, check);
+  return useQuery({
+    queryKey: ["history", check, result?.finishedAt ?? null, String(state?.job.running)],
+    queryFn: () => api<{ checks: SavedCheck[] }>(`/api/history/${check}`),
+    enabled: !!state,
+    staleTime: Infinity,
+  });
+}
 
 /** «22 из 53 (42%)»: the conversations with an error of the checked ones, the share beside; never split by a line. */
 export const shareText = ({ failed, measured }: Counts) =>

@@ -81,7 +81,7 @@ export function reliabilityWord(e: Example, who: "you" | "people" = "you"): stri
   if (e.review === "disagree") return you ? "вы не согласились" : "человек не согласился";
   if (e.second === "agree") return "две модели совпали";
   if (e.second === "disagree") return "модели разошлись";
-  return you ? "вы ещё не проверяли" : "человек ещё не проверял";
+  return you ? "вы ещё не отвечали" : "человек ещё не проверял";
 }
 
 /** The second check in a sentence, for a person; the model's name only where an engineer asks for it. */

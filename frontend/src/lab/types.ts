@@ -11,6 +11,8 @@ export type Rule = {
   status: Status;
   reason: string;
   agentQuote: string;
+  /** The customer's words the quoted reply answered, kept with the verdict; verdicts of older checks have none. */
+  asked?: string;
   title?: string;
   review?: "agree" | "disagree" | null;
 };

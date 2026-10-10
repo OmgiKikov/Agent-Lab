@@ -7,7 +7,7 @@ import { day } from "../lab/format";
 import { useLabState } from "../lab/LabProvider";
 import { personaName } from "../lab/look";
 import { reliabilityWord } from "../lab/problemReport";
-import { useTurns, type Decision, type Example } from "../lab/problems";
+import { askedOf, useTurns, type Decision, type Example } from "../lab/problems";
 import { Skeleton } from "../ui/EmptyState";
 import { Conversation } from "./Conversation";
 import { MarkNo } from "./MarkNo";
@@ -23,7 +23,7 @@ const WORD: Record<Example["status"], string> = {
 /** Where an example was said: the log's topic, or the simulation's scenario and type of customer. */
 function Where({ example }: { example: Example }) {
   const { state } = useLabState();
-  if (example.source === "log") return <span>{example.topic || "диалоги"}</span>;
+  if (example.source === "log") return <span>{example.topic || "датасет"}</span>;
   const run = state?.runs.find((r) => r.id === example.runId);
   const repeat = example.attempt && example.attempt > 1 ? ` · повтор ${example.attempt}` : "";
   return (
@@ -36,12 +36,14 @@ function Where({ example }: { example: Example }) {
 }
 
 /**
- * One case, the heart of the product: why the checks call it an error (with the number of the agent's words they cite),
- * the conversation as the customer saw it, and the person's answer. The only box on its page; the trace and the raw quote
- * stay folded under «Детали проверки».
+ * One case, the heart of the product: why the checks call it an error, the conversation as the customer saw it with
+ * the agent's words they cite, and the person's answer. The orange mark that ties the reason to those words carries
+ * the criterion's number (`n`), as in a conversation, where every criterion's words are marked by its number. The only
+ * box on its page; the trace and the raw quote stay folded under «Детали проверки».
  */
 export function ExampleCard({
   example,
+  n = 1,
   lit,
   onLit,
   onDecide,
@@ -50,6 +52,8 @@ export function ExampleCard({
   actions,
 }: {
   example: Example;
+  /** The number of the example's criterion; a page that does not number its criteria shows 1. */
+  n?: number;
   lit: boolean;
   onLit: (on: boolean) => void;
   onDecide?: (d: Decision) => void;
@@ -72,7 +76,7 @@ export function ExampleCard({
       >
         <h3 className="text-small font-medium text-fg-3">{WORD[example.status]}</h3>
         <p className="mt-2 text-lead text-fg">
-          {marked && <MarkNo n={1} on={lit} className="mr-2 -translate-y-px align-middle" />}
+          {marked && <MarkNo n={n} on={lit} className="mr-2 -translate-y-px align-middle" />}
           {example.reason}
         </p>
         {!marked && example.agentQuote && (
@@ -104,12 +108,12 @@ export function ExampleCard({
         ) : turns ? (
           <Conversation
             turns={turns}
-            marks={marked ? [{ quote: example.agentQuote, n: 1 }] : []}
+            marks={marked ? [{ quote: example.agentQuote, n }] : []}
             lit={lit}
             onLit={onLit}
           />
         ) : (
-          <p className="text-read text-fg">{example.opening}</p>
+          <p className="text-read text-fg">{askedOf(example)}</p>
         )}
       </div>
       {judged && onDecide && (

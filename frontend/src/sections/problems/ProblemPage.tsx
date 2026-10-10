@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ArrowRight,
@@ -24,15 +24,14 @@ import {
 } from "../../app/links";
 import { CHECK_NAME } from "../../lab/checks";
 import { dialogOf } from "../../lab/dialogs";
-import { useCriteria } from "../../lab/criteria";
+import { commonText, commonTitle, useCriteria } from "../../lab/criteria";
 import { Duty } from "../../product/Duty";
-import { count, longDay, plural } from "../../lab/format";
+import { longDay, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import { answersWait, useReview, type Decision, type Example } from "../../lab/problems";
-import { humansOf, rightOf, rightText, secondOf } from "../../lab/problemStats";
-import { yesNoText } from "../../lab/answers";
+import { humansOf, humansText, rightOf, rightText, secondOf } from "../../lab/problemStats";
 import { toneJudgedByOther } from "../../lab/tone";
-import { conversationKey, exampleAt } from "../../lab/verdicts";
+import { conversationKey, exampleAt, exampleKey, inOrder, nextUnanswered } from "../../lab/verdicts";
 import { ExampleCard } from "../../product/ExampleCard";
 import { SeverityControl } from "../../product/Severity";
 import { SourceSheet } from "../../product/SourceSheet";
@@ -45,17 +44,19 @@ import { NoSuchRun, useSimRuns } from "../simulations/stage";
 import { Advice } from "../tone/Advice";
 import { Handoff } from "./Handoff";
 import { Reproduce } from "./Reproduce";
-import { checked, violationsOf } from "./model";
+import { checked, restText, violationsOf } from "./model";
 import { shareBase } from "../../app/agent";
 import { SIMULATIONS } from "../../app/product";
 
 /**
- * One problem, read top to bottom: what the agent does wrong, what it must do instead, whether its errors are serious
- * («Важный критерий» on its criterion, with whose decision it is: the automatic check's proposal with its reason and
- * «Подтвердить», or the person's), how often (one line of numbers), then the case itself — the conversation as the
- * customer saw it — and the person's answer. One stage at a time: in a check, its conversations; in the simulation,
- * one run of that check's scenarios. The other is one link away. Another problem of the same stage opens afresh: the
- * page is keyed by the problem, so nothing unfolded, opened or lit on one stays on the next.
+ * One problem, read top to bottom: its criterion's name and the kind of error the model named most often, what the
+ * agent must do instead, whether its errors are serious («Важный критерий» on its criterion: the automatic check's
+ * proposal with its reason and «Подтвердить», or the person's decision), how often (one line of numbers, and the
+ * checked conversations they leave out), then the case itself — the conversation as the customer saw it — and the
+ * person's answer. Answering keeps the order the examples had when the page opened and moves on to the next one nobody
+ * answered, so a person goes through them by answering. One stage at a time: in a check, its conversations; in the
+ * simulation, one run of that check's scenarios. The other is one link away. Another problem of the same stage opens
+ * afresh: the page is keyed by the problem, so nothing unfolded, opened or lit on one stays on the next.
  */
 export function ProblemPage({ stage }: { stage: Stage }) {
   const { id = "" } = useParams();
@@ -82,7 +83,13 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
   const c = list.find((x) => x.r.id === id);
   const runId = stage === "sim" ? (data?.sim?.runId ?? null) : null;
 
-  const examples = c ? violationsOf(c, here) : [];
+  const fresh = useMemo(() => (c ? violationsOf(c, here) : []), [c, here]);
+  // The order of the examples when the page opened: an answer makes the service sort them again, the page keeps it.
+  const [order, setOrder] = useState<string[]>([]);
+  useEffect(() => {
+    if (!order.length && fresh.length) setOrder(fresh.map(exampleKey));
+  }, [order.length, fresh]);
+  const examples = useMemo(() => inOrder(fresh, order), [fresh, order]);
   const toneDraft = state?.toneOfVoice ?? null;
   const toneResult = state?.checks.tone ?? null;
   // A criterion is clarified, and asked how to answer, on the result judged by the criteria in force: one judged by
@@ -91,7 +98,7 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
   const toneNow = stage === "tone" && !!toneDraft && !!toneResult && !otherCriteria;
   const { at, missing: lostExample } = exampleAt(examples, params.get("e"));
   const example = examples[at];
-  /** The example in the address by its conversation: «Нет» sends it to the end of the order, it stays on screen. */
+  /** The example in the address by its conversation: a link to the page opens it, and so does going back. */
   const pin = (e: Example) =>
     setParams(
       (prev) => {
@@ -106,19 +113,28 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
     dir.current = n >= at ? 1 : -1;
     pin(examples[n]);
   };
+  /**
+   * An answer on the example shown: saved at once, and the page moves on to the next example nobody answered.
+   * Pressed again, it takes the answer back and stays. «Отменить» takes it back and returns to the example.
+   */
   const decide = (e: Example, d: Decision) => {
     if (answersWait(state, e)) return;
-    if (params.get("e") !== conversationKey(e)) pin(e);
     const before = e.review;
     const next = e.review === d ? null : d;
     // The check's result the examples come from: the service takes the answer only on it.
     const finishedAt = data?.log?.finishedAt;
     review.mutate({ example: e, decision: next, finishedAt });
-    if (next)
-      toast.notify(next === "agree" ? "Отмечено как ошибка" : "Отмечено, что ошибки нет", {
-        label: "Отменить",
-        run: () => review.mutate({ example: e, decision: before, finishedAt, seen: next }),
-      });
+    if (!next) return;
+    const ahead = nextUnanswered(examples, examples.indexOf(e));
+    if (ahead !== null) go(ahead);
+    toast.notify(next === "agree" ? "Отмечено как ошибка" : "Отмечено, что ошибки нет", {
+      label: "Отменить",
+      run: () => {
+        review.mutate({ example: e, decision: before, finishedAt, seen: next });
+        dir.current = -1;
+        pin(e);
+      },
+    });
   };
   useKeys({
     ArrowLeft: () => go(Math.max(0, at - 1)),
@@ -137,11 +153,12 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
   const place = stage === "sim" ? "Симуляции" : CHECK_NAME[stage];
   const header = (
     <Header
-      title={c?.r.title ?? "Проблема"}
+      title={c?.name ?? "Проблема"}
       crumbs={[{ label: place, to: stageLink(stage, runId) }]}
       actions={
         c && (
           <Button variant="primary" icon={Send} aria-label="Задача для разработчика" onClick={() => setHandoff(true)}>
+            <span className="sm:hidden">Задача</span>
             <span className="hidden sm:inline">Задача для разработчика</span>
           </Button>
         )
@@ -198,9 +215,11 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
 
   const r = c.r;
   const s = r[here];
+  const common = commonTitle(c, here);
   const second = secondOf(s.examples);
   const humans = humansOf(s);
   const right = rightText(rightOf(s));
+  const rest = restText(s, (here === "log" ? data.log?.assessed : data.sim?.assessed) ?? 0);
   const run = stage === "sim" ? state?.runs.find((x) => x.id === runId) : undefined;
   const link = `${shareBase()}${problemLink(r.id, stage, runId)}`;
   const { condition, acceptable, quote, origin } = r.rule;
@@ -216,9 +235,10 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
           <p className="text-read text-fg-3">
             {stage === "sim"
               ? `Проблема в симуляции${run ? ` · прогон ${longDay(run.startedAt)}` : ""}`
-              : `Проблема в диалогах · ${CHECK_NAME[stage]}`}
+              : `Проблема в разговорах · ${CHECK_NAME[stage]}`}
           </p>
-          <h2 className="mt-1 text-balance text-page font-semibold text-fg">{r.title}</h2>
+          <h2 className="mt-1 text-balance text-page font-semibold text-fg">{c.name}</h2>
+          {common && <p className="mt-2 max-w-[68ch] text-read text-fg-2">{commonText(common)}</p>}
           <Duty key={r.id} text={r.rule.text} className="mt-4 max-w-[68ch] text-lead text-fg-2" />
           {(condition || acceptable) && !more && (
             <button
@@ -255,7 +275,7 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
               {checked(s)}
               {"\u00a0"}
               {plural(checked(s), "разговора", "разговоров", "разговоров")}
-              <span className="text-fg-3">, где критерий удалось проверить</span>
+              <span className="text-fg-3">, где критерий применим</span>
             </Link>
             {second.checked > 0 && (
               <>
@@ -280,18 +300,11 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
               })}
               className={linkCls}
             >
-              {humans.checked
-                ? `вы ответили на ${humans.checked}\u00a0из\u00a0${humans.of}: ${yesNoText(humans.agree, humans.checked - humans.agree)}`
-                : "вы ещё не отвечали"}
+              {humansText(humans)}
             </Link>
           </p>
           {right && <p className="mt-1.5 max-w-[72ch] text-read text-fg-2">{right}</p>}
-          {s.unknown > 0 && (
-            <p className="mt-1.5 text-small text-fg-3">
-              Ещё в {count(s.unknown, "разговоре", "разговорах", "разговорах")} критерий не удалось проверить. В счёт
-              они не входят.
-            </p>
-          )}
+          {rest && <p className="mt-1.5 max-w-[72ch] text-small text-fg-3">{rest}</p>}
           {/* The same criterion on the other side: a check's last run, or the conversations of the run's check. */}
           {stage === "sim"
             ? r.log.failed > 0 &&
@@ -300,7 +313,7 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
                   to={problemLink(r.id, data.check)}
                   className="mt-3 inline-flex items-center gap-1 text-read font-medium text-run hover:underline"
                 >
-                  В диалогах тоже: {r.log.failed}
+                  В разговорах тоже: {r.log.failed}
                   {"\u00a0"}из{"\u00a0"}
                   {checked(r.log)}
                   <ArrowRight aria-hidden className="size-4" />
@@ -360,6 +373,7 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
                 >
                   <ExampleCard
                     example={example}
+                    n={c.n}
                     lit={lit}
                     onLit={setLit}
                     onDecide={(d) => decide(example, d)}

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, Navigate, useLocation, useParams, useSearchParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, ArrowRight, RotateCcw } from "lucide-react";
 import { historyLink, launchLink, stageRoot, type Check } from "../../app/links";
 import { useKeys } from "../../app/keys";
@@ -8,28 +7,28 @@ import { useWide } from "../../app/useWide";
 import { resultOf } from "../../lab/checks";
 import { logKey, logRows } from "../../lab/dialogs";
 import { count, longDay, time } from "../../lab/format";
-import { loadHistory, notComparedText } from "../../lab/history";
-import { useLaunches } from "../../lab/launches";
+import { notComparedText, useHistory } from "../../lab/history";
 import { useLabState } from "../../lab/LabProvider";
+import { checkedIn } from "../../lab/problemReport";
 import { StageResult } from "../../product/StageResult";
 import { Button, buttonClass } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { Dialog } from "../dialogs/Dialog";
 import { matchesRow, toVerdict, type Verdict } from "../dialogs/model";
 import { Rows } from "../dialogs/Rows";
-import { queueOf } from "../problems/model";
-import { ProblemRow } from "../problems/ProblemRow";
+import { ProblemList } from "../problems/ProblemList";
 import { CheckHeader } from "./CheckHeader";
-import { Delta } from "./Compare";
-import { savedCriteria, useSaved, type SavedCriterion } from "./saved";
+import { SavedDelta } from "./Compare";
+import { useOrigins } from "./origin";
+import { PART } from "./ResultView";
+import { savedRecord, useSaved, type SavedCriterion } from "./saved";
 import { duty } from "../../lab/criteria";
 import { plainRule, RuleText } from "../criteria/RuleText";
 
-const PART = { bad: "fail", ok: "pass", none: "none" } as const;
 const NONE = new Set<string>();
 
 /**
- * A past check from «История» on a page of its own, read as «Итог» is: which export and when, its number and how it
+ * A past check from «История» on a page of its own, read as «Итог» is: which dataset and when, its number and how it
  * stood to the check before it, its problems, and every conversation it judged with the quotes it cited — as it was
  * saved. The latest check is «Итог» itself: its address leads there, and answers are given there only. A problem or a
  * part of the number filters the conversations below (?rule=, ?v=), one opens beside the list (?d=), as in «Разговоры».
@@ -40,12 +39,7 @@ export function RunPage({ check }: { check: Check }) {
   return <PastCheck key={id} check={check} id={id} />;
 }
 
-/**
- * A past check read as «Итог» is. On «Итог» itself (`lead`), while a new dataset waits for its first check, it stands in
- * for the result under the line that says so (checks/Start): its parts and «Все разговоры» open its own page.
- */
-export function PastCheck({ check, id, lead }: { check: Check; id: string; lead?: ReactNode }) {
-  const embedded = lead !== undefined;
+function PastCheck({ check, id }: { check: Check; id: string }) {
   const { state, offline } = useLabState();
   const [params, setParams] = useSearchParams();
   const location = useLocation();
@@ -53,16 +47,10 @@ export function PastCheck({ check, id, lead }: { check: Check; id: string; lead?
   const [query, setQuery] = useState("");
   const { saved, error, isLoading, refetch } = useSaved(check, id);
   const result = resultOf(state, check);
-  const history = useQuery({
-    queryKey: ["history", check, result?.finishedAt ?? null, String(state?.job.running)],
-    queryFn: () => loadHistory(check),
-    enabled: !!state,
-    staleTime: Infinity,
-  });
-  const launches = useLaunches(check, `${state?.job.id}-${state?.job.running}`);
-  // The launch this check was the recorded answers of, when it came from one: its rules and the way to run it again.
-  const launch = launches.data?.launches.find((l) => l.modes.dataset?.checkId === id);
-  const criteria = useMemo(() => (saved ? savedCriteria(saved, check) : []), [saved, check]);
+  const history = useHistory(check);
+  const origin = useOrigins(check)(id, null, saved?.check.file);
+  const record = useMemo(() => (saved ? savedRecord(saved, check) : null), [saved, check]);
+  const criteria = useMemo(() => record?.list ?? [], [record]);
   const all = useMemo(() => (saved ? logRows(saved.result, check) : []), [saved, check]);
   const verdict = toVerdict(params.get("v"));
   const ruleId = params.get("rule");
@@ -115,21 +103,16 @@ export function PastCheck({ check, id, lead }: { check: Check; id: string; lead?
     box.current.scrollBy({ top: top - 16, behavior: "smooth" });
   });
 
-  const header = <CheckHeader check={check} />;
-  // On «Итог» the page around it has the head and the scroll.
-  const frame = (body: ReactNode) =>
-    embedded ? (
-      body
-    ) : (
-      <div className="flex h-full flex-col">
-        {header}
-        <div ref={box} className="min-h-0 flex-1 overflow-auto">
-          {body}
-        </div>
+  const frame = (body: ReactNode) => (
+    <div className="flex h-full flex-col">
+      <CheckHeader check={check} />
+      <div ref={box} className="min-h-0 flex-1 overflow-auto">
+        {body}
       </div>
-    );
+    </div>
+  );
   // The latest check is the result itself, with the answers that can still be given on it.
-  if (!embedded && result?.checkId && result.checkId === id) return <Navigate to={stageRoot(check)} replace />;
+  if (result?.checkId && result.checkId === id) return <Navigate to={stageRoot(check)} replace />;
   if (offline && !state) return frame(<ServiceDown />);
   if (error)
     return frame(
@@ -151,7 +134,7 @@ export function PastCheck({ check, id, lead }: { check: Check; id: string; lead?
         Возможно, её больше нет в истории.
       </EmptyState>,
     );
-  if (isLoading || !saved)
+  if (isLoading || !saved || !record)
     return frame(
       <div className="space-y-6 px-4 pt-10 lg:px-10">
         <Skeleton className="h-36 max-w-3xl" />
@@ -161,39 +144,35 @@ export function PastCheck({ check, id, lead }: { check: Check; id: string; lead?
 
   const line = saved.check;
   const { failed, measured, unmeasured } = line.summary;
-  // The history's line of the check says how its difference reads (direction, verdict); its own record only how it
-  // stands to the one before it.
+  // The history's line of the check says how it stands to the one before it; its own record says it too.
   const comparison = history.data?.checks.find((c) => c.id === line.id)?.comparison ?? line.comparison;
-  const previous = history.data?.checks.find((c) => c.id === comparison.previousId);
-  const comparable = (comparison.kind === "new-data" || comparison.kind === "same-data") && previous;
-  const problems = queueOf(criteria, "log");
+  const problems = record.data.problems.length;
   const self = historyLink(check, line.id);
   const dialogue = selected ? saved.dialogues.find((d) => d.id === selected.dialogueId) : undefined;
   const showDetail = !!selected && (wide || !!asked);
   return frame(
     <div className="px-4 pb-24 pt-6 lg:px-10 lg:pt-8">
       <div className="max-w-[1040px]">
-        {embedded ? (
-          lead
-        ) : (
-          <Link
-            to={historyLink(check)}
-            className="inline-flex items-center gap-1.5 rounded-sm text-body text-fg-3 transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
-          >
-            <ArrowLeft aria-hidden className="size-4" />
-            История проверок
-          </Link>
-        )}
+        <Link
+          to={historyLink(check)}
+          className="inline-flex items-center gap-1.5 rounded-sm text-body text-fg-3 transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
+        >
+          <ArrowLeft aria-hidden className="size-4" />
+          История проверок
+        </Link>
         <p className="mt-6 break-words text-read text-fg-3">
-          {line.file ? `«${line.file}» · ` : ""}проверено {longDay(line.finishedAt)}, {time(line.finishedAt)}
+          {origin.dataset ? `Датасет «${origin.dataset}» · ` : ""}проверено {longDay(line.finishedAt)},{" "}
+          {time(line.finishedAt)}
           {line.sampled < line.total ? ` · выборка ${line.sampled} из ${line.total}` : ""}
-          {launch?.judge ? ` · правила «${launch.judge.name}», версия ${launch.judge.version}` : ""}
-          {launch?.agentVersion ? ` · версия агента ${launch.agentVersion}` : ""}
-          {launch && (
+          {origin.launch?.judge
+            ? ` · правила «${origin.launch.judge.name}», версия ${origin.launch.judge.version}`
+            : ""}
+          {origin.version ? ` · версия агента ${origin.version}` : ""}
+          {origin.launch && (
             <>
               {" · "}
-              <Link to={launchLink(check, launch.id)} className="rounded-sm text-run hover:underline">
-                запуск
+              <Link to={launchLink(check, origin.launch.id)} className="rounded-sm text-run hover:underline">
+                вся проверка
               </Link>
             </>
           )}
@@ -205,33 +184,18 @@ export function PastCheck({ check, id, lead }: { check: Check; id: string; lead?
           unchecked={unmeasured}
           link={(part) => `${self}?v=${PART[part]}`}
           all={`${self}#conversations`}
-          delta={
-            comparable &&
-            previous.summary.measured > 0 && (
-              <Delta
-                to={historyLink(check, previous.id)}
-                at={previous.finishedAt}
-                before={previous.summary}
-                direction={comparison.direction}
-                verdict={comparison.verdict}
-                again={comparison.kind === "same-data"}
-                label={`${previous.summary.failed} из ${previous.summary.measured} → ${failed} из ${measured}`}
-              />
-            )
-          }
+          delta={<SavedDelta check={check} line={line} />}
         />
-        {!embedded && (
-          <div className="mt-6 flex max-w-[760px] flex-wrap items-center gap-x-4 gap-y-2 rounded-block bg-inset px-4 py-3">
-            <p className="min-w-[min(100%,18rem)] flex-1 text-body text-fg-2">
-              Это прошлая проверка: разговоры и оценки сохранены такими, какими были. Ответить «ошибка или нет» можно в
-              последней.
-            </p>
-            <Link to={stageRoot(check)} className={buttonClass({ size: "sm" })}>
-              К итогу
-              <ArrowRight aria-hidden className="size-3.5" />
-            </Link>
-          </div>
-        )}
+        <div className="mt-6 flex max-w-[760px] flex-wrap items-center gap-x-4 gap-y-2 rounded-block bg-inset px-4 py-3">
+          <p className="min-w-[min(100%,18rem)] flex-1 text-body text-fg-2">
+            Это прошлая проверка: разговоры и оценки сохранены такими, какими были. Ответить «ошибка или нет» можно в
+            последней.
+          </p>
+          <Link to={stageRoot(check)} className={buttonClass({ size: "sm" })}>
+            К итогу
+            <ArrowRight aria-hidden className="size-3.5" />
+          </Link>
+        </div>
         {comparison.kind === "incompatible" && comparison.previousId && (
           <p className="mt-3 max-w-[760px] text-body text-fg-3">{notComparedText(comparison.reason)}</p>
         )}
@@ -240,24 +204,13 @@ export function PastCheck({ check, id, lead }: { check: Check; id: string; lead?
           <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 border-b border-line pb-3">
             <h2 className="text-title font-semibold text-fg">Проблемы</h2>
             <p className="text-read text-fg-3">
-              {problems.length
-                ? `Агент ошибался по ${problems.length} из ${count(criteria.length, "критерия", "критериев", "критериев")}`
+              {problems
+                ? `Агент ошибался по ${problems}\u00a0из\u00a0${count(checkedIn(record.data, "log").length, "критерия", "критериев", "критериев")}`
                 : "Ошибок не нашли"}
             </p>
           </div>
-          {problems.length > 0 && (
-            <>
-              <p className="pt-2 text-small text-fg-3">
-                Второе число показывает, в скольких разговорах удалось проверить критерий.
-              </p>
-              <ol className="divide-y divide-line">
-                {problems.map((c, i) => (
-                  <li key={c.r.id}>
-                    <ProblemRow c={c} side="log" rank={i + 1} to={`${self}?rule=${encodeURIComponent(c.r.id)}`} />
-                  </li>
-                ))}
-              </ol>
-            </>
+          {problems > 0 && (
+            <ProblemList list={criteria} stage={check} to={(rule) => `${self}?rule=${encodeURIComponent(rule)}`} />
           )}
         </section>
       </div>
