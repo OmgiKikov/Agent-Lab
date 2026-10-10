@@ -87,7 +87,7 @@ export function toneBrief(
     ...[rechecked(result.answers)].filter((line): line is string => !!line),
     "",
     "Итог относится только к этим критериям и этой выборке. Процент не говорит, насколько точна сама модель.",
-    ...(masked(shown.flatMap(quotedOf)) ? [masksLine(shown.length)] : []),
+    ...(masked(shown.map(quotedOf)) ? [masksLine(shown.length)] : []),
     "",
   ];
   if (!top.length)

@@ -5,7 +5,7 @@ import { CHECK_NAME } from "./checks";
 import { commonTitle, criterionName, type Criterion } from "./criteria";
 import { count, day, pct } from "./format";
 import { askedOf, importantByPerson, type Example, type Problems, type RuleEntry, type Side } from "./problems";
-import { clip, inQuotes, ruleLines } from "./quote";
+import { clip, inQuotes, MASKS, ruleLines, showsMasks } from "./quote";
 import { severityText } from "./severity";
 
 const SOURCE_LABEL: Record<string, string> = {
@@ -113,20 +113,24 @@ export function summarySentence(data: Problems, source: Source): string {
   return `Ошибок не нашли ни по одному из\u00a0${count(total, "критерия", "критериев", "критериев")} в\u00a0${count(n, "разговоре", "разговорах", "разговорах")}`;
 }
 
+/** The words of a conversation a text quotes of an error, by whose they are: the client's and the agent's. */
+export type Quoted = { client: string; agent: string };
+
 /**
- * The client data an export hides in the conversations, named once where a text that leaves the product quotes them,
- * after a word of the sentence: a line of a report never begins with «#» (a heading in Markdown, a list in a tracker).
+ * Whether the quoted words show the client data an export hides (lab/quote, showsMasks): named once where a text that
+ * leaves the product quotes them (masksLine).
  */
-const MASKS = "# и * — скрытые данные клиента";
+export const masked = (quoted: Quoted[]) =>
+  quoted.some((q) => showsMasks(q.client, true) || showsMasks(q.agent, false));
 
-/** Whether the quoted words of conversations carry the client data an export hides (MASKS). */
-export const masked = (texts: string[]) => texts.some((t) => /[#*]/.test(t));
-
-/** «В примерах # и * — скрытые данные клиента.», once under the examples of a text that has them. */
+/**
+ * «В примерах # и * — скрытые данные клиента.», once under the examples of a text that has them, after a word of the
+ * sentence: a line of a report never begins with «#» (a heading in Markdown, a list in a tracker).
+ */
 export const masksLine = (examples: number) => `В ${examples === 1 ? "примере" : "примерах"} ${MASKS}.`;
 
-/** The words of a conversation a text quotes of an error: the customer's the reply answered (askedOf) and the agent's. */
-export const quotedOf = (e: Example) => [askedOf(e), e.agentQuote];
+/** The words a text quotes of an error: the customer's the reply answered (askedOf) and the agent's. */
+export const quotedOf = (e: Example): Quoted => ({ client: askedOf(e), agent: e.agentQuote });
 
 /** How many characters of someone's words a text quotes at most: a customer's message, the agent's words, a reason. */
 const QUOTED = 300;
@@ -261,7 +265,7 @@ export function handoffText(r: RuleEntry, link: string, { side, agent }: { side:
     "",
     ...(agent ? [agentLine(agent)] : []),
     ...problemLines(c, side, proof),
-    ...(proof && masked(quotedOf(proof)) ? [masksLine(1)] : []),
+    ...(proof && masked([quotedOf(proof)]) ? [masksLine(1)] : []),
     "",
     `Проблема в Agent Lab: ${link}`,
   ].join("\n");
@@ -305,7 +309,7 @@ export function problemsReport(
     .map(criterionOf);
   const proofs = list.map((c) => proofOf(errorsOf(c.r[source])));
   const shown = proofs.filter((e): e is Example => !!e);
-  if (masked(shown.flatMap(quotedOf))) lines.push(masksLine(shown.length));
+  if (masked(shown.map(quotedOf))) lines.push(masksLine(shown.length));
   const assessed = source === "log" ? data.log?.assessed : data.sim?.assessed;
   list.forEach((c, i) =>
     lines.push(

@@ -209,11 +209,12 @@ const examplesOf = (s: Summary) =>
 
 /**
  * «В примерах # и * — скрытые данные клиента.» once under «Главное» when the examples of the ticked problems carry the
- * client data an export hides (lab/problemReport, MASKS); null when they do not.
+ * client data an export hides (lab/quote, MASKS); null when they do not.
  */
 export function masksText(s: Summary): string | null {
   const examples = examplesOf(s);
-  return masked(examples.flatMap((e) => [e.customer ?? "", e.reply ?? e.quote])) ? masksLine(examples.length) : null;
+  const quoted = examples.map((e) => ({ client: e.customer ?? "", agent: e.reply ?? e.quote }));
+  return masked(quoted) ? masksLine(examples.length) : null;
 }
 
 /**

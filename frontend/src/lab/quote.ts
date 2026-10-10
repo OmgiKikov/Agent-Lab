@@ -38,6 +38,16 @@ export function segments(text: string, marks: { quote: string; n: number }[]): S
   return out;
 }
 
+/** What the marks an export puts in place of the client's data stand for, said once where conversations are read. */
+export const MASKS = "# и * — скрытые данные клиента";
+
+/** A mark standing alone: «#» in anyone's words; «*» only in the client's, since in the agent's it begins a list item. */
+const MASK = /(^|[\s(«])#(?=$|[\s.,:;!?%)»])/m;
+const CLIENT_MASK = /(^|[\s(«])[#*](?=$|[\s.,:;!?%)»])/m;
+
+/** Whether someone's words show the export's masks (MASKS): the client's (`client`), else the agent's. */
+export const showsMasks = (text: string, client: boolean) => (client ? CLIENT_MASK : MASK).test(text);
+
 /** One line of a criterion's words as a person reads them: a point of a list, or a paragraph of its own. */
 export type RulePart = { text: string; point: boolean };
 

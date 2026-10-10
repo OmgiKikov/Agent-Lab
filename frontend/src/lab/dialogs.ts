@@ -2,6 +2,7 @@ import { conversationsLink } from "../app/links";
 import { CHECK_NAME } from "./checks";
 import { inlineText, quoteText } from "./problemReport";
 import type { Decision, Example } from "./problems";
+import { MASKS, showsMasks } from "./quote";
 import type { Check, Criterion, Discover, KnowledgePassage, LabRun, Rule, Status } from "./types";
 
 /** One row of a stage's conversations: a logged conversation or a simulated one. */
@@ -46,16 +47,9 @@ export const simKey = (runId: string, index: number) => `sim~${runId}~${index}`;
 export const topicOf = (row: Pick<DialogRow, "check" | "topic">) =>
   row.check && row.topic === CHECK_NAME[row.check] ? "" : row.topic;
 
-/** What the marks an export puts in place of the client's data stand for, said once where conversations are read. */
-export const MASKS = "# и * — скрытые данные клиента";
-
-/** A mark standing alone: «#» in anyone's words; «*» only in the client's, since in the agent's it begins a list item. */
-const MASK = /(^|[\s(«])#(?=$|[\s.,:;!?%)»])/m;
-const CLIENT_MASK = /(^|[\s(«])[#*](?=$|[\s.,:;!?%)»])/m;
-
-/** Whether a conversation shows the export's masks, so the line about them is said where it is read. */
+/** Whether a conversation shows the export's masks (lab/quote), so the line about them is said where it is read. */
 export const masked = (turns: { role: string; text: string }[]) =>
-  turns.some((t) => (t.role === "customer" ? CLIENT_MASK : MASK).test(t.text));
+  turns.some((t) => showsMasks(t.text, t.role === "customer"));
 
 /** The dialogue an example of a problem or a rule comes from: in its check's section, or in its run. */
 export const dialogOf = (e: Pick<Example, "source" | "dialogueId" | "runId" | "index" | "check">) =>
