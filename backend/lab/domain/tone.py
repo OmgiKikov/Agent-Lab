@@ -115,12 +115,18 @@ def kept_clarifications(criteria: list[dict], previous: dict | None, source: dic
     ]
 
 
+def unnamed(rule: dict) -> dict:
+    """A criterion as the judge is given it: all of it but its name, which people give it to tell the criteria apart
+    (the judge's instructions say so)."""
+    return {key: value for key, value in rule.items() if key != 'name'}
+
+
 def for_judging(rule: dict) -> dict:
-    """A criterion as the judge reads it: all of it but its name, which people give it to tell the criteria apart, with
-    the clarifications people confirmed in its text. Saved checks compare by it (criteria_fingerprint), an answer on a
-    verdict stays while it is the same (flows.tone.carry_decisions), and a save that keeps it keeps the result
-    (flows.judges.activate): a criterion renamed is the same criterion."""
-    read = {key: value for key, value in rule.items() if key != 'name'}
+    """A criterion as the judge reads it: unnamed, with the clarifications people confirmed in its text. Saved checks
+    compare by it (criteria_fingerprint), an answer on a verdict stays while it is the same
+    (flows.tone.carry_decisions), and a save that keeps it keeps the result (flows.judges.activate): a criterion
+    renamed is the same criterion."""
+    read = unnamed(rule)
     notes = rule.get('clarifications') or []
     if notes:
         read['text'] = rule['text'] + '\n\nУточнения, подтверждённые человеком:\n' + '\n'.join(notes)
@@ -140,19 +146,18 @@ def judged(snapshot: dict) -> tuple[dict, dict, dict]:
 
 
 def criteria_fingerprint(criteria: list[dict], source: dict) -> str:
-    """What the judge reads of these criteria (for_judging), in whatever order, and the rules they come from."""
-    read = sorted(map(for_judging, criteria), key=lambda rule: rule['id'])
-    return fingerprint({'source': source['sha256'], 'criteria': read})
+    """What the judge reads of these criteria (read_alike), and the rules they come from."""
+    return fingerprint({'source': source['sha256'], 'criteria': _read(criteria)})
 
 
-def compared(saved: dict) -> dict:
-    """The line of a saved check (snapshot) as the next check compares with it: its criteria fingerprinted as
-    criteria_fingerprint does now, from the criteria the record keeps, not as the Lab that saved it did. A check saved
-    while names were part of the fingerprint still compares with the next one the judge reads the same."""
-    sources = (saved.get('result') or {}).get('sources') or []
-    if not isinstance(saved.get('criteria'), list) or not sources:
-        return saved['check']
-    return saved['check'] | {'criteriaFingerprint': criteria_fingerprint(saved['criteria'], sources[0])}
+def read_alike(criteria: list[dict], others: list[dict]) -> bool:
+    """Whether the judge reads these criteria as it reads the others (for_judging), whatever their names and order:
+    a criterion renamed is the same criterion."""
+    return _read(criteria) == _read(others)
+
+
+def _read(criteria: list[dict]) -> list[dict]:
+    return sorted(map(for_judging, criteria), key=lambda rule: rule['id'])
 
 
 def named(result: dict, criteria: list[dict]) -> dict:
@@ -175,9 +180,9 @@ def named(result: dict, criteria: list[dict]) -> dict:
 def snapshot(
     result: dict, dialogues: list[dict], criteria: list[dict], source: dict, export: dict, previous: dict | None
 ) -> dict:
-    """The record of a finished check in the history: its line, how it stands to the check saved before it (previous,
-    as compared gives it), and the evidence behind it: the conversations, the criteria and the rules they came from.
-    export: the file the conversations came from and how many it had."""
+    """The record of a finished check in the history: its line, how it stands to the check saved before it, and the
+    evidence behind it: the conversations, the criteria and the rules they came from. export: the file the
+    conversations came from and how many it had."""
     check = {
         'id': result['checkId'],
         'finishedAt': result['finishedAt'],

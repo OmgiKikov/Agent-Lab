@@ -10,13 +10,12 @@ files. Runs and the answers people gave stay.
 """
 
 import asyncio
-import hashlib
 from collections.abc import Collection
 
 from .. import storage
 from ..agents import sources as agent_sources
 from ..domain import accuracy, checks, export, tone
-from . import agent_context, connection, datasets
+from . import agent_context, connection, datasets, sources_content
 
 SOURCES = 'sources.json'  # the agent's prompts and tools, and the rules of communication beside them
 # When the agent's code was read last, from which folder (the setting as the person wrote it) and which prompts were
@@ -78,7 +77,11 @@ def replace_sources(items: list[dict], read: dict | None = None) -> None:
     in the same transaction, so it never names the previous read."""
     with storage.transaction():
         before = sources()
-        changed = [check for check, part in _SOURCES_OF.items() if _content(part(before)) != _content(part(items))]
+        changed = [
+            check
+            for check, part in _SOURCES_OF.items()
+            if sources_content(part(before)) != sources_content(part(items))
+        ]
         if checks.CODE in changed:
             storage.documents.save(checks.CODE_CRITERIA, None)
         storage.documents.save(SOURCES, items)
@@ -101,12 +104,6 @@ async def read_code() -> list[dict]:
     return collected
 
 
-def save_policy(name: str, text: str) -> None:
-    """The person's rules of communication, beside the agent's code."""
-    rules = tone.policy(name.strip(), text)
-    replace_sources([*(source for source in sources() if source['kind'] != tone.KIND), rules])
-
-
 def _clear(changed: Collection[str]) -> None:
     """The results of the checks whose inputs changed, and a deck built from them. The names stay, set to nothing: a
     repeated legacy import must not resurrect results cleared on purpose."""
@@ -127,14 +124,3 @@ def _code(items: list[dict]) -> list[dict]:
 
 # The sources each check's criteria come from.
 _SOURCES_OF = {checks.TONE: _tone_policy, checks.CODE: _code}
-
-
-def _content(items: list[dict]) -> list[tuple]:
-    """What the criteria of a check stand on: each source's id, kind and text. Not where it was found nor what it is
-    called: a prompt that moved down a line (`origin` is path:line) or rules saved under another name are the same
-    sources. The id stays: criteria name their source by it (sourceId)."""
-    return [(item.get('id'), item.get('kind'), _text_hash(item)) for item in items]
-
-
-def _text_hash(item: dict) -> str:
-    return item.get('sha256') or hashlib.sha256(str(item.get('content')).encode()).hexdigest()

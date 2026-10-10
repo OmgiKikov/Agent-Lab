@@ -29,15 +29,17 @@ NAMES = {'dataset': 'Ответы в датасете', 'questions': 'Вопро
 STOPPED = 'Остановлено пользователем.'
 
 
-def prepare(given: dict) -> dict:
+def prepare(given: dict, *, again: bool = False) -> dict:
     """A launch's choices, checked (_chosen), and what it is made of put in force: its dataset, the version of the agent
     whose answers the dataset holds when the launch checks them and names one («Версия агента в этом датасете»), its
-    rules. A ValueError says what to choose, or that the models every way of checking asks are not set up."""
+    rules. A launch started again as it was (again: «Повторить проверку», «Продолжить») names no version of the
+    dataset: a person may have corrected it since. A ValueError says what to choose, or that the models every way of
+    checking asks are not set up."""
     models.ensure_set_up()
     dataset = _chosen(given)
     with storage.transaction():
         datasets.select(dataset['id'])
-        if 'dataset' in given['modes'] and given.get('agentVersion', '').strip():
+        if not again and 'dataset' in given['modes'] and given.get('agentVersion', '').strip():
             datasets.set_version(dataset['id'], given['agentVersion'])
         if given.get('judgeId'):
             judges.activate(given['check'], given['judgeId'])

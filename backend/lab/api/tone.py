@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from .. import models, storage
 from ..domain import checks, policy_files
-from ..flows import Progress, advice, inputs, tone
+from ..flows import Progress, advice, tone
 from ..jobs import BusyError
 from . import work
 from .base import Jobs, uploaded
@@ -52,8 +52,11 @@ class ToneClarificationCommand(BaseModel):
 
 @router.post('/api/tone-of-voice/policy')
 async def save_tone_policy(jobs: Jobs, payload: TonePolicyCommand) -> dict:
+    """New rules of communication: refused before they replace anything when their criteria need a model that is not
+    set up."""
+
     async def work(progress: Progress) -> dict:
-        inputs.save_policy(payload.name, payload.text)
+        tone.save_policy(payload.name, payload.text)
         return {'ok': True}
 
     try:
@@ -100,7 +103,7 @@ async def read_tone_file(request: Request, name: str) -> dict:
 async def prepare_tone_criteria(jobs: Jobs) -> dict:
     """«Собрать критерии»: refused before it starts when the rules need a model that is not set up."""
     try:
-        tone.ensure_collectable()
+        tone.ensure_collectable(tone.current_policy())
     except ValueError as error:
         raise HTTPException(400, str(error)) from error
     return work.start(jobs, 'tone-criteria', {})

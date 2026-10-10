@@ -224,6 +224,9 @@ def from_run(book: Book, run: dict | None, deck: list[dict], target: str = '') -
     for index, item in enumerate(items):
         frozen = item.get('criteria') if isinstance(item.get('criteria'), list) else by_card.get(item.get('cardId'), [])
         known = {criterion['id']: criterion for criterion in frozen}
+        # A criterion of the played conversation was checked in it whatever its verdicts, as the audit's criteria are.
+        for criterion in frozen:
+            book.entry(criterion, item.get('topic', ''))['ruleIds']['sim'].add(criterion['id'])
         conversation = item.get('conversation') or []
         for row in item.get('rules') or []:
             rule = recorded_rule(book, row, known, isinstance(item.get('criteria'), list))
@@ -274,15 +277,16 @@ def from_run(book: Book, run: dict | None, deck: list[dict], target: str = '') -
 def verdicts(book: Book, entry: dict, where: str) -> tuple[dict, list[str]]:
     """Counts and examples of one side. The counts are of the conversations the side's line counts as checked
     (Book.checked): with an error, without one, not decided, and not applicable, the checked ones without a verdict of
-    the rule (none on a side that never checked it). The examples are every verdict: violations first, the best backed
-    first, then fulfilled, then unchecked."""
+    the rule (none on a side that never checked it). The examples are every verdict, each saying whether the counts
+    count it (counted), so a screen lists the very verdicts it counts: violations first, the best backed first, then
+    fulfilled, then unchecked."""
     found = entry['found'][where]
+    checked = book.checked[where]
     examples = sorted(
-        ({**e, 'title': t} for e, t in found.values()),
+        ({**e, 'title': t, 'counted': at in checked} for at, (e, t) in found.items()),
         key=lambda e: (ORDER[e['status']], reliability(e) if e['status'] == 'FAIL' else 0),
     )
-    checked = book.checked[where]
-    counts = Counter(COUNTED[e['status']] for at, (e, _) in found.items() if at in checked)
+    counts = Counter(COUNTED[e['status']] for e in examples if e['counted'])
     titles = [t for e, t in found.values() if e['status'] == 'FAIL' and t]
     side = {
         'failed': counts['failed'],

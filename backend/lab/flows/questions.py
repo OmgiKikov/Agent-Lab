@@ -6,7 +6,7 @@ import uuid
 
 from .. import agents, models, storage
 from ..domain import checks, metric
-from ..domain.tone import for_judging
+from ..domain.tone import for_judging, read_alike
 from . import Progress, agent_context, check_setup, connection, conversations, error_text, provenance
 
 # How often a run writes its record while it goes, at most: once a second.
@@ -122,7 +122,9 @@ async def _new(
         topic = by_dialogue.get(str(dialogue['id']))
         item = _item(dialogue, topic)
         before = base_rows.get(str(dialogue['id']))
-        if before and topic and base_rules.get(before['topicId']) == topic['rules']:
+        # The recorded answers are the baseline while the judge reads their criteria as it reads these: renamed since,
+        # a criterion is the same one.
+        if before and topic and read_alike(base_rules.get(before['topicId']) or [], topic['rules']):
             item['baseline'] = before
             item['sameContext'] = check == 'tone' or _context(baseline.get('agentContext') or {}) == _context(
                 agent_context.current()

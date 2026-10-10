@@ -12,7 +12,7 @@ import support
 from lab import storage
 from lab.domain import checks, export
 from lab.domain import judges as rules
-from lab.flows import agent_context, connection, datasets, inputs, judges, tone
+from lab.flows import agent_context, connection, datasets, inputs, judges, same_work, tone
 
 
 def dialogue(key='d1', question='Как вернуть терминал?'):
@@ -55,6 +55,26 @@ class DatasetTests(unittest.IsolatedAsyncioTestCase):
         storage.documents.save('sources.json', [{'id': 'prompt', 'kind': 'prompt', 'content': 'Новый код'}])
         datasets.select(first['id'])
         self.assertEqual(storage.documents.load(checks.result('tone')), {'result': 'tone-first'})
+
+    async def test_a_result_kept_with_a_dataset_survives_renamed_rules_and_an_older_way_of_keeping_it(self):
+        """A dataset's «Итог», kept while another dataset is chosen, comes back with it after the set of rules was only
+        renamed: the rules are told by their content. One kept by a Lab that told them by their whole records comes back
+        too, while those records are the same."""
+        policy = 'Всегда обращайтесь к клиенту на вы.'
+        rules = judges.save('tone', 'Правила', policy, [criterion()], None, None)
+        first = datasets.add([dialogue()], 'one.jsonl')
+        storage.documents.save(checks.result('tone'), {'result': 'first'})
+        second = datasets.add([dialogue('d2', 'Другой вопрос')], 'two.jsonl')
+        judges.save('tone', 'Правила банка', policy, rules['criteria'], rules['setId'], rules['id'])
+        datasets.select(first['id'])
+        self.assertEqual(storage.documents.load(checks.result('tone')), {'result': 'first'})
+        datasets.select(second['id'])
+        kept = storage.datasets.context(first['id'])
+        whole = [source for source in inputs.sources() if source['id'] == checks.TONE_OF_VOICE]
+        older = same_work(sources=whole, revision=storage.documents.load(tone.DRAFT)['revision'])
+        storage.datasets.save_context(first['id'], kept | {'signatures': kept['signatures'] | {'tone': older}})
+        datasets.select(first['id'])
+        self.assertEqual(storage.documents.load(checks.result('tone')), {'result': 'first'})
 
     async def test_legacy_export_is_adopted_once_without_losing_its_stamp(self):
         storage.dialogues.replace([dialogue()], 'legacy.jsonl')

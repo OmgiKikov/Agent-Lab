@@ -8,10 +8,10 @@ import support
 from test_tone import POLICY
 
 from lab import models, storage
-from lab.domain.comparison import fingerprint
+from lab.domain.comparison import evaluation_fingerprint, fingerprint
 from lab.flows import answers as answering
 from lab.flows import checks as results_of
-from lab.flows import conversations, simulation, tone
+from lab.flows import conversations, questions, simulation, tone
 from lab.flows import scenarios as cards
 from lab.roles import judge as judging
 
@@ -462,6 +462,8 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(seen), 2)
         self.assertTrue(all(note in data['expectations'][0]['text'] for data in seen))
         self.assertTrue(all(data['expectations'][0]['quote'] == original_rule['quote'] for data in seen))
+        self.assertTrue(all('name' not in rule for data in seen for rule in data['expectations']))
+        self.assertEqual(card['criteria'][0]['name'], original_rule['name'])  # the card keeps it for people
         self.assertEqual((item['status'], item['second']['status']), ('PASS', 'PASS'))
         self.assertEqual(storage.documents.load(tone.DRAFT)['criteria'][0]['text'], original_rule['text'])
 
@@ -504,23 +506,66 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone((await self.client.get('/api/state')).json()['checks']['tone'])
         self.assertEqual(len(storage.history.lines('tone')), 2)
 
-    async def test_a_check_saved_when_names_were_part_of_the_fingerprint_still_compares_with_the_next(self):
-        """A check saved by an earlier Lab, which fingerprinted its criteria with their names: the next check judged by
-        the same criteria compares with it, by what the judge read of the criteria it keeps."""
+    async def test_a_renamed_criterion_keeps_the_recorded_answers_the_baseline_of_the_live_questions(self):
+        """The live agent's new answers are compared with the recorded ones judged by the same criteria: a criterion
+        only renamed since reads the same to the judge, so the kept «Итог» stays their baseline."""
+        first = await self.check()
+        criteria = (await self.client.get('/api/judges/tone')).json()['versions'][-1]['criteria']
+        await self.save_rules([rule | {'name': 'Новое имя'} if rule['id'] == 'pronouns' else rule for rule in criteria])
+        record = await questions._new('tone', 'prod', 1, lambda **_: None, 'after-the-rename')
+        self.assertEqual(record['items'][0]['baseline']['status'], first['results'][0]['status'])
+
+    async def test_a_check_judged_by_the_previous_instructions_is_not_compared_with_the_next(self):
+        """The judge reads a criterion without its name and its instructions say so: another version of the judge, so
+        another evaluation. A check an earlier Lab saved — judged by the instructions before, its criteria fingerprinted
+        with their names — is not compared with the next one, which says that the judge changed, not the criteria; the
+        checks after it compare as usual."""
         first = await self.check()
         record = storage.history.get('tone', first['checkId'])
-        sha = tone.current_policy()['sha256']
-        older = fingerprint({'source': sha, 'criteria': sorted(record['criteria'], key=lambda rule: rule['id'])})
-        self.assertNotEqual(older, first['criteriaFingerprint'])
-        line = record['check'] | {'criteriaFingerprint': older}
+        earlier = record['result'] | {
+            'results': [item | {'judgeVersion': 'before-names-left'} for item in record['result']['results']]
+        }
+        named = sorted(record['criteria'], key=lambda rule: rule['id'])
+        line = record['check'] | {
+            'criteriaFingerprint': fingerprint({'source': tone.current_policy()['sha256'], 'criteria': named}),
+            'evaluationFingerprint': evaluation_fingerprint(earlier),
+        }
         with sqlite3.connect(storage.db.default_database()) as connection:
             connection.execute(
                 'UPDATE history SET summary = ?, value = ? WHERE id = ?',
-                (json.dumps(line), json.dumps(record | {'check': line}), first['checkId']),
+                (json.dumps(line), json.dumps(record | {'check': line, 'result': earlier}), first['checkId']),
             )
         connection.close()
-        await self.check()
-        self.assertEqual(storage.history.lines('tone')[0]['comparison']['kind'], 'same-data')
+        seen = []
+
+        async def chat(system, payload, **kwargs):
+            asked = json.loads(payload)
+            seen.append(asked['expectations'])
+            rows = [
+                {
+                    'ruleId': rule['id'],
+                    'status': 'FAIL',
+                    'reason': 'Обращение на ты.',
+                    'agentQuote': self.dialogue['messages'][1]['content'],
+                    'title': 'Обращение на ты',
+                }
+                for rule in asked['expectations']
+            ]
+            return models.Reply(json.dumps({'rules': rows}), 'model-a')
+
+        request = {'ruleIds': ['pronouns', 'simple_language'], 'count': 1}
+        with patch.object(models, 'chat', side_effect=chat):
+            for _ in range(2):
+                revision = storage.documents.load(tone.DRAFT)['revision']
+                response = await self.client.post('/api/tone-of-voice/check', json=request | {'revision': revision})
+                self.assertEqual(response.status_code, 200, response.text)
+                await self.wait_job()
+                self.assertIsNone(self.jobs.state['error'])
+        self.assertTrue(seen and all('name' not in rule for expectations in seen for rule in expectations))
+        self.assertEqual(storage.documents.load(tone.RESULT)['results'][0]['judgeVersion'], judging.JUDGE_LOG.version)
+        latest, after = (line['comparison'] for line in storage.history.lines('tone')[:2])
+        self.assertEqual((after['kind'], after['reason']), ('incompatible', 'Изменились модели или их инструкции.'))
+        self.assertEqual(latest['kind'], 'same-data')
 
     async def test_comparison_requires_same_criteria_and_models_and_ignores_selection_order(self):
         first = await self.check()

@@ -25,11 +25,10 @@ def snapshot(check: str) -> dict:
     }
 
 
-def attach(result: dict, record: dict, check: str, previous: dict | None) -> None:
-    """The inputs a check used, kept with its result and its record in the history, and how the record stands, with
-    them, to the check saved before it (previous: that check's line, as the caller compares with it). The record's line
-    in the list of saved checks (record['check']) names the rules by their set and version; their text and the agent's
-    context stay in the result."""
+def attach(result: dict, record: dict, check: str) -> None:
+    """The inputs a check used, kept with its result and its record in the history. The record's line in the list of
+    saved checks (record['check']) names the rules by their set and version; their text and the agent's context stay in
+    the result."""
     meta = snapshot(check)
     result.update(meta)
     record['check'].update({key: value for key, value in meta.items() if key != 'agentContext'})
@@ -52,4 +51,4 @@ def attach(result: dict, record: dict, check: str, previous: dict | None) -> Non
             for row in result['results']
         ]
         record['check']['knowledgeFingerprint'] = fingerprint(sorted(evidence))
-    record['check']['comparison'] = comparison(record['check'], previous)
+    record['check']['comparison'] = comparison(record['check'], storage.history.latest(check))

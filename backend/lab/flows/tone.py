@@ -81,11 +81,20 @@ async def collect_criteria(progress: Progress) -> dict:
     return draft
 
 
-def ensure_collectable() -> None:
-    """Criteria can be collected from the rules in force now: the rules define them in code
-    (domain.tone.coded_criteria), or the model that collects them can be asked (models.ensure_set_up). A ValueError
-    says what is missing before any work starts."""
-    if not tone.coded_criteria(current_policy()):
+def save_policy(name: str, text: str) -> None:
+    """New rules of communication in place of the current ones, beside the agent's code, with what they reset
+    (inputs.replace_sources). Refused before anything is replaced while the criteria of the new rules could not be
+    collected (ensure_collectable): the criteria and «Итог» in force would go, and none could come."""
+    rules = tone.policy(name.strip(), text)
+    ensure_collectable(rules)
+    inputs.replace_sources([*(source for source in inputs.sources() if source['kind'] != tone.KIND), rules])
+
+
+def ensure_collectable(policy: dict) -> None:
+    """Criteria can be collected from these rules now: they define them in code (domain.tone.coded_criteria), or the
+    model that collects them can be asked (models.ensure_set_up). A ValueError says what is missing before any work
+    starts."""
+    if not tone.coded_criteria(policy):
         models.ensure_set_up()
 
 
@@ -325,8 +334,7 @@ async def _assess(check_id: str, criteria: list[dict], count: int, progress: Pro
 
 def commit(result: dict) -> None:
     """Publish a finished check with its record in the history (publish). The materials it was made of must still be
-    the current ones. It is compared with the check saved before it by what the judge read of that check's criteria
-    (domain.tone.compared), whenever it was saved."""
+    the current ones."""
     ensure_active()
     source = current_policy()
     draft = storage.documents.load(DRAFT) or {}
@@ -339,11 +347,10 @@ def commit(result: dict) -> None:
     ):
         raise ValueError('Материалы проверки изменились. Запустите проверку заново.')
     with storage.transaction():
-        latest = storage.history.latest(checks.TONE)
-        previous = latest and tone.compared(storage.history.get(checks.TONE, latest['id']))
+        previous = storage.history.latest(checks.TONE)
         export = {'file': storage.dialogues.meta().get('file'), 'total': storage.dialogues.count()}
         record = tone.snapshot(result, dialogues, criteria, source, export, previous)
-        provenance.attach(result, record, checks.TONE, previous)
+        provenance.attach(result, record, checks.TONE)
         publish(result, record)
 
 

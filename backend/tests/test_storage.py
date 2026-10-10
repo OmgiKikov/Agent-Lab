@@ -11,6 +11,7 @@ from lab import config, storage
 from lab.flows import answers, datasets, inputs
 from lab.migrate import migrate
 from lab.storage import legacy as legacy_import
+from lab.storage import schema
 
 
 def record() -> dict:
@@ -350,13 +351,16 @@ class StoreTests(unittest.TestCase):
         datasets.select(first['id'])
         self.assertEqual(asked(), ['код авторизации где взять', 'как записано', None])
 
-    def test_a_dataset_takes_the_agent_version_its_newest_launch_named(self) -> None:
+    def test_a_dataset_takes_the_agent_version_its_newest_check_of_its_answers_named(self) -> None:
         """Before schema 13 the version of the agent was a launch's own; now it is the dataset's, whose answers it is.
-        A database of schema 12 gives each dataset the version its newest launch named, trimmed; a launch that named
-        none, the live questions' run and a dataset without launches leave it unknown."""
+        A database of schema 12 gives each dataset the version named by its newest launch that checked its recorded
+        answers, trimmed. A newer launch that only asked the live agent named the stand's version, and a dataset without
+        such a launch stays unknown. Taken once: a version a person cleared since stays cleared when the database is set
+        up again for a later schema or an older Lab's files are imported into it."""
 
-        def launch(launch_id: str, dataset_id: str, version: str, kind: str = 'launch') -> tuple:
-            value = {'id': launch_id, 'agentVersion': version, 'inputs': {'datasetId': dataset_id}}
+        def launch(launch_id: str, dataset_id: str, version: str, modes: list[str], kind: str = 'launch') -> tuple:
+            given = {'datasetId': dataset_id, 'agentVersion': version, 'modes': modes}
+            value = {'id': launch_id, 'agentVersion': version, 'inputs': given}
             return launch_id, kind, json.dumps(value), json.dumps(value)
 
         with sqlite3.connect(storage.db.default_database()) as connection:
@@ -375,17 +379,26 @@ class StoreTests(unittest.TestCase):
             connection.executemany(
                 'INSERT INTO launches (id, kind, summary, value) VALUES (?, ?, ?, ?)',
                 [
-                    launch('l1', 'first', 'v1.0'),
-                    launch('l2', 'first', ' v1.1 '),
-                    launch('l3', 'first', ''),
-                    launch('l4', 'second', ''),
-                    launch('l4-questions', 'third', 'stand-2.0', kind='questions'),
+                    launch('l1', 'first', 'v1.0', ['dataset']),
+                    launch('l2', 'first', ' v1.1 ', ['dataset', 'questions']),
+                    launch('l3', 'first', '', ['dataset']),
+                    launch('l4', 'first', 'stand-2.0', ['questions']),
+                    launch('l5', 'second', 'stand-2.0', ['questions']),
+                    launch('l5-questions', 'third', 'v9', ['dataset'], kind='questions'),
                 ],
             )
             connection.execute('PRAGMA user_version = 12')
         connection.close()
-        versions = {item['id']: item['agentVersion'] for item in storage.datasets.listed()}
-        self.assertEqual(versions, {'first': 'v1.1', 'second': '', 'third': ''})
+
+        def versions() -> dict:
+            return {item['id']: item['agentVersion'] for item in storage.datasets.listed()}
+
+        self.assertEqual(versions(), {'first': 'v1.1', 'second': '', 'third': ''})
+        datasets.set_version('first', '')  # a person says the version is not known
+        with patch.object(schema, 'SCHEMA', schema.SCHEMA + 1):
+            self.assertEqual(versions()['first'], '')
+        legacy_import.insert({}, [])
+        self.assertEqual(versions()['first'], '')
 
     def test_repeated_import_cannot_restore_invalidated_audit_or_scenarios(self) -> None:
         legacy = self.path / 'legacy'

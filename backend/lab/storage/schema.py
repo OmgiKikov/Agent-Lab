@@ -85,6 +85,7 @@ def set_up(connection: sqlite3.Connection, path: Path) -> None:
     with connection:
         if not connection.in_transaction:
             connection.execute('BEGIN IMMEDIATE')
+        before = connection.execute('PRAGMA user_version').fetchone()[0]
         for statement in TABLES:
             connection.execute(statement)
         if 'summary' not in {column[1] for column in connection.execute('PRAGMA table_info(runs)')}:
@@ -94,20 +95,22 @@ def set_up(connection: sqlite3.Connection, path: Path) -> None:
             connection.execute('ALTER TABLE datasets ADD COLUMN skipped INTEGER')
         if 'agent_version' not in datasets:
             connection.execute("ALTER TABLE datasets ADD COLUMN agent_version TEXT NOT NULL DEFAULT ''")
-        upgrade(connection)
+        upgrade(connection, before)
         connection.execute(f'PRAGMA user_version = {SCHEMA}')
 
 
-def upgrade(connection: sqlite3.Connection) -> None:
-    """What an older database, or an older Lab's files just imported, keeps in an older shape, in this one. A step does
-    nothing to what has this shape already."""
+def upgrade(connection: sqlite3.Connection, before: int = SCHEMA) -> None:
+    """What an older database, or an older Lab's files just imported, keeps in an older shape, in this one; before: the
+    schema the database had (an import goes into this one's). A step does nothing to what has this shape already, and
+    one that fills in what a person may change later runs only on the way from the schema before it."""
     _separate_checks(connection)
     _export_to_rows(connection)
     _one_history(connection)
     _accuracy_history(connection)
     _answers_to_rows(connection)
     _asked_on_verdicts(connection)
-    _dataset_versions(connection)
+    if before < 13:
+        _dataset_versions(connection)
     # The number of uploaded dialogues was kept beside them before they were rows.
     connection.execute('DROP TRIGGER IF EXISTS length_on_insert')
     connection.execute('DROP TRIGGER IF EXISTS length_on_update')
@@ -307,16 +310,17 @@ def _dialogue(connection: sqlite3.Connection, query: str, *key: str) -> dict | N
 
 
 def _dataset_versions(connection: sqlite3.Connection) -> None:
-    """A dataset nobody named the agent's version of takes the one its newest launch named: before schema 13 the
-    version was the launch's own, given on its form. A dataset with a version keeps it."""
+    """Each dataset takes the agent's version named by its newest launch that checked its recorded answers: before
+    schema 13 the version was the launch's own, given on its form. A launch that only asked the live agent named the
+    stand's version, not the dataset's."""
     named = {}
     for (value,) in connection.execute("SELECT value FROM launches WHERE kind = 'launch' ORDER BY rowid").fetchall():
-        launch = json.loads(value)
-        dataset_id, version = (launch.get('inputs') or {}).get('datasetId'), (launch.get('agentVersion') or '').strip()
-        if dataset_id and version:
-            named[dataset_id] = version
+        given = json.loads(value).get('inputs') or {}
+        version = (given.get('agentVersion') or '').strip()
+        if version and given.get('datasetId') and 'dataset' in (given.get('modes') or ()):
+            named[given['datasetId']] = version
     connection.executemany(
-        "UPDATE datasets SET agent_version = ? WHERE id = ? AND agent_version = ''",
+        'UPDATE datasets SET agent_version = ? WHERE id = ?',
         ((version, dataset_id) for dataset_id, version in named.items()),
     )
 
