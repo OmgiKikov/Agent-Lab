@@ -227,7 +227,7 @@ export function ScenariosPage() {
               {cards.length && deck ? (
                 <>
                   {count(cards.length, "сценарий", "сценария", "сценариев")} {BY_CRITERIA[deck.check]}, {fromErrors}
-                  {"\u00a0— из ошибок в диалогах"}
+                  {"\u00a0— из ошибок в разговорах"}
                   {deck.createdAt ? ` · собраны ${day(deck.createdAt)}` : ""}
                 </>
               ) : (

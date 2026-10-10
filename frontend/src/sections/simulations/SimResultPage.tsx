@@ -197,7 +197,7 @@ function RunSteps({ run, data, list }: { run: RunSummary; data: Problems; list: 
         <Step
           state="todo"
           title="Разберите главную проблему"
-          text={`${top.r.title.replace(/\.\s*$/, "")}: ${top.r.sim.failed}\u00a0из\u00a0${checked(top.r.sim)} ${plural(checked(top.r.sim), "разговора", "разговоров", "разговоров")}. На странице проблемы — примеры с цитатами и задача для разработчика.`}
+          text={`${top.name.replace(/\.\s*$/, "")}: ${top.r.sim.failed}\u00a0из\u00a0${checked(top.r.sim)} ${plural(checked(top.r.sim), "разговора", "разговоров", "разговоров")}. На странице проблемы — примеры с цитатами и задача для разработчика.`}
           action={
             <Link to={problemLink(top.r.id, "sim", run.id)} className={pending ? STEP_ACTION : STEP_NEXT}>
               Открыть
