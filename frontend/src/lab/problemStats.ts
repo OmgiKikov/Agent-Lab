@@ -54,13 +54,13 @@ export function rightOf(side: Side): {
 }
 
 /**
- * «Модель права в 9 из 10 оценок, которые вы проверили по этому критерию.» Only from RIGHT_FROM answers, and only out
- * of them; with answers on cases «без ошибки» among them, how it was right on each kind. Null with fewer answers: then
- * the page says only how the person answered.
+ * «Модель права в 9 из 10 случаев, на которые вы ответили по этому критерию.» Only from RIGHT_FROM answers, and only
+ * out of them; with answers on cases «без ошибки» among them, how it was right on each kind. Null with fewer answers:
+ * then the page says only how the person answered.
  */
 export function rightText(r: ReturnType<typeof rightOf>): string | null {
   if (r.answered < RIGHT_FROM) return null;
-  const head = `Модель права в\u00a0${r.right}\u00a0из\u00a0${count(r.answered, "оценки", "оценок", "оценок")}, которые вы проверили по этому критерию`;
+  const head = `Модель права в\u00a0${r.right}\u00a0из\u00a0${count(r.answered, "случая", "случаев", "случаев")}, на которые вы ответили по этому критерию`;
   if (!r.clean.answered) return `${head}.`;
   const kinds = [
     r.errors.answered
