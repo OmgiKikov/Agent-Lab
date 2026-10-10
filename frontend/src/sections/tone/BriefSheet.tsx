@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Check, Copy, Download, RotateCcw } from "lucide-react";
 import { shareBase } from "../../app/agent";
 import { useCriteria, type Criterion } from "../../lab/criteria";
+import { useDatasets } from "../../lab/datasets";
 import { copyReport, download, reportFile, useReportAgent } from "../../lab/problemReport";
 import { useProblems } from "../../lab/problems";
 import { toneResult } from "../../lab/tone";
@@ -10,6 +11,7 @@ import type { LabState, ResultHead } from "../../lab/types";
 import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
 import { Sheet } from "../../ui/Sheet";
+import { shownName } from "../data/DatasetInfo";
 import { BriefPreview } from "./BriefPreview";
 
 /** The criteria of one tone-of-voice result, matched by their quote: the problems service holds every criterion. */
@@ -20,15 +22,20 @@ export const ownCriteria = (result: ResultHead, list: Criterion[]) => {
 
 /**
  * The brief of the current tone-of-voice result, or "" while it cannot be told yet: no result, the agent's name it is
- * about not here yet (useReportAgent), or the problems service still holds an older check than the one on screen.
+ * about not here yet (useReportAgent), the datasets still coming, or the problems service still holds an older check
+ * than the one on screen. Its conversations are named by their dataset as people call it, as the summary names them;
+ * without the list of datasets the brief goes without that line.
  */
 export function useToneBrief(state: LabState | null): string {
   const { data, list } = useCriteria("tone");
   const agent = useReportAgent();
+  const datasets = useDatasets();
+  const dataset = datasets.data?.datasets.find((d) => d.id === state?.logs.datasetId);
   const result = toneResult(state);
-  if (!state || !result || !data || !agent.name || data.log?.finishedAt !== result.finishedAt) return "";
+  if (!state || !result || !data || !agent.name || datasets.isPending || data.log?.finishedAt !== result.finishedAt)
+    return "";
   const report = { ...data, rules: ownCriteria(result, list).map((c) => c.r) };
-  return toneBrief(report, result, shareBase(), { filename: state.logs.file ?? undefined, agent: agent.name });
+  return toneBrief(report, result, shareBase(), { filename: dataset && shownName(dataset), agent: agent.name });
 }
 
 /**
