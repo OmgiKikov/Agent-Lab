@@ -39,7 +39,7 @@ export function BeforeCheck({
   let lead: string;
   let actions: ReactNode;
   if (criteria.length) {
-    title = `${count(criteria.length, "критерий", "критерия", "критериев")} из «${rules!.name}»`;
+    title = `${count(criteria.length, "критерий", "критерия", "критериев")} из набора «${rules!.name}»`;
     lead = "Так мы поняли ваш набор правил. По этим критериям пойдёт проверка.";
     actions = (
       <>

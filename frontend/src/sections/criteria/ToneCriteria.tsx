@@ -2,10 +2,11 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ChevronDown, Download, FileText, Pencil, Plus, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { launchLink, SECTIONS } from "../../app/links";
+import { criterionLink, launchLink, SECTIONS } from "../../app/links";
 import { SIMULATIONS } from "../../app/product";
 import { api, textFile } from "../../lab/api";
 import { nameFromText, type Criterion } from "../../lab/criteria";
+import { useDatasets } from "../../lab/datasets";
 import { count, longDay, pct } from "../../lab/format";
 import { useJudges, type JudgeVersion } from "../../lab/judges";
 import { useLabState } from "../../lab/LabProvider";
@@ -16,13 +17,15 @@ import { TONE_ID, toneJudgedByOther, toneResult } from "../../lab/tone";
 import { MarkNo } from "../../product/MarkNo";
 import { Step, Steps, STEP_NEXT } from "../../product/Checklist";
 import { FirstStepsLine } from "../../product/FirstSteps";
-import { IMPORTANT, SeriousTag, SeverityHint, SeverityNote, SeveritySwitch } from "../../product/Severity";
+import { SeriousTag, SeverityHint, SeverityNote, SeveritySwitch } from "../../product/Severity";
 import { Button } from "../../ui/Button";
 import { EmptyState, Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
 import { Menu, type MenuItem } from "../../ui/Menu";
 import { Modal } from "../../ui/Modal";
 import { Sheet } from "../../ui/Sheet";
+import { useToast } from "../../ui/toast";
+import { shownName } from "../data/DatasetInfo";
 import { RuleEditor } from "../judges/RuleEditor";
 import { AddRules } from "./AddRules";
 import { CriterionPanel, type Shown } from "./CriterionPanel";
@@ -41,6 +44,10 @@ type Card = {
   clarifications: string[];
   result?: Criterion;
 };
+
+/** «А», «Б» и «В»: names inside a sentence, the last one joined with «и». */
+const listed = (names: string[]) =>
+  names.length > 1 ? `${names.slice(0, -1).join(", ")} и ${names[names.length - 1]}` : names.join("");
 
 /**
  * One criterion as a card, as the criteria were shown before the first check: its number, name and words; after a
@@ -76,7 +83,10 @@ function CriterionCard({ card, judged, onOpen }: { card: Card; judged: boolean; 
           <span className="mt-auto block pt-4">
             {s && checked ? (
               <>
-                <span className="flex items-baseline justify-between gap-3 text-small text-fg-3">
+                <span
+                  title="Второе число — в скольких проверенных разговорах критерий применим"
+                  className="flex items-baseline justify-between gap-3 text-small text-fg-3"
+                >
                   <span>
                     <span className={cn("font-semibold tabular-nums", s.failed ? "text-bad" : "text-fg")}>
                       {s.failed}
@@ -151,7 +161,10 @@ function CriterionDetails({ card, onEdit }: { card: Card; onEdit: () => void }) 
 function FirstSteps({ criteria, collecting, line }: { criteria: number; collecting?: boolean; line?: boolean }) {
   const { state } = useLabState();
   const total = state?.logs.total ?? 0;
-  const name = state?.logs.name || state?.logs.file;
+  // The dataset the check goes by, as people call it.
+  const datasets = useDatasets();
+  const dataset = datasets.data?.datasets.find((d) => d.id === state?.logs.datasetId);
+  const name = dataset && shownName(dataset);
   const ready = criteria > 0;
   if (line) return <FirstStepsLine criteria={criteria} collecting={collecting} className="mt-5" />;
   return (
@@ -165,7 +178,7 @@ function FirstSteps({ criteria, collecting, line }: { criteria: number; collecti
         action={
           !total && (
             <Link to={SECTIONS.data} className={STEP_NEXT}>
-              Добавить датасет
+              Загрузить датасет
             </Link>
           )
         }
@@ -282,6 +295,8 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
   const [params, setParams] = useSearchParams();
   const [replacing, setReplacing] = useState(params.get("doc") === "1");
   const [editing, setEditing] = useState<JudgeVersion | null | undefined>();
+  // The editor opened by «Добавить критерий»: on a new empty criterion at the end.
+  const [adding, setAdding] = useState(false);
   // An older address of the rules with their criteria marked (?view=code, «В правилах») opens the document.
   const [reading, setReading] = useState(params.get("view") === "code");
   const [asking, setAsking] = useState<JudgeVersion | null>(null);
@@ -301,35 +316,44 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
   // never for these, and stay on «Итог» and in the history.
   const other = hasResult && toneJudgedByOther(state);
   const collecting = !!state?.job.running && state.job.kind === "tone-criteria";
-  // The first criteria collected lead on to the first check: «Новая проверка» takes them, and opens them from there.
-  // They come a moment after the task ends (the rules' versions are fetched again), so the page waits for them.
-  // Collected again later, the criteria come where the rules were given, low on the page: the page goes back to its
-  // top, to them. Its own scroll moves, not the frame around it (as checks/RunPage does). A collection is told by its
-  // task, finished since the page opened: a quick one may end between two looks at the service.
+  // A collection is told by its task, finished since the page opened: a quick one may end between two looks at the
+  // service. What came is said in a notice: how many criteria, from which rules. The first criteria collected lead on to
+  // the first check: «Новая проверка» takes them, and the notice opens them from there. They come a moment after the
+  // task ends (the rules' versions are fetched again), so the page waits for them. Collected again later, the criteria
+  // come where the rules were given, low on the page: the page goes back to its top, to them. Its own scroll moves, not
+  // the frame around it (as checks/RunPage does).
   const navigate = useNavigate();
+  const toast = useToast();
   const [collected, setCollected] = useState(false);
   const top = useRef<HTMLDivElement>(null);
   const loaded = !!state;
   const finished =
     state?.job.kind === "tone-criteria" && !state.job.running ? `${state.job.id}|${state.job.startedAt}` : "";
+  const jobError = state?.job.error;
+  const came = `Собрали ${count(state?.toneOfVoice?.criteria.length ?? 0, "критерий", "критерия", "критериев")} из ${
+    policy ? `правил «${policy.origin}»` : "правил общения"
+  }`;
   const seen = useRef<string | null>(null);
   useEffect(() => {
     if (!loaded) return;
     // What the page found when it opened is no collection of its own.
     if (seen.current !== null && finished && finished !== seen.current) {
-      if (first) setCollected(true);
+      if (first) setCollected(!jobError);
       else {
         let box = top.current?.parentElement ?? null;
         while (box && !/(auto|scroll)/.test(getComputedStyle(box).overflowY)) box = box.parentElement;
         box?.scrollTo({ top: 0 });
+        if (!jobError) toast.notify(came);
       }
     }
     seen.current = finished;
-  }, [loaded, finished, first]);
-  const jobError = state?.job.error;
+  }, [loaded, finished, first, jobError, came, toast]);
   useEffect(() => {
-    if (collected && set.length && !jobError) navigate(launchLink("tone"));
-  }, [collected, set.length, jobError, navigate]);
+    if (!collected || !set.length) return;
+    setCollected(false);
+    toast.notify(came, { label: "Посмотреть", run: () => void navigate(criterionLink("tone")) });
+    navigate(launchLink("tone"));
+  }, [collected, set.length, came, toast, navigate]);
   const failed =
     !state?.job.running && state?.job.kind === "tone-criteria" && state.job.error && state.job.error !== "Остановлено"
       ? state.job.error
@@ -433,7 +457,11 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
           version={editing}
           baseId={versions.find((v) => v.setId === editing?.setId)?.id}
           replacesResult={hasResult}
-          onClose={() => setEditing(undefined)}
+          adding={adding}
+          onClose={() => {
+            setEditing(undefined);
+            setAdding(false);
+          }}
         />
       )}
     </div>
@@ -444,7 +472,7 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
       <>
         <p className="text-small font-medium text-fg-3">Правила общения</p>
         <h2 className="mt-1 text-page font-semibold text-fg">
-          Собираем критерии из «{policy?.origin || "правил общения"}»
+          Собираем критерии из {policy?.origin ? `правил «${policy.origin}»` : "правил общения"}
         </h2>
         <p className="mt-2 max-w-[62ch] text-read text-fg-3">
           Модель читает правила и собирает из них критерии. Это займёт пару минут: они появятся здесь.
@@ -500,7 +528,7 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
         <p className="text-small font-medium text-fg-3">Правила общения</p>
         <h2 className="mt-1 text-page font-semibold text-fg">
           {count(cards.length, "критерий", "критерия", "критериев")}
-          {source ? ` из «${source}»` : ""}
+          {source ? ` из правил «${source}»` : ""}
         </h2>
         <p className="mt-2 max-w-[66ch] text-read text-fg-3">
           {first
@@ -555,8 +583,10 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
         </section>
       )}
 
+      {/* What a person needs before the cards, in the page's reading size: what the last check covered when it differs
+          from the criteria now, and what an important criterion is, with where marking them stands and its action. */}
       {hasResult && data && (
-        <div className="mt-8 space-y-1 border-t border-line pt-5 text-small text-fg-3">
+        <div className="mt-8 space-y-2 border-t border-line pt-5 text-read text-fg-2 [&>*]:max-w-[68ch]">
           {other ? (
             <p>
               Последняя проверка{data.log?.finishedAt ? ` ${longDay(data.log.finishedAt)}` : ""} шла по прежним
@@ -567,17 +597,22 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
               пойдёт по этим.
             </p>
           ) : (
-            data.log?.finishedAt && (
-              <p>
-                Последняя проверка {longDay(data.log.finishedAt)}
-                {unjudged.length > 0
-                  ? `: шла по ${cards.length - unjudged.length}\u00a0из\u00a0${cards.length}, ${unjudged.map((c) => `«${c.name}»`).join(", ")} ${unjudged.length === 1 ? "в неё не входил" : "в неё не входили"}. Новая проверка пойдёт по всем.`
-                  : "."}
-              </p>
-            )
+            <>
+              {unjudged.length > 0 && (
+                <p>
+                  Последняя проверка шла по {cards.length - unjudged.length}
+                  {"\u00a0"}из{"\u00a0"}
+                  {count(cards.length, "критерия", "критериев", "критериев")}:{" "}
+                  {listed(unjudged.map((c) => `«${c.name}»`))}{" "}
+                  {unjudged.length === 1 ? "в неё не входил" : "в неё не входили"}. Новая проверка пойдёт по всем.
+                </p>
+              )}
+              <div>
+                Важный критерий — одно его нарушение может навредить клиенту или банку.{" "}
+                <SeverityHint check="tone" data={data} className="inline text-read text-fg-2" />
+              </div>
+            </>
           )}
-          {!other && <p>{IMPORTANT}</p>}
-          {!other && <SeverityHint check="tone" data={data} />}
         </div>
       )}
 
@@ -593,7 +628,10 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
           <button
             type="button"
             disabled={blocked || !rules}
-            onClick={() => setEditing(rules)}
+            onClick={() => {
+              setAdding(true);
+              setEditing(rules);
+            }}
             className="flex h-full min-h-[132px] w-full flex-col items-center justify-center gap-2 rounded-[18px] border border-dashed border-line-strong text-body text-fg-3 transition-colors hover:bg-hover hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60 disabled:opacity-50"
           >
             <Plus aria-hidden className="size-5" />
@@ -693,7 +731,7 @@ export function ToneCriteria({ data, list }: { data: Problems | undefined; list:
         }
       >
         <p className="text-read text-fg-2">
-          Итог Tone of voice по прежним правилам уйдёт в историю. Следующая проверка пойдёт по «{asking?.name}», версия{" "}
+          Итог по прежним правилам уйдёт в историю. Следующая проверка пойдёт по правилам «{asking?.name}», версия{" "}
           {asking?.version}.
         </p>
       </Modal>

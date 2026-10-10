@@ -1,53 +1,29 @@
 import { useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
-import { ArrowRight, Download, Loader2, Plus, RotateCcw, Sparkles } from "lucide-react";
-import { launchLink } from "../../app/links";
-import { api, textFile } from "../../lab/api";
-import { CHECK_NAME, resultOf } from "../../lab/checks";
+import { Download, Plus } from "lucide-react";
+import { SIMULATIONS } from "../../app/product";
+import { textFile } from "../../lab/api";
+import { resultOf } from "../../lab/checks";
 import { useJudges, type JudgeVersion } from "../../lab/judges";
 import { useLabState } from "../../lab/LabProvider";
 import { download } from "../../lab/problemReport";
 import type { Check } from "../../lab/types";
-import { TONE_ID } from "../../lab/tone";
-import { Button, buttonClass } from "../../ui/Button";
+import { Button } from "../../ui/Button";
 import { Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
 import { Modal } from "../../ui/Modal";
 import { Sheet } from "../../ui/Sheet";
-import { DocumentRules } from "./DocumentRules";
 import { RuleEditor } from "./RuleEditor";
 import { RuleSet } from "./RuleSet";
 
 /**
- * «Правила» of a check, over its criteria: the rule sets with their versions, which one the checks go by, a new
- * version or set, and for tone of voice the criteria collected from the bank's document (?doc=1 opens it). Taking
- * other rules sends the current result to the history (the result is always by the current rules), so it is asked
- * first when there is one.
+ * «Правила» of Точность, over its criteria: the rule sets with their versions, which one the checks go by, a new
+ * version or set, or the criteria from the agent's code again. Taking other rules sends the current result to the
+ * history (the result is always by the current rules), so it is asked first when there is one. Tone of voice gives its
+ * rules on «Критерии» itself (criteria/ToneCriteria).
  */
 export function RulesSheet({ check, open, onClose }: { check: Check; open: boolean; onClose: () => void }) {
   const library = useJudges(check);
-  const { state, refresh } = useLabState();
-  const [params, setParams] = useSearchParams();
-  const doc = check === "tone" && params.get("doc") === "1";
-  const showDoc = (on: boolean) =>
-    setParams(
-      (prev) => {
-        const n = new URLSearchParams(prev);
-        if (on) n.set("doc", "1");
-        else n.delete("doc");
-        return n;
-      },
-      { replace: true },
-    );
-  // Collecting the criteria is long work of the agent: said here while it goes, and why it stopped when it failed.
-  const collecting = !!state?.job.running && state.job.kind === "tone-criteria";
-  const collectFailed =
-    check === "tone" && !state?.job.running && state?.job.kind === "tone-criteria" && !!state.job.error
-      ? state.job.error
-      : null;
-  const hasDocument = !!state?.sources.some((s) => s.id === TONE_ID);
-  // The criteria were just collected and nothing ran since: the next step is the check itself.
-  const collected = check === "tone" && !state?.job.running && state?.job.kind === "tone-criteria" && !state.job.error;
+  const { state } = useLabState();
   const [editing, setEditing] = useState<JudgeVersion | null | undefined>();
   const [asking, setAsking] = useState<{ id: string | null; name: string } | null>(null);
   const [busy, setBusy] = useState(false);
@@ -80,7 +56,7 @@ export function RulesSheet({ check, open, onClose }: { check: Check; open: boole
   return (
     <>
       <Sheet
-        open={open && editing === undefined && !doc}
+        open={open && editing === undefined}
         onClose={onClose}
         width="lg"
         title="Правила"
@@ -91,47 +67,8 @@ export function RulesSheet({ check, open, onClose }: { check: Check; open: boole
             <Button icon={Plus} disabled={blocked || !library.data} onClick={() => setEditing(null)}>
               Новый набор
             </Button>
-            {check === "tone" && (
-              <Button variant="ghost" icon={Sparkles} disabled={blocked || collecting} onClick={() => showDoc(true)}>
-                Собрать из документа
-              </Button>
-            )}
           </div>
-          {collecting && (
-            <div role="status" className="flex flex-wrap items-center gap-3 rounded-block bg-inset p-4 text-body">
-              <Loader2 aria-hidden className="size-4 animate-spin text-fg-3" />
-              <span className="min-w-0 flex-1">Собираем критерии из правил общения. Это займёт пару минут.</span>
-              <Button
-                size="sm"
-                onClick={() =>
-                  void act(async () => {
-                    await api("/api/job/stop", {});
-                    await refresh();
-                  })
-                }
-              >
-                Остановить
-              </Button>
-            </div>
-          )}
-          {collected && (
-            <div role="status" className="flex flex-wrap items-center gap-3 rounded-block bg-inset p-4 text-body">
-              <span className="min-w-0 flex-1 text-fg-2">
-                Критерии собраны: {library.selected?.name ?? "правила общения"}. Следующий шаг — проверка разговоров.
-              </span>
-              <Link to={launchLink("tone")} className={buttonClass({ variant: "primary", size: "sm" })}>
-                Новая проверка
-                <ArrowRight aria-hidden className="size-3.5" />
-              </Link>
-            </div>
-          )}
-          {collectFailed && collectFailed !== "Остановлено" && (
-            <p role="alert" className="text-body text-bad">
-              Критерии не собрались: {collectFailed}
-            </p>
-          )}
-          {check === "code" &&
-            library.data &&
+          {library.data &&
             sets.length > 0 &&
             (library.selected ? (
               <p className="text-body text-fg-3">
@@ -179,9 +116,7 @@ export function RulesSheet({ check, open, onClose }: { check: Check; open: boole
             </div>
           ) : (
             <p className="text-body text-fg-3">
-              {check === "tone"
-                ? "Правил пока нет. Соберите критерии из документа с правилами общения или создайте набор вручную."
-                : "Своих наборов пока нет: точность проверяется по критериям из кода агента."}
+              Своих наборов пока нет: точность проверяется по критериям из кода агента.
             </p>
           )}
           <div className="flex flex-wrap gap-x-5 gap-y-2 border-t border-line pt-4 text-body">
@@ -196,21 +131,9 @@ export function RulesSheet({ check, open, onClose }: { check: Check; open: boole
               <Download aria-hidden className="size-3.5" />
               Скачать текущие правила
             </button>
-            {check === "tone" && hasDocument && (
-              <button
-                type="button"
-                disabled={blocked || collecting}
-                onClick={() => showDoc(true)}
-                className="inline-flex items-center gap-1.5 text-fg-2 hover:text-fg hover:underline disabled:opacity-40"
-              >
-                <RotateCcw aria-hidden className="size-3.5" />
-                Собрать критерии заново из документа
-              </button>
-            )}
           </div>
         </div>
       </Sheet>
-      <DocumentRules open={open && doc} onClose={() => showDoc(false)} />
       {editing !== undefined && (
         <RuleEditor
           key={editing?.id ?? "new"}
@@ -248,8 +171,8 @@ export function RulesSheet({ check, open, onClose }: { check: Check; open: boole
         }
       >
         <p className="text-read text-fg-2">
-          Итог {CHECK_NAME[check]} по прежним правилам уйдёт в историю вместе со сценариями из него. Следующая проверка
-          пойдёт по {asking?.id ? `набору «${asking.name}»` : asking?.name}.
+          Итог по прежним правилам уйдёт в историю{SIMULATIONS ? " вместе со сценариями из него" : ""}. Следующая
+          проверка пойдёт по {asking?.id ? `набору «${asking.name}»` : asking?.name}.
         </p>
       </Modal>
     </>

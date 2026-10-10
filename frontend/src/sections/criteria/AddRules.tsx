@@ -78,12 +78,13 @@ function TextPicture() {
 /**
  * «Правила общения» as the step before the criteria, on the page itself: the bank's document, a pasted text, or another
  * agent's rules — a card each, as «Gather your ideas» lays out its kinds of things. A document or a text given shows
- * its name and its text, with «Собрать критерии»; the model collects them, and the criteria come in the step's place
- * (BeforeCheck). Criteria are collected against the conversations, so without a dataset the step says so. Rules saved
- * without criteria (a collection that failed, rules taken before criteria were collected) open as the text given. The
- * text being written survives a reload (lab/tone). `replacing` — other rules in place of the current ones (ToneCriteria,
- * «Заменить правила»): the same cards from the start, what the replacement takes away said above them, the current
- * document collected anew as one more way, and «Отмена».
+ * its name and its text, with «Собрать критерии»; the model collects them from the rules alone, and the criteria come
+ * in the step's place (BeforeCheck). The service collects them only once the agent has a dataset to check, so without
+ * one the step says so. Rules saved without criteria (a collection that failed, rules taken before criteria were
+ * collected) open as the text given. The text being written survives a reload (lab/tone). `replacing` — other rules in
+ * place of the current ones (ToneCriteria, «Заменить правила»): the same cards from the start, what new rules take
+ * away said above them, the current document collected anew as one more way with what that keeps under it, and
+ * «Отмена».
  */
 export function AddRules({ replacing, onDone }: { replacing?: boolean; onDone?: () => void } = {}) {
   const { state, refresh } = useLabState();
@@ -173,20 +174,35 @@ export function AddRules({ replacing, onDone }: { replacing?: boolean; onDone?: 
       onDone?.();
     });
   const result = !!toneResult(state);
-  const deck = state?.cards?.check === "tone" && !!state.cards.cards.length;
+  const deck = SIMULATIONS && state?.cards?.check === "tone" && !!state.cards.cards.length;
+  // What people clarified about the criteria stays only with the same rules (backend: tone.kept_clarifications).
+  const clarified = !!state?.toneOfVoice?.criteria.some((c) => c.clarifications?.length);
+  // Each way says once what it does to the result (backend: inputs.replace_sources, tone.save_draft). New rules: the
+  // result by the current ones goes to the history, the clarifications stay behind.
   const replaces =
     replacing &&
-    `Новые правила заменят текущие.${result ? " Итог Tone of voice по прежним правилам уйдёт в историю." : ""}${deck && SIMULATIONS ? " Сценарии из него сбросятся." : ""} Уточнения останутся там, где цитата из правил не изменилась.`;
-  // The same text collected again: the rules stay, the result by the criteria before stays until the next check.
-  const keeps = result
-    ? "Правила те же: итог останется посчитанным по прежним критериям, пока не пройдёт новая проверка."
-    : null;
+    [
+      result ? "Новые правила заменят текущие, а итог по прежним уйдёт в историю." : "Новые правила заменят текущие.",
+      deck && "Сценарии из итога сбросятся.",
+      clarified && "Уточнения к текущим критериям в новые не перейдут.",
+    ]
+      .filter(Boolean)
+      .join(" ");
+  // The same rules collected again: new criteria from them, and the result stays until the next check.
+  const keeps = [
+    result && "Итог останется до следующей проверки.",
+    deck && "Сценарии из итога сбросятся.",
+    clarified && "Уточнения останутся там, где цитата из правил не изменилась.",
+  ]
+    .filter(Boolean)
+    .join(" ");
   const noDataset = !dialogues && (
     <p className="mt-4 max-w-[62ch] text-body text-fg-2">
-      Критерии собираются по разговорам, поэтому сначала нужен датасет.{" "}
+      Сначала{" "}
       <Link to={SECTIONS.data} className="font-medium text-run hover:underline">
-        Добавить датасет
+        загрузите датасет
       </Link>
+      : по нему пойдёт проверка.
     </p>
   );
   const failed = error && (
@@ -240,7 +256,9 @@ export function AddRules({ replacing, onDone }: { replacing?: boolean; onDone?: 
               : "Нужно хотя бы несколько предложений правил."}
           </p>
           {replacing && text.trim().length >= 20 && (
-            <p className="mt-2 max-w-[62ch] text-small text-fg-2">{same ? keeps : replaces}</p>
+            <p className="mt-2 max-w-[62ch] text-small text-fg-2">
+              {same ? ["Правила те же: критерии соберутся заново.", keeps].filter(Boolean).join(" ") : replaces}
+            </p>
           )}
           {noDataset}
           {failed}
@@ -369,7 +387,7 @@ export function AddRules({ replacing, onDone }: { replacing?: boolean; onDone?: 
               onClick={() => void again()}
               className="rounded-sm text-body font-medium text-run hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60 disabled:opacity-40"
             >
-              Собрать критерии заново из «{source.data?.origin ?? "текущих правил"}»
+              Собрать критерии заново из {source.data ? `правил «${source.data.origin}»` : "текущих правил"}
             </button>
           )}
           <button
@@ -382,11 +400,7 @@ export function AddRules({ replacing, onDone }: { replacing?: boolean; onDone?: 
           </button>
         </div>
       )}
-      {replacing && hasSource && result && (
-        <p className="mt-2 max-w-[62ch] text-small text-fg-3">
-          Собранные заново критерии пойдут в следующую проверку, итог останется посчитанным по прежним.
-        </p>
-      )}
+      {replacing && hasSource && keeps && <p className="mt-2 max-w-[62ch] text-small text-fg-3">{keeps}</p>}
     </div>
   );
 }

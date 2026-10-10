@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { BookOpen, ChevronDown, Database } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { plural } from "../lab/format";
+import { masked, MASKS } from "../lab/dialogs";
+import { count, plural } from "../lab/format";
 import type { ToolCall, Turn } from "../lab/types";
 import { segments } from "../lab/quote";
 import { MarkNo } from "./MarkNo";
@@ -137,8 +138,10 @@ function AgentTurn({
   onLit?: OnLit;
 }) {
   const { text, buttons } = visible(turn.text);
-  // An export writes the buttons into the text by their codes; a simulated agent sends them by their words.
-  const chips = [...buttons.map((code) => code || "кнопка"), ...(turn.options ?? [])];
+  // The buttons the client saw under the reply: a simulated agent sends them by their words; an export keeps only their
+  // codes, which say something to the agent's developers alone (sections/dialogs/Dialog, «Для разработчика»).
+  const options = turn.options ?? [];
+  const sent = buttons.length + options.length;
   const pieces = marks.length ? segments(text, marks) : [{ text }];
   const calls = turn.events ?? [];
   const said = [named && "Агент", turn.seconds !== undefined && `ответил за ${secs(turn.seconds)}`].filter(Boolean);
@@ -181,16 +184,15 @@ function AgentTurn({
           )}
         </p>
       </div>
-      {/* The buttons under the reply, as the chat showed them to the client. */}
-      {chips.length > 0 && (
-        <div className="flex flex-wrap gap-1.5 pl-1">
-          {chips.map((chip, i) => (
-            <span
-              key={i}
-              title="Кнопка, которую агент отправил в чат"
-              className="rounded-full bg-list px-3 py-1 text-small text-fg-2 ring-1 ring-line-strong"
-            >
-              {chip}
+      {sent > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 pl-1 text-small text-fg-3">
+          <span>
+            {sent === 1 ? "Агент отправил кнопку" : `Агент отправил ${count(sent, "кнопку", "кнопки", "кнопок")}`}
+            {options.length > 0 && ":"}
+          </span>
+          {options.map((option, i) => (
+            <span key={i} className="rounded-full bg-list px-3 py-1 text-fg-2 ring-1 ring-line-strong">
+              {option}
             </span>
           ))}
         </div>
@@ -202,7 +204,8 @@ function AgentTurn({
 
 /**
  * A conversation as the chat looked: the customer's bubbles on the right, the agent's on the left with the judge's quote
- * marked in yellow and numbered. Turns long before the mark fold into «ещё N реплик выше».
+ * marked in yellow and numbered. Turns long before the mark fold into «ещё N реплик выше». When the export masked the
+ * client's data, one quiet line above says what the marks stand for.
  */
 export function Conversation({
   turns,
@@ -228,6 +231,7 @@ export function Conversation({
   const firstAgent = turns.findIndex((t, i) => i >= from && t.role !== "customer");
   return (
     <div className="flex flex-col gap-4">
+      {masked(turns) && <p className="text-small text-fg-3">{MASKS}</p>}
       {from > 0 && (
         <button
           type="button"

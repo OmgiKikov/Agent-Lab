@@ -17,18 +17,32 @@ const fresh = (): ToneCriterion => ({
   condition: "",
   acceptable: "",
 });
+
+/** A criterion nobody has written in yet: added and left empty, it is neither an edit nor a criterion to save. */
+const blank = (r: ToneCriterion) => ![r.name, r.text, r.condition, r.acceptable].some((value) => value.trim());
+
+/**
+ * A new version of a set of rules, or a new set: its name, the rules' text and every criterion, kept as a draft in this
+ * browser until it is saved. `adding` («Добавить критерий» on «Критерии»): the form opens on a new empty criterion at
+ * the end, its name field focused.
+ */
 export function RuleEditor({
   check,
   version,
   baseId,
   replacesResult,
+  adding,
   onClose,
 }: {
   check: Check;
   version: JudgeVersion | null;
   baseId?: string;
-  /** The check has a result now: saving makes these rules current and sends that result to the history. */
+  /**
+   * The check has a result now: saving keeps it while nothing the model reads changes (a name), and sends it to the
+   * history otherwise (backend: judges.activate).
+   */
   replacesResult?: boolean;
+  adding?: boolean;
   onClose: () => void;
 }) {
   const library = useJudges(check);
@@ -50,18 +64,38 @@ export function RuleEditor({
   const { state } = useLabState();
   const [name, setName] = useState(savedDraft?.name ?? version?.name ?? "");
   const [policy, setPolicy] = useState(savedDraft?.policy ?? version?.policy ?? "");
-  const [rules, setRules] = useState<ToneCriterion[]>(savedDraft?.rules ?? version?.criteria ?? [fresh()]);
+  const [rules, setRules] = useState<ToneCriterion[]>(() => {
+    const start = savedDraft?.rules ?? version?.criteria ?? [fresh()];
+    const last = start[start.length - 1];
+    // One left empty at the end before is the new criterion «Добавить критерий» asks for.
+    return adding && !(last && blank(last)) ? [...start, fresh()] : start;
+  });
+  // The criterion added last: its name field takes the focus, and the form scrolls to it.
+  const [added, setAdded] = useState(() => (adding ? rules[rules.length - 1].id : null));
+  const addedName = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    addedName.current?.scrollIntoView({ block: "center" });
+  }, [added]);
+  const add = () => {
+    const rule = fresh();
+    setRules((all) => [...all, rule]);
+    setAdded(rule.id);
+  };
+  const written = rules.filter((r) => !blank(r));
+  // The edits made on a saved version; a criterion added and left empty is none.
+  const edited =
+    !!version &&
+    JSON.stringify([name, policy, written]) !== JSON.stringify([version.name, version.policy, version.criteria]);
+  // Kept in this browser while there is something to come back to: the edits of a version, or a new set.
   useEffect(() => {
     try {
-      localStorage.setItem(draftKey, JSON.stringify({ name, policy, rules, baseId: expectedBase }));
+      if (version && !edited) localStorage.removeItem(draftKey);
+      else localStorage.setItem(draftKey, JSON.stringify({ name, policy, rules, baseId: expectedBase }));
     } catch {
       /* Editing still works when storage is unavailable. */
     }
-  }, [draftKey, name, policy, rules, expectedBase]);
+  }, [draftKey, version, edited, name, policy, rules, expectedBase]);
   // The edits kept in this browser, put away: the version as it is saved, and no draft left to come back.
-  const edited =
-    !!version &&
-    JSON.stringify([name, policy, rules]) !== JSON.stringify([version.name, version.policy, version.criteria]);
   const discard = () => {
     if (!version) return;
     setName(version.name);
@@ -69,11 +103,6 @@ export function RuleEditor({
     setRules(version.criteria);
     setExpectedBase(baseId ?? version.id);
     setConflict(null);
-    try {
-      localStorage.removeItem(draftKey);
-    } catch {
-      /* Nothing kept to put away. */
-    }
   };
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -109,7 +138,7 @@ export function RuleEditor({
       await api(`/api/judges/${check}`, {
         name,
         policy,
-        criteria: rules,
+        criteria: written,
         setId: version?.setId ?? null,
         baseId: version ? base : null,
       });
@@ -131,7 +160,10 @@ export function RuleEditor({
     }
   };
   const valid =
-    name.trim() && policy.trim().length >= 20 && rules.length > 0 && rules.every((r) => r.name.trim() && r.text.trim());
+    name.trim() &&
+    policy.trim().length >= 20 &&
+    written.length > 0 &&
+    written.every((r) => r.name.trim() && r.text.trim());
   return (
     <Sheet
       open
@@ -139,7 +171,7 @@ export function RuleEditor({
       title={version ? "Новая версия правил" : "Новый набор правил"}
       sub={
         replacesResult
-          ? "После сохранения эти правила станут текущими, а итог по прежним уйдёт в историю. Черновик хранится в этом браузере."
+          ? "Если изменится то, что читает модель (текст, условия, допустимое), итог по прежним критериям уйдёт в историю. Новое название его не меняет. Черновик хранится в этом браузере."
           : "После сохранения эти правила станут текущими. Прошлые версии и проверки сохранятся. Черновик хранится в этом браузере."
       }
       actions={
@@ -183,7 +215,13 @@ export function RuleEditor({
         )}
         <label className="block text-body font-medium text-fg">
           Название набора
-          <Input autoFocus maxLength={160} value={name} onChange={(e) => setName(e.target.value)} className="mt-1" />
+          <Input
+            autoFocus={!adding}
+            maxLength={160}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="mt-1"
+          />
         </label>
         <div>
           <label className="block text-body font-medium text-fg">
@@ -233,6 +271,8 @@ export function RuleEditor({
                 <div className="flex items-center gap-3">
                   <span className="text-small text-fg-3">{i + 1}</span>
                   <Input
+                    ref={rule.id === added ? addedName : undefined}
+                    autoFocus={rule.id === added}
                     aria-label={`Название критерия ${i + 1}`}
                     value={rule.name}
                     maxLength={200}
@@ -257,7 +297,9 @@ export function RuleEditor({
                   />
                 </label>
                 <details className="mt-3">
-                  <summary className="cursor-pointer text-small text-fg-3">Условия и допустимые ответы</summary>
+                  <summary className="cursor-pointer text-small text-fg-3">
+                    Условия и допустимые ответы · по желанию
+                  </summary>
                   <label className="mt-2 block text-small text-fg-3">
                     Когда применять
                     <Input
@@ -280,12 +322,7 @@ export function RuleEditor({
               </div>
             ))}
           </div>
-          <Button
-            className="mt-4"
-            icon={Plus}
-            disabled={rules.length >= 100}
-            onClick={() => setRules((all) => [...all, fresh()])}
-          >
+          <Button className="mt-4" icon={Plus} disabled={rules.length >= 100} onClick={add}>
             Добавить критерий
           </Button>
         </section>

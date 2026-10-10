@@ -73,7 +73,7 @@ export function Advice({
     }
   };
   return (
-    <Sheet open onClose={onClose} title={clarify ? "Уточнить критерий" : "Переформулировать ответ"}>
+    <Sheet open onClose={onClose} title={clarify ? "Уточнить критерий" : "Как ответить правильно"}>
       <div className="space-y-6 px-5 py-6 sm:px-7">
         <div>
           <p className="text-small font-medium text-fg-3">Слова агента</p>
@@ -190,7 +190,7 @@ export function Advice({
             )}
             {stale && (
               <p role="alert" className="text-read text-warn">
-                Проверка или критерии изменились. Закройте окно и откройте находку заново.
+                Проверка или критерии изменились. Закройте окно и откройте его заново.
               </p>
             )}
             {error && (

@@ -2,7 +2,7 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { ChevronDown, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Criterion } from "../../lab/criteria";
-import type { DialogRow } from "../../lab/dialogs";
+import { topicOf, type DialogRow } from "../../lab/dialogs";
 import { personaName } from "../../lab/look";
 import type { Persona } from "../../lab/types";
 import { Menu } from "../../ui/Menu";
@@ -30,17 +30,21 @@ export function VerdictWord({ status, className }: { status: DialogRow["status"]
   );
 }
 
+/**
+ * One conversation in the list: its result, the client's first words, and the criteria it broke by their names, so
+ * nobody has to remember what a criterion's number stands for.
+ */
 function Row({
   r,
   on,
   onOpen,
-  numbers,
+  broken,
   personas,
 }: {
   r: DialogRow;
   on: boolean;
   onOpen: () => void;
-  numbers: number[];
+  broken: string[];
   personas: Persona[];
 }) {
   const ref = useRef<HTMLButtonElement>(null);
@@ -55,12 +59,11 @@ function Row({
     if (r.top < b.top) list.scrollTop -= b.top - r.top;
     else if (r.bottom > b.bottom) list.scrollTop += r.bottom - b.bottom;
   }, [on]);
-  const who =
-    r.source === "sim"
-      ? [personaName(personas, r.persona), r.attempt && r.attempt > 1 ? `повтор ${r.attempt}` : ""]
-          .filter(Boolean)
-          .join(" · ")
-      : "";
+  const where = [
+    topicOf(r),
+    r.source === "sim" ? personaName(personas, r.persona) : "",
+    r.attempt && r.attempt > 1 ? `повтор ${r.attempt}` : "",
+  ].filter(Boolean);
   return (
     <button
       ref={ref}
@@ -77,24 +80,13 @@ function Row({
         {r.disputed && <span className="text-small text-warn">· модели разошлись</span>}
       </span>
       <span className="mt-1 line-clamp-2 text-body text-fg">{r.title}</span>
-      <span className="mt-1 flex flex-wrap gap-x-1.5 text-small text-fg-3">
-        {r.topic && <span className="truncate">{r.topic}</span>}
-        {who && (
-          <>
-            <span aria-hidden>·</span>
-            <span>{who}</span>
-          </>
-        )}
-        {numbers.length > 0 && (
-          <>
-            <span aria-hidden>·</span>
-            <span>
-              ошибка по {numbers.length > 1 ? "критериям" : "критерию"}{" "}
-              <span className="tabular-nums text-fg-2">{numbers.join(", ")}</span>
-            </span>
-          </>
-        )}
-      </span>
+      {where.length + broken.length > 0 && (
+        <span className="mt-1 line-clamp-2 text-small text-fg-3">
+          {where.join(" · ")}
+          {where.length > 0 && broken.length > 0 && " · "}
+          {broken.length > 0 && <span className="text-fg-2">{broken.join(", ")}</span>}
+        </span>
+      )}
     </button>
   );
 }
@@ -149,22 +141,29 @@ export function Rows({
   className?: string;
 }) {
   const find = criteriaByRule(criteria);
-  const numbers = (r: DialogRow) =>
+  // The criteria a conversation broke, by their names in the order of their numbers.
+  const broken = (r: DialogRow) =>
     [
-      ...new Set(
+      ...new Map(
         r.rules
           .filter((x) => x.status === "FAIL")
           .flatMap((x) => {
             const c = find(r.source, x.ruleId);
-            return c ? [c.n] : [];
+            return c ? [[c.n, c.name] as const] : [];
           }),
       ),
-    ].sort((a, b) => a - b);
+    ]
+      .sort((a, b) => a[0] - b[0])
+      .map(([, name]) => name);
   const count = (v: Verdict) => all.filter((r) => matchesRow(r, v, "", null, serious)).length;
   const current = VERDICTS.find((v) => v.value === verdict)!;
-  // «Нарушен важный критерий» once a criterion is important, or when an address asks for it.
-  const marked = criteria.some((c) => c.r.serious);
-  const verdicts = VERDICTS.filter((v) => v.value !== "serious" || marked || verdict === "serious");
+  // Offered once they can hold something, or when an address asks for them: «Нарушен важный критерий» once a criterion
+  // is important, «Модели разошлись» once a second model checked some of these conversations (LAB_SECOND_MODEL).
+  const offered: Partial<Record<Verdict, boolean>> = {
+    serious: criteria.some((c) => c.r.serious),
+    disputed: all.some((r) => !!r.second),
+  };
+  const verdicts = VERDICTS.filter((v) => offered[v.value] !== false || v.value === verdict);
   return (
     <div className={cn("flex min-h-0 min-w-0 flex-col border-line lg:border-r", className)}>
       <div className="space-y-3 px-4 pb-3 pt-4">
@@ -220,7 +219,7 @@ export function Rows({
                       r={r}
                       on={r.key === selected}
                       onOpen={() => onOpen(r.key)}
-                      numbers={numbers(r)}
+                      broken={broken(r)}
                       personas={personas}
                     />
                   </li>
