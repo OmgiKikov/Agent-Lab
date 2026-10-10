@@ -41,14 +41,16 @@ def evaluation_fingerprint(result: dict) -> str:
 
 
 def comparison(check: dict, previous: dict | None) -> dict:
-    """How a saved check stands to the one saved before it: comparable only with the same criteria and models."""
+    """How a saved check stands to the one saved before it: comparable only with the same models, instructions and
+    criteria. A judge that changed is named first: when the Lab changes how its judge reads the criteria, their
+    fingerprints change with its instructions, though nobody changed a criterion."""
     if previous is None:
         return {'kind': 'first', 'previousId': None, 'reason': 'Это первая сохранённая проверка.'}
     base = {'previousId': previous['id']}
-    if check['criteriaFingerprint'] != previous['criteriaFingerprint']:
-        return {**base, 'kind': 'incompatible', 'reason': 'Изменились критерии или то, из чего они собраны.'}
     if check['evaluationFingerprint'] != previous['evaluationFingerprint']:
         return {**base, 'kind': 'incompatible', 'reason': 'Изменились модели или их инструкции.'}
+    if check['criteriaFingerprint'] != previous['criteriaFingerprint']:
+        return {**base, 'kind': 'incompatible', 'reason': 'Изменились критерии или то, из чего они собраны.'}
     if check['datasetFingerprint'] == previous['datasetFingerprint']:
         if check.get('knowledgeFingerprint') != previous.get('knowledgeFingerprint'):
             return {**base, 'kind': 'incompatible', 'reason': 'Изменились источники базы знаний.'}

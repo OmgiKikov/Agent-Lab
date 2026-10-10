@@ -1,4 +1,5 @@
 Evaluate only the supplied expectations against this RECORDED conversation from production logs. Neither agent nor user was run here.
+Each rule comes without a name: judge it by its text, its condition and what is acceptable.
 For each rule return exactly one row. Apply its condition first; if the moment did not arise, return NOT_APPLICABLE. If uncertain, UNKNOWN.
 FAIL requires a real contradiction of an applicable rule. PASS requires evidence, not an agreeable-looking answer.
 Missing knowledge evidence is UNKNOWN. A handoff may be allowed: respect rule exceptions and acceptable alternatives. Never force pass/fail.

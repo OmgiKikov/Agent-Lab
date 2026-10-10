@@ -205,7 +205,7 @@ def commit(result: dict, *, new_criteria: bool) -> None:
         previous = storage.history.latest(checks.CODE)
         export = storage.dialogues.meta()
         record = accuracy.saved(result, dialogues, export.get('file'), storage.dialogues.count(), previous)
-        provenance.attach(result, record, checks.CODE, previous)
+        provenance.attach(result, record, checks.CODE)
         publish(result, record, new_criteria=new_criteria)
 
 

@@ -21,6 +21,7 @@ from .. import agents, models, storage
 from ..agents import knowledge, world
 from ..domain import checks, personas
 from ..domain import world as scenario_world
+from ..domain.tone import unnamed
 from ..domain.transcript import for_judge, tool_calls, with_buttons
 from ..domain.verdicts import with_asked
 from ..roles import customer, judge
@@ -428,7 +429,7 @@ async def evidence(card: dict, conversation: list[dict]) -> judge.Evidence:
     payload = {
         'availableTools': agent_context.current()['tools'],
         'contextWarning': warning,
-        'expectations': card['criteria'],
+        'expectations': [unnamed(criterion) for criterion in card['criteria']],
         'conversation': shown,
         'toolCallsObserved': bool(calls),
         'knowledge': retrieved,

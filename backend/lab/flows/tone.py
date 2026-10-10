@@ -325,8 +325,7 @@ async def _assess(check_id: str, criteria: list[dict], count: int, progress: Pro
 
 def commit(result: dict) -> None:
     """Publish a finished check with its record in the history (publish). The materials it was made of must still be
-    the current ones. It is compared with the check saved before it by what the judge read of that check's criteria
-    (domain.tone.compared), whenever it was saved."""
+    the current ones."""
     ensure_active()
     source = current_policy()
     draft = storage.documents.load(DRAFT) or {}
@@ -339,11 +338,10 @@ def commit(result: dict) -> None:
     ):
         raise ValueError('Материалы проверки изменились. Запустите проверку заново.')
     with storage.transaction():
-        latest = storage.history.latest(checks.TONE)
-        previous = latest and tone.compared(storage.history.get(checks.TONE, latest['id']))
+        previous = storage.history.latest(checks.TONE)
         export = {'file': storage.dialogues.meta().get('file'), 'total': storage.dialogues.count()}
         record = tone.snapshot(result, dialogues, criteria, source, export, previous)
-        provenance.attach(result, record, checks.TONE, previous)
+        provenance.attach(result, record, checks.TONE)
         publish(result, record)
 
 

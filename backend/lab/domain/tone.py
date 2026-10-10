@@ -115,12 +115,18 @@ def kept_clarifications(criteria: list[dict], previous: dict | None, source: dic
     ]
 
 
+def unnamed(rule: dict) -> dict:
+    """A criterion as the judge is given it: all of it but its name, which people give it to tell the criteria apart
+    (the judge's instructions say so)."""
+    return {key: value for key, value in rule.items() if key != 'name'}
+
+
 def for_judging(rule: dict) -> dict:
-    """A criterion as the judge reads it: all of it but its name, which people give it to tell the criteria apart, with
-    the clarifications people confirmed in its text. Saved checks compare by it (criteria_fingerprint), an answer on a
-    verdict stays while it is the same (flows.tone.carry_decisions), and a save that keeps it keeps the result
-    (flows.judges.activate): a criterion renamed is the same criterion."""
-    read = {key: value for key, value in rule.items() if key != 'name'}
+    """A criterion as the judge reads it: unnamed, with the clarifications people confirmed in its text. Saved checks
+    compare by it (criteria_fingerprint), an answer on a verdict stays while it is the same
+    (flows.tone.carry_decisions), and a save that keeps it keeps the result (flows.judges.activate): a criterion
+    renamed is the same criterion."""
+    read = unnamed(rule)
     notes = rule.get('clarifications') or []
     if notes:
         read['text'] = rule['text'] + '\n\nУточнения, подтверждённые человеком:\n' + '\n'.join(notes)
@@ -145,16 +151,6 @@ def criteria_fingerprint(criteria: list[dict], source: dict) -> str:
     return fingerprint({'source': source['sha256'], 'criteria': read})
 
 
-def compared(saved: dict) -> dict:
-    """The line of a saved check (snapshot) as the next check compares with it: its criteria fingerprinted as
-    criteria_fingerprint does now, from the criteria the record keeps, not as the Lab that saved it did. A check saved
-    while names were part of the fingerprint still compares with the next one the judge reads the same."""
-    sources = (saved.get('result') or {}).get('sources') or []
-    if not isinstance(saved.get('criteria'), list) or not sources:
-        return saved['check']
-    return saved['check'] | {'criteriaFingerprint': criteria_fingerprint(saved['criteria'], sources[0])}
-
-
 def named(result: dict, criteria: list[dict]) -> dict:
     """A result whose criteria go by the names of these (the ones in force) where the judge reads them the same
     (for_judging): a criterion renamed since the check is the one it judged by, under its new name. A criterion in
@@ -175,9 +171,9 @@ def named(result: dict, criteria: list[dict]) -> dict:
 def snapshot(
     result: dict, dialogues: list[dict], criteria: list[dict], source: dict, export: dict, previous: dict | None
 ) -> dict:
-    """The record of a finished check in the history: its line, how it stands to the check saved before it (previous,
-    as compared gives it), and the evidence behind it: the conversations, the criteria and the rules they came from.
-    export: the file the conversations came from and how many it had."""
+    """The record of a finished check in the history: its line, how it stands to the check saved before it, and the
+    evidence behind it: the conversations, the criteria and the rules they came from. export: the file the
+    conversations came from and how many it had."""
     check = {
         'id': result['checkId'],
         'finishedAt': result['finishedAt'],
