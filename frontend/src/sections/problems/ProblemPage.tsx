@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ArrowRight,
@@ -31,7 +31,7 @@ import { useLabState } from "../../lab/LabProvider";
 import { answersWait, useReview, type Decision, type Example } from "../../lab/problems";
 import { humansOf, humansText, rightOf, rightText, secondOf } from "../../lab/problemStats";
 import { toneJudgedByOther } from "../../lab/tone";
-import { conversationKey, exampleAt } from "../../lab/verdicts";
+import { conversationKey, exampleAt, exampleKey, inOrder, nextUnanswered } from "../../lab/verdicts";
 import { ExampleCard } from "../../product/ExampleCard";
 import { SeverityControl } from "../../product/Severity";
 import { SourceSheet } from "../../product/SourceSheet";
@@ -53,9 +53,10 @@ import { SIMULATIONS } from "../../app/product";
  * agent must do instead, whether its errors are serious («Важный критерий» on its criterion: the automatic check's
  * proposal with its reason and «Подтвердить», or the person's decision), how often (one line of numbers, and the
  * checked conversations they leave out), then the case itself — the conversation as the customer saw it — and the
- * person's answer. One stage at a time: in a check, its conversations; in the simulation, one run of that check's
- * scenarios. The other is one link away. Another problem of the same stage opens afresh: the page is keyed by the
- * problem, so nothing unfolded, opened or lit on one stays on the next.
+ * person's answer. Answering keeps the order the examples had when the page opened and moves on to the next one nobody
+ * answered, so a person goes through them by answering. One stage at a time: in a check, its conversations; in the
+ * simulation, one run of that check's scenarios. The other is one link away. Another problem of the same stage opens
+ * afresh: the page is keyed by the problem, so nothing unfolded, opened or lit on one stays on the next.
  */
 export function ProblemPage({ stage }: { stage: Stage }) {
   const { id = "" } = useParams();
@@ -82,7 +83,13 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
   const c = list.find((x) => x.r.id === id);
   const runId = stage === "sim" ? (data?.sim?.runId ?? null) : null;
 
-  const examples = c ? violationsOf(c, here) : [];
+  const fresh = useMemo(() => (c ? violationsOf(c, here) : []), [c, here]);
+  // The order of the examples when the page opened: an answer makes the service sort them again, the page keeps it.
+  const [order, setOrder] = useState<string[]>([]);
+  useEffect(() => {
+    if (!order.length && fresh.length) setOrder(fresh.map(exampleKey));
+  }, [order.length, fresh]);
+  const examples = useMemo(() => inOrder(fresh, order), [fresh, order]);
   const toneDraft = state?.toneOfVoice ?? null;
   const toneResult = state?.checks.tone ?? null;
   // A criterion is clarified, and asked how to answer, on the result judged by the criteria in force: one judged by
@@ -91,7 +98,7 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
   const toneNow = stage === "tone" && !!toneDraft && !!toneResult && !otherCriteria;
   const { at, missing: lostExample } = exampleAt(examples, params.get("e"));
   const example = examples[at];
-  /** The example in the address by its conversation: «Нет» sends it to the end of the order, it stays on screen. */
+  /** The example in the address by its conversation: a link to the page opens it, and so does going back. */
   const pin = (e: Example) =>
     setParams(
       (prev) => {
@@ -106,19 +113,28 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
     dir.current = n >= at ? 1 : -1;
     pin(examples[n]);
   };
+  /**
+   * An answer on the example shown: saved at once, and the page moves on to the next example nobody answered.
+   * Pressed again, it takes the answer back and stays. «Отменить» takes it back and returns to the example.
+   */
   const decide = (e: Example, d: Decision) => {
     if (answersWait(state, e)) return;
-    if (params.get("e") !== conversationKey(e)) pin(e);
     const before = e.review;
     const next = e.review === d ? null : d;
     // The check's result the examples come from: the service takes the answer only on it.
     const finishedAt = data?.log?.finishedAt;
     review.mutate({ example: e, decision: next, finishedAt });
-    if (next)
-      toast.notify(next === "agree" ? "Отмечено как ошибка" : "Отмечено, что ошибки нет", {
-        label: "Отменить",
-        run: () => review.mutate({ example: e, decision: before, finishedAt, seen: next }),
-      });
+    if (!next) return;
+    const ahead = nextUnanswered(examples, examples.indexOf(e));
+    if (ahead !== null) go(ahead);
+    toast.notify(next === "agree" ? "Отмечено как ошибка" : "Отмечено, что ошибки нет", {
+      label: "Отменить",
+      run: () => {
+        review.mutate({ example: e, decision: before, finishedAt, seen: next });
+        dir.current = -1;
+        pin(e);
+      },
+    });
   };
   useKeys({
     ArrowLeft: () => go(Math.max(0, at - 1)),

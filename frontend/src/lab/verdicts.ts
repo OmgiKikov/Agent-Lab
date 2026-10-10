@@ -27,9 +27,31 @@ export const conversationKey = (e: Example) =>
   e.source === "log" ? logKey(e.dialogueId ?? "") : simKey(e.runId ?? "", e.index ?? 0);
 
 /**
- * Which example an address names (`?e=`): its conversation, so the same one stays on screen when an answer re-sorts
- * them; in an older address, a number is its place. When the address names none of them (a new check, another
- * export), the first one — or the last for a number past the end — and `missing` says the one asked for is not here.
+ * Examples in the order a page first showed them (`order`, their keys): an answer makes the service sort them again —
+ * «Нет» sends one to the end — while the person keeps their place among them. Ones that came since go after them, the
+ * ones gone are left out.
+ */
+export function inOrder(examples: Example[], order: string[]): Example[] {
+  const byKey = new Map(examples.map((e) => [exampleKey(e), e]));
+  const known = new Set(order);
+  return [...order.flatMap((key) => byKey.get(key) ?? []), ...examples.filter((e) => !known.has(exampleKey(e)))];
+}
+
+/**
+ * The example to move on to after an answer on the one at `at`: the next one nobody answered, after it, else before
+ * it; null when every other one is answered.
+ */
+export function nextUnanswered(examples: Example[], at: number): number | null {
+  const after = examples.findIndex((e, i) => i > at && !e.review);
+  if (after >= 0) return after;
+  const before = examples.findIndex((e, i) => i < at && !e.review);
+  return before >= 0 ? before : null;
+}
+
+/**
+ * Which example an address names (`?e=`): its conversation, so the same one stays on screen whatever the order; in an
+ * older address, a number is its place. When the address names none of them (a new check, another export), the first
+ * one — or the last for a number past the end — and `missing` says the one asked for is not here.
  */
 export function exampleAt(examples: Example[], wanted: string | null): { at: number; missing: boolean } {
   if (wanted && /^\d+$/.test(wanted))
