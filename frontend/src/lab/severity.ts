@@ -4,7 +4,7 @@ import { api } from "./api";
 import { count, plural } from "./format";
 import { shareText, type Counts } from "./history";
 import { useLabState } from "./LabProvider";
-import type { Problems, RuleEntry } from "./problems";
+import { importantByPerson, type Problems, type RuleEntry } from "./problems";
 import type { Check, Job } from "./types";
 
 /**
@@ -12,9 +12,10 @@ import type { Check, Job } from "./types";
  * every criterion of the result, whether its errors are serious, with a reason; a person confirms or changes it — in
  * the criteria, on the problem's page, or all at once («Подтвердить все») — and a person's decision always wins: no new
  * proposal changes it. Without either an error is minor. Both live in the service by the criterion's key (the
- * problem's id), apart from the criteria: they change neither what is checked nor how. Serious problems come first
- * everywhere, carry «важный», and the conversations with a serious error are counted beside the check's number —
- * never instead of it, never added to it; every screen says whose decision it is.
+ * problem's id), apart from the criteria: they change neither what is checked nor how. The problems a person marked
+ * serious come first everywhere and carry «важный»; a proposal no person checked yet carries a quieter tag of its own
+ * and moves nothing. The conversations with a serious error, by the proposals too, are counted beside the check's
+ * number — never instead of it, never added to it; every screen says whose decision it is.
  */
 export type Mark = { check: Check; rule: string; serious: boolean };
 
@@ -28,8 +29,21 @@ type Who = "you" | "people";
 const MODEL: Record<Who, string> = { you: "модель", people: "автоматическая проверка" };
 const PEOPLE: Record<Who, string> = { you: "вы", people: "люди" };
 
-/** Serious first; otherwise the order stays as it was (a stable sort keeps it). */
-export const seriousFirst = (a: { serious: boolean }, b: { serious: boolean }) => Number(b.serious) - Number(a.serious);
+/** A criterion as its severity stands: whether its errors are serious, and whose decision that is. */
+type Graded = Pick<RuleEntry, "serious" | "severity">;
+
+/**
+ * The criteria a person marked serious first; otherwise the order stays as it was (a stable sort keeps it). The
+ * automatic check's proposal moves nothing: the most frequent problems lead until a person decides.
+ */
+export const seriousFirst = (a: Graded, b: Graded) => Number(importantByPerson(b)) - Number(importantByPerson(a));
+
+/**
+ * The word beside a serious criterion: «важный» by a person's decision, «важный по мнению модели» while it is the
+ * automatic check's proposal no person checked yet; null for an ordinary one.
+ */
+export const importantWord = (r: Graded) =>
+  !r.serious ? null : importantByPerson(r) ? "важный" : "важный по мнению модели";
 
 /**
  * A criterion of the check's result: the automatic check proposes for these, «Подтвердить все» confirms them, and the
@@ -129,10 +143,10 @@ export function hintOf(st: Standing): { text: string; action: "confirm" | "propo
 /**
  * The serious count of a check's result: the checked conversations with a serious error, its serious criteria
  * (`marked`), and the conversations where they could be checked (`checked`) — elsewhere they did not apply or could not
- * be checked. `yours`: a person decided every one of them; `pending`: the criteria of the result with neither a
- * decision nor a proposal yet.
+ * be checked. `yours`: a person decided every one of them; `proposed`: how many of them are the automatic check's
+ * proposals no person checked yet; `pending`: the criteria of the result with neither a decision nor a proposal yet.
  */
-export type Serious = Counts & { marked: number; checked: number; yours: boolean; pending: number };
+export type Serious = Counts & { marked: number; checked: number; yours: boolean; proposed: number; pending: number };
 
 /**
  * The serious count of the result in a record of problems, or null: while none of its criteria is serious (the service
@@ -145,12 +159,14 @@ export function seriousOf(data: Problems | null | undefined): Serious | null {
   const rules = data.rules.filter(ofResult);
   const serious = rules.filter((r) => r.serious);
   if (!serious.length) return null;
+  const proposed = serious.filter((r) => !importantByPerson(r)).length;
   return {
     failed: log.withSerious,
     measured: log.assessed,
     marked: serious.length,
     checked: log.seriousChecked ?? log.assessed,
-    yours: serious.every((r) => r.severity.by === "person"),
+    yours: !proposed,
+    proposed,
     pending: rules.filter((r) => !r.severity.by).length,
   };
 }

@@ -10,10 +10,10 @@ import { queueOf } from "./model";
 import { ProblemRow } from "./ProblemRow";
 
 /**
- * The problems of a stage, the serious ones first, then the most frequent, with how many criteria have no error found;
- * `limit` for the overview, `was` for what each problem had in the previous check of a check. `record` — how the
- * record of the criteria stands (lab/criteria, useCriteria): while it loads or after it failed the list says so, and
- * an empty list is never shown for a record that has not come.
+ * The problems of a stage, the ones a person marked important first, then the most frequent, with how many criteria
+ * have no error found; `limit` for the overview, `was` for what each problem had in the previous check of a check.
+ * `record` — how the record of the criteria stands (lab/criteria, useCriteria): while it loads or after it failed the
+ * list says so, and an empty list is never shown for a record that has not come.
  */
 export function ProblemList({
   list,
@@ -49,9 +49,7 @@ export function ProblemList({
   return (
     <>
       {/* «6 из 52» next to «53 проверенных разговоров» read as a slip: what the second number counts is said once. */}
-      <p className="pt-2 text-small text-fg-3">
-        Второе число показывает, в скольких разговорах удалось проверить критерий.
-      </p>
+      <p className="pt-2 text-small text-fg-3">Второе число — в скольких проверенных разговорах критерий применим.</p>
       <ol className="divide-y divide-line">
         {shown.map((c, i) => (
           <li key={c.r.id} className={ENTER} style={stagger(i + 2)}>

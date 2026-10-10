@@ -27,11 +27,12 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BY_CRITERIA, CHECK_NAME, CHECKS, resultOf } from "../lab/checks";
-import { duty } from "../lab/criteria";
+import { criterionName, duty } from "../lab/criteria";
 import { count, day } from "../lab/format";
 import { useLabState } from "../lab/LabProvider";
 import { useProblems, type Problems } from "../lab/problems";
 import { runTitle } from "../lab/runs";
+import { importantWord } from "../lab/severity";
 import type { Check } from "../lab/types";
 import { Label } from "../ui/Label";
 import {
@@ -48,7 +49,16 @@ import {
 } from "./links";
 import { ACCURACY, SIMULATIONS } from "./product";
 
-type Entry = { id: string; group: string; label: string; sub?: string; icon: LucideIcon; run: () => void };
+/** A line of the palette; `words`: what else it is found by, unseen (a problem by the error it was once named after). */
+type Entry = {
+  id: string;
+  group: string;
+  label: string;
+  sub?: string;
+  words?: string;
+  icon: LucideIcon;
+  run: () => void;
+};
 
 const ICON: Record<Check, LucideIcon> = { tone: MessageSquareQuote, code: Target };
 const ABOUT: Record<Check, string> = {
@@ -222,10 +232,10 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         {
           id: `a-${c}-review`,
           group: "Действия",
-          label: `Ответить на спорные случаи · ${CHECK_NAME[c]}`,
-          sub: "По одному случаю, клавишами V и N",
+          label: `Ответить на ошибки без ответа · ${CHECK_NAME[c]}`,
+          sub: "По одной, клавишами V и N",
           icon: ClipboardCheck,
-          run: go(reviewLink(c)),
+          run: go(reviewLink(c, { queue: "unchecked" })),
         },
         {
           id: `a-${c}-report`,
@@ -277,17 +287,20 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         run: go(SECTIONS.agent),
       },
     ];
+    // A problem and a criterion go by the criterion's name (lab/criteria); a problem is also found by its errors' title.
     const ofCheck = (c: Check, data: Problems | undefined) => {
       if (!data) return;
       const byId = new Map(data.rules.map((r) => [r.id, r]));
       for (const id of data.problems) {
         const p = byId.get(id);
+        const important = p && importantWord(p);
         if (p?.log.failed)
           out.push({
             id: `v-${c}-${id}`,
             group: `Проблемы · ${CHECK_NAME[c]}`,
-            label: p.title,
-            sub: `${p.serious ? "важный · " : ""}ошибка в ${p.log.failed}\u00a0из ${count(p.log.failed + p.log.passed, "разговора", "разговоров", "разговоров")}`,
+            label: criterionName(p),
+            sub: `${important ? `${important} · ` : ""}ошибка в ${p.log.failed}\u00a0из ${count(p.log.failed + p.log.passed, "разговора", "разговоров", "разговоров")}`,
+            words: p.title,
             icon: TriangleAlert,
             run: go(problemLink(id, c)),
           });
@@ -296,7 +309,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         out.push({
           id: `c-${c}-${r.id}`,
           group: `Критерии · ${CHECK_NAME[c]}`,
-          label: r.title,
+          label: criterionName(r),
           sub: r.rule.origin || duty(r.rule.text),
           icon: ListChecks,
           run: go(criterionLink(c, r.id)),
@@ -344,7 +357,8 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
 
   const q = query.trim().toLowerCase();
   const shown = useMemo(
-    () => entries.filter((e) => !q || `${e.label} ${e.sub ?? ""}`.toLowerCase().includes(q)).slice(0, 40),
+    () =>
+      entries.filter((e) => !q || `${e.label} ${e.sub ?? ""} ${e.words ?? ""}`.toLowerCase().includes(q)).slice(0, 40),
     [entries, q],
   );
   // The lines in their groups, each with its place among all the lines (the one ↑ ↓ and Enter work by).
@@ -415,7 +429,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
                   ? "Раздел, проблема, критерий, прогон или действие"
                   : "Раздел, проблема, критерий или действие"
               }
-              className="h-12 w-full bg-transparent text-body text-fg outline-none placeholder:text-fg-4"
+              className="h-12 w-full bg-transparent text-body text-fg outline-none placeholder:text-fg-3"
             />
           </div>
           {/* The listbox is the scrolling list itself: ↑ ↓ scroll it, as the popup of the field. */}

@@ -18,6 +18,17 @@ export function humansOf(side: Side): { of: number; checked: number; agree: numb
   return { of: fails.length, checked: checked.length, agree: checked.filter((e) => e.review === "agree").length };
 }
 
+/** «на 3 из 57: подтвердили 2, отклонили 1»: how a person answered on the errors of one criterion, once they did. */
+export const answeredText = ({ of, checked, agree }: ReturnType<typeof humansOf>) =>
+  `на ${checked}\u00a0из\u00a0${of}: подтвердили ${agree}, отклонили ${checked - agree}`;
+
+/**
+ * A person's answers on the errors of one criterion, in the words its row, its page and its card share: «вы ответили
+ * на 3 из 57: подтвердили 2, отклонили 1», or «вы ещё не отвечали».
+ */
+export const humansText = (h: ReturnType<typeof humansOf>) =>
+  h.checked ? `вы ответили ${answeredText(h)}` : "вы ещё не отвечали";
+
 /** From this many of a person's answers on one criterion its page says how often the check was right by it. */
 export const RIGHT_FROM = 5;
 

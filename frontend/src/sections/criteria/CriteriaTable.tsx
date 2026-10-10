@@ -9,8 +9,8 @@ import type { Check, Source } from "../../lab/types";
 /**
  * All criteria as one list, broken first: the number, the duty, where it is written, and how it went in logs and
  * simulation; whether two checks agreed only when a second model checked them (hasSecond); and «Важный» — switched
- * in the row itself, with whose mark it is under it: «модель» (its reason in the tooltip), «вы» or «не решено». A
- * decision never moves the row: the list stays where the person decides.
+ * in the row itself, with «модель» under it while it is the model's proposal (its reason in the tooltip). A decision
+ * never moves the row: the list stays where the person decides.
  */
 export function CriteriaTable({
   check,
@@ -42,7 +42,7 @@ export function CriteriaTable({
     const s = c.r[k];
     const tone = toneOf(c.r, k);
     return tone === "none" ? (
-      <span className="text-fg-4">—</span>
+      <span className="text-fg-3">—</span>
     ) : (
       <span className="whitespace-nowrap tabular-nums">
         <b className={cn("font-semibold", tone === "bad" ? "text-bad" : "text-fg-2")}>{s.failed}</b>
@@ -58,19 +58,24 @@ export function CriteriaTable({
             <th className="w-14 py-2.5 pl-5 font-medium">№</th>
             <th className="py-2.5 pr-4 font-medium">Критерий</th>
             <th className="hidden py-2.5 pr-4 font-medium 2xl:table-cell">Где написан</th>
-            <th className="py-2.5 pr-4 text-right font-medium">Диалоги</th>
+            <th
+              className="py-2.5 pr-4 text-right font-medium"
+              title="Второе число — в скольких проверенных разговорах критерий применим"
+            >
+              Разговоры
+            </th>
             {hasSim && <th className="hidden py-2.5 pr-4 text-right font-medium sm:table-cell">Симуляции</th>}
             {hasSecond && (
               <th
                 className="hidden py-2.5 pr-5 text-right font-medium md:table-cell"
-                title="В скольких ошибках в диалогах две модели совпали"
+                title="В скольких ошибках в разговорах две модели совпали"
               >
                 Модели совпали
               </th>
             )}
             <th
               className="w-px whitespace-nowrap py-2.5 pr-5 text-right font-medium"
-              title="Важные критерии идут первыми и считаются отдельно. Под переключателем написано, кто решил."
+              title="Отмеченные вами важные критерии идут первыми, разговоры с их нарушением считаются отдельно. «Модель» под переключателем — её предложение, которое вы ещё не проверили."
             >
               Важный
             </th>
@@ -80,14 +85,9 @@ export function CriteriaTable({
           {rows.map((c) => {
             const second = secondOf(c.r.log.examples);
             const on = c.r.id === selected;
-            // Whose mark it is, under the switch: the model's (its reason in the tooltip), the person's, or none yet.
+            // Under the switch, only the model's proposal no person checked yet (its reason in the tooltip): the switch
+            // itself says the rest.
             const { by, proposed } = c.r.severity;
-            const [whose, said] =
-              by === "model"
-                ? ["модель", `Так считает модель.${proposed ? ` ${reasonText(proposed.reason)}` : ""}`]
-                : by === "person"
-                  ? ["вы", "Так решили вы."]
-                  : ["не решено", "Ещё не решено."];
             return (
               <tr
                 key={c.r.id}
@@ -124,10 +124,15 @@ export function CriteriaTable({
                 )}
                 <td className="py-3 pr-5 text-right">
                   <SeveritySwitch check={check} rule={c.r} name={c.name} />
-                  <span className="mt-1 block whitespace-nowrap text-small text-fg-3" title={said}>
-                    <span aria-hidden>{whose}</span>
-                    <span className="sr-only">{said}</span>
-                  </span>
+                  {by === "model" && proposed && (
+                    <span
+                      className="mt-1 block whitespace-nowrap text-small text-fg-3"
+                      title={`Так считает модель. ${reasonText(proposed.reason)}`}
+                    >
+                      <span aria-hidden>модель</span>
+                      <span className="sr-only">Так считает модель. {reasonText(proposed.reason)}</span>
+                    </span>
+                  )}
                 </td>
               </tr>
             );

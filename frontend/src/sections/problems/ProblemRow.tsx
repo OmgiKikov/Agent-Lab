@@ -1,17 +1,20 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { ChevronRight } from "lucide-react";
-import { yesNoText } from "../../lab/answers";
-import type { Criterion } from "../../lab/criteria";
+import { cn } from "@/lib/utils";
+import { commonText, commonTitle, quoted, type Criterion } from "../../lab/criteria";
 import { pct } from "../../lab/format";
-import { humansOf } from "../../lab/problemStats";
+import { askedOf } from "../../lab/problems";
+import { humansOf, humansText } from "../../lab/problemStats";
 import { SeriousTag } from "../../product/Severity";
 import { checked, errorIn, violationsOf, type SideKey } from "./model";
 
 /**
- * One problem in a list, on the page itself, no box: its rank (serious first, then by frequency), the agent's behaviour
- * as a sentence with «важный» when its errors are serious, one real exchange (the customer's words and the agent's,
- * marked), and «N из M» with a quiet bar. Red stays in the result above and in that quiet word.
+ * One problem in a list, on the page itself, no box: its rank (the criteria a person marked important first, then by
+ * frequency), its criterion's name with «важный» when its errors are serious, the kind of error the model named most
+ * often when it says more than the name, one real exchange — the customer's words and the agent's reply to them,
+ * marked — and «N из M» with a quiet bar. The agent's words are the evidence: the customer's take at most a third of
+ * the line and are cut first. Red stays in the result above and in that quiet word.
  * Under the count (on a phone, under the text): the person's answers on its errors, once there are any, and `was` —
  * what the criterion had in the previous check of this check.
  */
@@ -31,27 +34,40 @@ export function ProblemRow({
   const s = c.r[side];
   const of = checked(s);
   const e = violationsOf(c, side)[0];
+  const common = commonTitle(c, side);
   const answers = humansOf(s);
+  const asked = e ? askedOf(e) : "";
   return (
     <Link
       to={to}
       className="group -mx-3 grid grid-cols-[22px_minmax(0,1fr)_auto] items-start gap-x-4 rounded-block px-3 py-4 transition-colors hover:bg-hover focus-visible:bg-hover focus-visible:outline-none sm:grid-cols-[22px_minmax(0,1fr)_auto_16px]"
     >
-      <span className="pt-0.5 text-read tabular-nums text-fg-4">{rank ?? ""}</span>
+      <span className="pt-0.5 text-read tabular-nums text-fg-3">{rank ?? ""}</span>
       <span className="min-w-0">
         <span className="block text-lead font-medium text-fg">
-          {c.r.title}
-          {c.r.serious && <SeriousTag rule={c.r} className="relative -top-px ml-2 align-middle" />}
+          {c.name}
+          <SeriousTag rule={c.r} className="relative -top-px ml-2 align-middle" />
         </span>
-        {e && (
-          <span className="mt-1 block truncate text-body text-fg-3">
-            «{e.opening}»
+        {common && <span className="mt-0.5 block text-body text-fg-2">{commonText(common)}</span>}
+        {e && (asked || e.agentQuote) && (
+          // One line on a wide screen; on a phone the agent's words take a line of their own, two at most.
+          <span className="mt-1 block text-body text-fg-3 sm:flex sm:items-baseline sm:gap-1.5">
+            {asked && (
+              <span className={cn("block truncate", e.agentQuote && "sm:max-w-[33%] sm:flex-shrink-0")}>
+                {quoted(asked)}
+              </span>
+            )}
             {e.agentQuote && (
-              <>
-                {" "}
-                <span aria-hidden>→</span>{" "}
-                <mark className="rounded-sm bg-mark/60 px-0.5 text-fg-2">{e.agentQuote}</mark>
-              </>
+              <span className="flex min-w-0 items-baseline gap-1.5">
+                {asked && (
+                  <span aria-hidden className="flex-shrink-0">
+                    →
+                  </span>
+                )}
+                <span className="min-w-0 line-clamp-2 sm:block sm:truncate">
+                  <mark className="rounded-sm bg-mark/60 px-0.5 text-fg-2 box-decoration-clone">{e.agentQuote}</mark>
+                </span>
+              </span>
             )}
           </span>
         )}
@@ -78,9 +94,7 @@ export function ProblemRow({
       {(answers.checked > 0 || was) && (
         // Under the text and the count together, right-aligned on a wide screen: the column of the count keeps its width.
         <span className="col-span-2 col-start-2 mt-1 text-small text-fg-3 sm:text-right">
-          {answers.checked > 0 && (
-            <span className="block">ваши ответы: {yesNoText(answers.agree, answers.checked - answers.agree)}</span>
-          )}
+          {answers.checked > 0 && <span className="block">{humansText(answers)}</span>}
           {was}
         </span>
       )}

@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Copy, FileDown, RotateCcw } from "lucide-react";
 import { CHECK_NAME } from "../../lab/checks";
-import type { Criterion } from "../../lab/criteria";
+import { commonText, commonTitle, type Criterion } from "../../lab/criteria";
 import { day, plural } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
 import {
@@ -14,7 +14,7 @@ import {
   summarySentence,
   useReportAgent,
 } from "../../lab/problemReport";
-import type { Problems } from "../../lab/problems";
+import { askedOf, type Problems } from "../../lab/problems";
 import { secondOf } from "../../lab/problemStats";
 import { seriousOf, severityLines, standingOf } from "../../lab/severity";
 import { SeriousTag } from "../../product/Severity";
@@ -30,25 +30,30 @@ const Cap = ({ children }: { children: ReactNode }) => (
   <span className="font-mono text-label uppercase tracking-caps text-ink-3">{children}</span>
 );
 
-/** One violation of the protocol: what, how often, and the two quotes side by side, the code's and the agent's. */
+/**
+ * One violation of the protocol: its criterion, the kind of error named most often, how often, and the two quotes side
+ * by side, the code's and the agent's with the customer's words it answered.
+ */
 function Section({ c, i, side }: { c: Criterion; i: number; side: SideKey }) {
   const s = c.r[side];
   const e = violationsOf(c, side)[0];
+  const common = commonTitle(c, side);
   const second = secondOf(s.examples);
   return (
     <section className="mt-10 break-inside-avoid">
       <div className="grid grid-cols-[28px_minmax(0,1fr)] items-baseline">
         <span className="font-mono text-lead text-ink-3">{i}</span>
         <h3 className="text-balance text-lead font-semibold text-ink">
-          {c.r.title}
-          {c.r.serious && <SeriousTag rule={c.r} paper className="relative -top-px ml-2 align-middle font-normal" />}
+          {c.name}
+          <SeriousTag rule={c.r} paper className="relative -top-px ml-2 align-middle font-normal" />
         </h3>
+        {common && <p className="col-start-2 mt-1 text-read text-ink-2">{commonText(common)}</p>}
         <p className="col-start-2 mt-1 text-small text-ink-2">
           Ошибка в{" "}
           <b className="whitespace-nowrap font-semibold text-ink-bad">
             {s.failed} из {checked(s)}
           </b>{" "}
-          {plural(checked(s), "разговора", "разговоров", "разговоров")}, где критерий удалось проверить.
+          {plural(checked(s), "разговора", "разговоров", "разговоров")}, где критерий применим.
           {second.checked > 0 && ` Две модели совпали в\u00a0${second.agree} из\u00a0${second.checked}.`}
           {c.r.topics.length > 0 && ` Темы: ${c.r.topics.join(", ").toLowerCase()}.`}
         </p>
@@ -75,7 +80,7 @@ function Section({ c, i, side }: { c: Criterion; i: number; side: SideKey }) {
           {e ? (
             <>
               <p className="mt-2.5 inline-block rounded-xl rounded-br-sm bg-paper-well px-3 py-1.5 text-small text-ink-2">
-                {e.opening}
+                {askedOf(e)}
               </p>
               <p className="mt-2 text-read text-ink">
                 <mark className="rounded-sm bg-warn/40 px-0.5 text-ink">{e.agentQuote}</mark>
@@ -116,7 +121,7 @@ export function ReportSheet({
   const agent = useReportAgent();
   const sides = (
     [
-      ["log", "Диалоги"],
+      ["log", "Разговоры"],
       ["sim", "Симуляция"],
     ] as const
   ).filter(([k]) => (k === "log" ? !!data.log : !!data.sim));
@@ -192,7 +197,7 @@ export function ReportSheet({
             {agent.name && <span className="normal-case tracking-normal">{agent.name} · </span>}
             {side === "log" ? (
               <>
-                {CHECK_NAME[data.check]} · диалоги
+                {CHECK_NAME[data.check]} · разговоры
                 {file && <span className="normal-case tracking-normal"> «{file}»</span>} · {day(log?.finishedAt)}
               </>
             ) : (
@@ -246,8 +251,8 @@ export function ReportSheet({
             </p>
           )}
           <p className="mt-12 border-t border-ink-line pt-4 text-small text-ink-3">
-            В счёте «N из M» M — разговоры, где критерий удалось проверить. Диалоги и симуляция считаются отдельно, их
-            числа не складываются. «Без найденных ошибок» не значит, что ошибок нет.
+            В счёте «N из M» M — проверенные разговоры, где критерий применим. Разговоры датасета и симуляция считаются
+            отдельно, их числа не складываются. «Без найденных ошибок» не значит, что ошибок нет.
           </p>
         </article>
       </div>

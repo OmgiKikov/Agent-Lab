@@ -189,25 +189,28 @@ export function wasOf(compare: Compare | null): ((id: string) => ReactNode) | un
   };
 }
 
+/** How a criterion the current result no longer has stands: nobody marked it. */
+const ORDINARY: Pick<RuleEntry, "serious" | "severity"> = { serious: false, severity: { by: null, proposed: null } };
+
 /**
  * Below the problems: the criteria with errors in the previous check and none now, «было 3 из 56 → 0 из 12». The
  * denominator says what it rests on, and the service's verdict always stands beside it — «мало разговоров, чтобы
  * судить», beyond chance or within it — so that «0 из 12» is never read as a conclusion about the agent. Each opens
- * the conversations of this result it was checked in. The serious criteria (`serious`, by their keys) come first and
- * say «важный», as the problems above.
+ * the conversations of this result it was checked in. With the criteria of the result (`rules`, by their keys) the
+ * ones a person marked important come first, and the important ones say so, as the problems above.
  */
 export function NoLongerFound({
   check,
   compare,
-  serious,
+  rules,
 }: {
   check: Check;
   compare: Compare | null;
-  serious?: Map<string, Pick<RuleEntry, "severity">>;
+  rules?: Map<string, RuleEntry>;
 }) {
   if (!compare || (compare.kind !== "new-data" && compare.kind !== "same-data")) return null;
-  const grave = (row: CompareRow) => ({ serious: !!serious?.has(row.id) });
-  const rows = noLongerFound(compare).sort((a, b) => seriousFirst(grave(a), grave(b)));
+  const marks = (row: CompareRow) => rules?.get(row.id) ?? ORDINARY;
+  const rows = noLongerFound(compare).sort((a, b) => seriousFirst(marks(a), marks(b)));
   if (!rows.length) return null;
   const repeat = compare.kind === "same-data";
   return (
@@ -230,9 +233,7 @@ export function NoLongerFound({
                 <span className="min-w-0">
                   <span className="block text-read text-fg">
                     {nameOf(row)}
-                    {serious?.has(row.id) && (
-                      <SeriousTag rule={serious.get(row.id)} className="relative -top-px ml-2 align-middle" />
-                    )}
+                    <SeriousTag rule={marks(row)} className="relative -top-px ml-2 align-middle" />
                   </span>
                   {word && <span className="mt-0.5 block text-small text-fg-3">{word}</span>}
                 </span>

@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { plural } from "./format";
 import { useLabState } from "./LabProvider";
 import { useProblems, type Problems, type RuleEntry } from "./problems";
 import type { Check } from "./types";
@@ -59,6 +60,16 @@ export function commonTitle(
   if (count < 2 || quoteKey(title) === quoteKey(c.name) || quoteKey(title) === quoteKey(c.r.rule.text)) return null;
   return { title, count, of: fails.length };
 }
+
+/**
+ * Words in «ёлочки» as a quote inside a sentence: the quotes they have of their own become „лапки“, so «Пишет «нажмите
+ * на кнопку»» reads «Пишет „нажмите на кнопку“».
+ */
+export const quoted = (text: string) => `«${text.replace(/«/g, "„").replace(/»/g, "“")}»`;
+
+/** The line under a problem's name: «Чаще всего: «Пишет „нажмите на кнопку“» — 15 из 57 ошибок». */
+export const commonText = ({ title, count, of }: NonNullable<ReturnType<typeof commonTitle>>) =>
+  `Чаще всего: ${quoted(title)} — ${count}\u00a0из\u00a0${of}\u00a0${plural(of, "ошибки", "ошибок", "ошибок")}`;
 
 /** The criteria in force, in the order of the person's draft: their ids and the words of the rules they quote. */
 export type Reference = { id: string; quote: string }[];

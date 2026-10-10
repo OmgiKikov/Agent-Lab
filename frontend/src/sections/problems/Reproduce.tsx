@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { ChevronDown, Play } from "lucide-react";
 import { api } from "../../lab/api";
+import { criterionName } from "../../lab/criteria";
 import { plural } from "../../lab/format";
 import type { RuleEntry } from "../../lab/problems";
 import { scenariosLink, SECTIONS, type Check } from "../../app/links";
@@ -43,7 +44,7 @@ export function Reproduce({ r, check }: { r: RuleEntry; check: Check }) {
       await api("/api/runs", {
         target: chosen.id,
         cardIds: ids,
-        label: `Воспроизвести: ${r.title}`.slice(0, 120),
+        label: `Воспроизвести: ${criterionName(r)}`.slice(0, 120),
         repeats: 1,
         personas: ["default"],
       });

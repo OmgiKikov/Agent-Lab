@@ -13,6 +13,7 @@ import { summarySentence } from "../../lab/problemReport";
 import { toneJudgedByOther } from "../../lab/tone";
 import { seriousOf } from "../../lab/severity";
 import type { Problems } from "../../lab/problems";
+import { ProposedImportant } from "../../product/Severity";
 import { StageResult } from "../../product/StageResult";
 import { Button } from "../../ui/Button";
 import { ServiceDown, Skeleton } from "../../ui/EmptyState";
@@ -27,8 +28,9 @@ const PART = { bad: "fail", ok: "pass", none: "none" } as const;
 
 /**
  * «С нарушением важных критериев — 5 из 100 (5%)» under the number, opening those conversations: counted apart, never
- * added to it. Once the check is compared with its previous one, the comparison says it beside the chip instead, «было
- * → сейчас» (checks/Compare, CompareDelta).
+ * added to it, with «важные предложила модель» while the count rests on the model's proposals. Once the check is
+ * compared with its previous one, the comparison says it beside the chip instead, «было → сейчас» (checks/Compare,
+ * CompareDelta).
  */
 function Important({ check, data, compare }: { check: Check; data: Problems; compare: Compare | null }) {
   const serious = seriousOf(data);
@@ -44,6 +46,12 @@ function Important({ check, data, compare }: { check: Check; data: Problems; com
         {`${serious.failed}\u00a0из\u00a0${serious.measured}`}
       </Link>{" "}
       ({pct(serious.failed, serious.measured)}%)
+      {serious.proposed > 0 && (
+        <>
+          {" "}
+          · <ProposedImportant check={check} serious={serious} />
+        </>
+      )}
     </p>
   );
 }
@@ -162,11 +170,7 @@ export function ResultPage({ check }: { check: Check }) {
         <div className="mt-2">
           <ProblemList list={list} stage={check} was={wasOf(compare)} />
         </div>
-        <NoLongerFound
-          check={check}
-          compare={compare}
-          serious={new Map(data.rules.filter((r) => r.serious).map((r) => [r.id, r]))}
-        />
+        <NoLongerFound check={check} compare={compare} rules={new Map(data.rules.map((r) => [r.id, r]))} />
       </section>
     </div>,
   );
