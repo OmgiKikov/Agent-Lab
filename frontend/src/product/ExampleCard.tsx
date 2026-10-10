@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { ArrowUpRight } from "lucide-react";
-import { dialogOf } from "../lab/dialogs";
+import { dialogOf, topicOf } from "../lab/dialogs";
 import { day } from "../lab/format";
 import { useLabState } from "../lab/LabProvider";
 import { personaName } from "../lab/look";
@@ -20,18 +20,25 @@ const WORD: Record<Example["status"], string> = {
   UNKNOWN: "Почему не удалось проверить",
 };
 
-/** Where an example was said: the log's topic, or the simulation's scenario and type of customer. */
+/**
+ * Where an example was said, after a dot: the log's topic when it says something (tone of voice has one, named as the
+ * check, which says nothing in its own section: lab/dialogs, topicOf), or the simulation's scenario and type of
+ * customer.
+ */
 function Where({ example }: { example: Example }) {
   const { state } = useLabState();
-  if (example.source === "log") return <span>{example.topic || "датасет"}</span>;
   const run = state?.runs.find((r) => r.id === example.runId);
   const repeat = example.attempt && example.attempt > 1 ? ` · повтор ${example.attempt}` : "";
+  const place =
+    example.source === "log"
+      ? topicOf({ check: example.check, topic: example.topic })
+      : `${example.name} · клиент: ${personaName(state?.personas ?? [], example.persona).toLowerCase()}${run ? ` · ${day(run.startedAt)}` : ""}${repeat}`;
+  if (!place) return null;
   return (
-    <span>
-      {example.name} · клиент: {personaName(state?.personas ?? [], example.persona).toLowerCase()}
-      {run ? ` · ${day(run.startedAt)}` : ""}
-      {repeat}
-    </span>
+    <>
+      <span aria-hidden>·</span>
+      <span>{place}</span>
+    </>
   );
 }
 
@@ -84,7 +91,6 @@ export function ExampleCard({
         )}
         <p className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-small text-fg-3">
           <span>{reliabilityWord(example)}</span>
-          <span aria-hidden>·</span>
           <Where example={example} />
           <span aria-hidden>·</span>
           <Link

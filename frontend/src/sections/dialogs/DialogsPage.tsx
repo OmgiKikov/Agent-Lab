@@ -14,7 +14,6 @@ import { Button } from "../../ui/Button";
 import { EmptyState, ServiceDown, Skeleton } from "../../ui/EmptyState";
 import { LoadFailed } from "../../ui/LoadFailed";
 import { Menu } from "../../ui/Menu";
-import { UploadButton } from "../../product/UploadLogs";
 import { CheckHeader } from "../checks/CheckHeader";
 import { NoSuchRun, SimHeader, useSimRuns } from "../simulations/stage";
 import { Dialog } from "./Dialog";
@@ -109,7 +108,9 @@ export function DialogsPage({ stage }: { stage: Stage }) {
     stage === "sim" ? (
       <SimHeader actions={false} />
     ) : (
-      <CheckHeader check={stage} actions={<UploadButton variant="outline" check={stage} />} />
+      // The conversations are «Итог» read one by one: the same head, its one action «Новая проверка»; datasets are
+      // added on «Датасеты» and the form of a check.
+      <CheckHeader check={stage} />
     );
   if (offline && !state)
     return (
