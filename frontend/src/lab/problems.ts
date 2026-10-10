@@ -36,6 +36,12 @@ export type Example = {
   review: Decision | null;
   reviewScope: Scope | null;
   /**
+   * Whether the verdict's conversation is one its check counts as checked, as the counts of its side are (Side). False
+   * for a verdict in a conversation the check could not check as a whole; an older service does not say, and every
+   * verdict counts then.
+   */
+  counted?: boolean;
+  /**
    * The check whose result (or whose run) the verdict belongs to. The service names it once for the whole record;
    * the page puts it on every example, so an answer goes to that check's result and its links stay in its section.
    */

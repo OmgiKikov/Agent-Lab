@@ -98,6 +98,15 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
   const toneNow = stage === "tone" && !!toneDraft && !!toneResult && !otherCriteria;
   const { at, missing: lostExample } = exampleAt(examples, params.get("e"));
   const example = examples[at];
+  // The example an answer moved on to, or «Отменить» came back to: once it is on screen its heading takes the focus,
+  // so a person answering by keyboard or with a screen reader goes on from it, not from the top of the page.
+  const heading = useRef<HTMLHeadingElement>(null);
+  const arrive = useRef<string | null>(null);
+  useEffect(() => {
+    if (!example || arrive.current !== exampleKey(example)) return;
+    arrive.current = null;
+    heading.current?.focus();
+  }, [example]);
   /** The example in the address by its conversation: a link to the page opens it, and so does going back. */
   const pin = (e: Example) =>
     setParams(
@@ -126,12 +135,16 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
     review.mutate({ example: e, decision: next, finishedAt });
     if (!next) return;
     const ahead = nextUnanswered(examples, examples.indexOf(e));
-    if (ahead !== null) go(ahead);
+    if (ahead !== null) {
+      arrive.current = exampleKey(examples[ahead]);
+      go(ahead);
+    }
     toast.notify(next === "agree" ? "Отмечено как ошибка" : "Отмечено, что ошибки нет", {
       label: "Отменить",
       run: () => {
         review.mutate({ example: e, decision: before, finishedAt, seen: next });
         dir.current = -1;
+        arrive.current = exampleKey(e);
         pin(e);
       },
     });
@@ -335,7 +348,11 @@ function Problem({ stage, id }: { stage: Stage; id: string }) {
 
           <section aria-label="Примеры" className="mt-12">
             <div className="flex items-center gap-3">
-              <h3 className="text-title font-semibold text-fg">
+              <h3
+                ref={heading}
+                tabIndex={-1}
+                className="rounded-sm text-title font-semibold text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-run/60"
+              >
                 Пример {examples.length ? at + 1 : 0}{" "}
                 <span className="font-normal text-fg-3">из {examples.length}</span>
               </h3>

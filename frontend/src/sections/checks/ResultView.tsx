@@ -7,6 +7,7 @@ import { pct } from "../../lab/format";
 import { FEW } from "../../lab/history";
 import { summarySentence } from "../../lab/problemReport";
 import type { Problems } from "../../lab/problems";
+import { inQuotes } from "../../lab/quote";
 import { seriousOf, type Serious } from "../../lab/severity";
 import { ProposedImportant } from "../../product/Severity";
 import { StageResult } from "../../product/StageResult";
@@ -87,7 +88,7 @@ export function ResultView({
   // What was measured: «Датасет «Ноябрь» · версия агента v1.1».
   const measured = (
     origin.dataset
-      ? [`Датасет «${origin.dataset}»`, origin.version && `версия агента ${origin.version}`]
+      ? [`Датасет ${inQuotes(origin.dataset)}`, origin.version && `версия агента ${origin.version}`]
       : [origin.version && `Версия агента ${origin.version}`]
   )
     .filter(Boolean)

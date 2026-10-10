@@ -25,6 +25,7 @@ import { longDay } from "../../lab/format";
 import { cleanPct, resultText, useHistory, type Counts, type SavedCheck } from "../../lab/history";
 import { useLabState } from "../../lab/LabProvider";
 import type { RuleEntry } from "../../lab/problems";
+import { inQuotes } from "../../lab/quote";
 import { seriousFirst } from "../../lab/severity";
 import { SeriousTag } from "../../product/Severity";
 import { useOrigins } from "./origin";
@@ -224,7 +225,7 @@ export function PreviousCheck({ check, line, className }: { check: Check; line: 
         Прошлая проверка
       </Link>
       : {summary.measured ? resultText(summary) : "ни один разговор не удалось проверить"}
-      {dataset ? ` · датасет «${dataset}»` : ""} · {longDay(line.finishedAt)}
+      {dataset ? ` · датасет ${inQuotes(dataset)}` : ""} · {longDay(line.finishedAt)}
     </p>
   );
 }
