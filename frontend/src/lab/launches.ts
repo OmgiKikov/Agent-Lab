@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { AGENT } from "../app/agent";
 import { api } from "./api";
+import { inQuotes } from "./quote";
 import type { Check, Metric, Message, Rule } from "./types";
 
 export type Mode = "dataset" | "questions" | "simulations";
@@ -67,7 +68,7 @@ export function launchError(launch: Launch): string | null {
   );
   if (!failed.length) return launch.error || null;
   if (ways.length === 1) return failed[0].error;
-  return failed.map(({ mode, error }) => `«${MODE_NAME[mode]}»: ${error}`).join(" ");
+  return failed.map(({ mode, error }) => `${inQuotes(MODE_NAME[mode])}: ${error}`).join(" ");
 }
 export const useLaunch = (id?: string) =>
   useQuery({

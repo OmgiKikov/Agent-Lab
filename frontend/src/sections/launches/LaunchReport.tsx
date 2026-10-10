@@ -17,6 +17,7 @@ import {
 } from "../../lab/launches";
 import { count, longDay, time } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
+import { inQuotes } from "../../lab/quote";
 import { Conversation } from "../../product/Conversation";
 import { Button, buttonClass } from "../../ui/Button";
 import { LoadFailed } from "../../ui/LoadFailed";
@@ -261,9 +262,9 @@ export function LaunchReport() {
               Проверка {longDay(record.startedAt)}, {time(record.startedAt)}
             </h2>
             <p className="mt-2 break-words text-read text-fg-3">
-              {datasetName ? `Датасет «${datasetName}»` : "Датасет"} ·{" "}
+              {datasetName ? `Датасет ${inQuotes(datasetName)}` : "Датасет"} ·{" "}
               {record.judge
-                ? `правила «${record.judge.name}», версия ${record.judge.version}`
+                ? `правила ${inQuotes(record.judge.name)}, версия ${record.judge.version}`
                 : record.replan
                   ? "критерии заново извлечены из кода агента"
                   : "критерии из кода агента"}
@@ -282,7 +283,9 @@ export function LaunchReport() {
             <LaunchStatus status={record.status} />
           </span>
         </div>
-        {(error || record.error) && (
+        {/* Why the check failed: a single way says it in its own card; beside two ways, the check's own line names
+            each way that failed. What this page asked and the service refused is said here either way. */}
+        {(error || (ways.length > 1 && record.error)) && (
           <p role="alert" className="mt-4 text-bad">
             {error || record.error}
           </p>

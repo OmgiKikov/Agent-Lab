@@ -38,10 +38,11 @@ function ended(before: Job | null, job: Job): boolean {
 }
 
 /**
- * Quick saves whose screen says how they went — the upload, the datasets, the rules, the agent's card: neither a toast
- * nor this card repeats their failure beside the screen's own message.
+ * Quick work whose screen says how it went — the upload, the datasets, the rules, the agent's card, the model's
+ * suggestion in the sheet that asked for it: neither a toast nor this card repeats its result or its failure beside
+ * the screen's own, nor sends the person elsewhere for what is in front of them.
  */
-const SAID_ON_SCREEN = new Set(["logs", "datasets", "judge-rules", "agent-context"]);
+const SAID_ON_SCREEN = new Set(["logs", "datasets", "judge-rules", "agent-context", "tone-advice"]);
 
 /**
  * When the service's task ends: one notice with the way to its result, or the reason it failed. Mounted once for the

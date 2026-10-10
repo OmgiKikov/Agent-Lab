@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import { api } from "../../lab/api";
 import type { LabState, Probe, Target } from "../../lab/types";
 import { useLabState } from "../../lab/LabProvider";
+import { inQuotes } from "../../lab/quote";
 import { Button } from "../../ui/Button";
 import { Input } from "../../ui/Field";
 import { Label } from "../../ui/Label";
@@ -390,7 +391,7 @@ export function ConnectionForm({
               Отвечает{check.seconds ? ` · ${check.seconds.toFixed(1).replace(".", ",")} с` : ""}
               {check.version ? ` · версия ${check.version}` : ""}
             </p>
-            {check.question && <p className="text-fg-3">Вопрос: «{check.question}»</p>}
+            {check.question && <p className="text-fg-3">Вопрос: {inQuotes(check.question)}</p>}
             {check.text && <p className="border-l-2 border-fg-4/60 pl-3 text-fg-2">{check.text}</p>}
           </div>
         ) : (

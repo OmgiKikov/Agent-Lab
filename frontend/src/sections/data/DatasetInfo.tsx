@@ -5,6 +5,7 @@ import { datasetLink } from "../../app/links";
 import { datasetFacts, useDatasets, type Dataset } from "../../lab/datasets";
 import { count, fileSize, longDay, time } from "../../lab/format";
 import { useLabState } from "../../lab/LabProvider";
+import { inQuotes } from "../../lab/quote";
 import { Button } from "../../ui/Button";
 import { Input } from "../../ui/Field";
 import { Sheet } from "../../ui/Sheet";
@@ -151,11 +152,11 @@ export function DatasetInfo({
           ) : confirm ? (
             <div className="rounded-block bg-inset p-4">
               <p className="text-body text-fg-2">
-                «{shownName(d)}» уйдёт из выбора. Разговоры и сохранённые проверки останутся, вернуть его можно из
-                архива.
+                Датасет {inQuotes(shownName(d))} уйдёт из выбора. Разговоры и сохранённые проверки останутся, вернуть
+                его можно из архива.
                 {inWork &&
                   (next
-                    ? ` Обзор покажет «${shownName(next)}».`
+                    ? ` Обзор покажет датасет ${inQuotes(shownName(next))}.`
                     : " Других датасетов нет: Обзор будет пустым, пока вы не вернёте его или не загрузите новый.")}
               </p>
               <div className="mt-3 flex gap-2">

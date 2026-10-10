@@ -4,6 +4,9 @@ import { useLabState } from "../lab/LabProvider";
 
 type At = "done" | "now" | "later";
 
+/** Where a step stands, in words for those who do not see its tick or its ring (as StepCard on «Новая проверка»). */
+const SAID: Record<At, string> = { done: "готово", now: "сейчас", later: "потом" };
+
 /**
  * The way to the first check of tone of voice as one line: the conversations, the rules with their criteria, then the
  * check, each done ticked and the one the person is on in black. It shows wherever a newcomer may stand before the
@@ -48,6 +51,7 @@ export function FirstStepsLine({
               />
             )}
             {label}
+            <span className="sr-only"> — {SAID[at]}</span>
             {at === "now" && collecting && <span className="font-normal text-fg-3">· собираются</span>}
           </span>
         </li>

@@ -25,6 +25,7 @@ import { count, longDay, plural } from "../../lab/format";
 import { useJudges, type JudgeVersion } from "../../lab/judges";
 import { useLabState } from "../../lab/LabProvider";
 import { MODE_NAME, type Mode } from "../../lab/launches";
+import { inQuotes } from "../../lab/quote";
 import { codeSources } from "../../lab/tone";
 import type { Check } from "../../lab/types";
 import { Button, buttonClass } from "../../ui/Button";
@@ -392,7 +393,7 @@ export function LaunchPage({ check }: { check: Check }) {
   const why = state?.job.running ? "Сейчас идёт другая задача этого агента." : ready ? null : missing;
   const plan =
     dataset && conversations && rulesReady
-      ? `Проверим ${count(conversations, "разговор", "разговора", "разговоров")} из датасета «${shownName(dataset)}» ${
+      ? `Проверим ${count(conversations, "разговор", "разговора", "разговоров")} из датасета ${inQuotes(shownName(dataset))} ${
           rules
             ? `по ${subset ? `${subset.length} из ${criteria.length}` : criteria.length} ${plural(
                 subset ? subset.length : criteria.length,
@@ -570,8 +571,7 @@ export function LaunchPage({ check }: { check: Check }) {
               >
                 {!judges.data ? null : rules ? (
                   <>
-                    из правил «{rules.name}
-                    {versionWord(rules, versions)}» ·{" "}
+                    из правил {inQuotes(`${rules.name}${versionWord(rules, versions)}`)} ·{" "}
                     <Link to={criteriaPage} className="text-run hover:underline">
                       открыть
                     </Link>
@@ -711,7 +711,7 @@ export function LaunchPage({ check }: { check: Check }) {
             open={picking}
             onClose={() => setPicking(false)}
             title="Критерии проверки"
-            sub={rules ? `«${rules.name}»: отметьте, по каким проверить` : undefined}
+            sub={rules ? `${inQuotes(rules.name)}: отметьте, по каким проверить` : undefined}
             actions={
               subset ? (
                 <Button size="sm" onClick={() => setPicked(undefined)}>
