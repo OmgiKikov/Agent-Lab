@@ -281,7 +281,7 @@ class ChecksTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([entry['id'] for entry in history['checks']], [own['checkId']])
         self.assertFalse(history['hasLegacyResult'])
         proposal = {'text': 'Пожалуйста, ожидайте терминал завтра.', 'explanation': 'Вежливо.'}
-        request = {'finishedAt': own['finishedAt'], 'dialogueId': 'd1', 'ruleId': 'pronouns', 'mode': 'rewrite'}
+        request = {'finishedAt': own['finishedAt'], 'dialogueId': 'd1', 'ruleId': 'pronouns'}
         with patch.object(models, 'chat', AsyncMock(return_value=models.Reply(json.dumps(proposal), 'model-a'))):
             response = await self.client.post('/api/tone-of-voice/advice', json=request)
         self.assertEqual(response.status_code, 200, response.text)

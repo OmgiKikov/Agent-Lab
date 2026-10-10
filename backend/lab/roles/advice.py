@@ -1,6 +1,6 @@
-"""Help a person with an error tone of voice found: a rewrite of the agent's words in the tone the rules ask for, or a
-clarification of the criterion for a situation the person says is allowed. A suggestion, never a fix: the rules, the
-quote and the verdict stay as they are."""
+"""Help a person with what tone of voice found: a rewrite of the agent's words in the tone the rules ask for, or a
+clarification of a criterion the model reads otherwise than people do, from the cases they corrected it in. A
+suggestion, never a fix: the rules, the quotes and the verdicts stay as they are."""
 
 import re
 from collections import Counter
@@ -20,6 +20,7 @@ class Advice(BaseModel):
 
 
 ADVICE = Role('tone.advice', instructions('tone.advice'), Advice)
+CLARIFY = Role('tone.clarify', instructions('tone.clarify'), Advice)
 
 
 def protected(text: str) -> Counter:
@@ -27,18 +28,28 @@ def protected(text: str) -> Counter:
     return Counter(re.findall(r'https?://\S+|[\w.+-]+@[\w.-]+\.\w+|\d+(?:[.,:/-]\d+)*%?', text))
 
 
-async def suggest(evidence: dict, mode: str, note: str) -> Answer[dict]:
-    """{text, explanation}: a rewrite of evidence['targetExcerpt'] (mode rewrite), or a clarification of the criterion
-    by the person's note (mode clarify)."""
+def _usable(mode: str, reply: Advice) -> dict:
+    """The suggestion trimmed, when its text and explanation are of the lengths the screens take."""
+    lowest, highest = LIMITS[mode]
+    if not lowest <= len(reply.text.strip()) <= highest:
+        raise ValueError('Invalid suggestion text')
+    if not 1 <= len(reply.explanation.strip()) <= 2000:
+        raise ValueError('Invalid suggestion explanation')
+    return {'text': reply.text.strip(), 'explanation': reply.explanation.strip()}
+
+
+async def rewrite(evidence: dict) -> Answer[dict]:
+    """{text, explanation}: a rewrite of evidence['targetExcerpt'] that keeps its amounts, dates and contacts."""
 
     def usable(reply: Advice) -> dict:
-        lowest, highest = LIMITS[mode]
-        if not lowest <= len(reply.text.strip()) <= highest:
-            raise ValueError('Invalid suggestion text')
-        if not 1 <= len(reply.explanation.strip()) <= 2000:
-            raise ValueError('Invalid suggestion explanation')
-        if mode == 'rewrite' and protected(reply.text) != protected(evidence['targetExcerpt']):
+        if protected(reply.text) != protected(evidence['targetExcerpt']):
             raise ValueError('Предложение изменяет числа, даты или контакты исходного ответа.')
-        return {'text': reply.text.strip(), 'explanation': reply.explanation.strip()}
+        return _usable('rewrite', reply)
 
-    return await ask(ADVICE, {**evidence, 'mode': mode, 'humanNote': note}, accept=usable)
+    return await ask(ADVICE, evidence, accept=usable)
+
+
+async def clarify(evidence: dict, note: str) -> Answer[dict]:
+    """{text, explanation}: one clarification of evidence['criterion'] by which the judge would decide
+    evidence['cases'] as people did, with the person's note on what it gets wrong (empty without one)."""
+    return await ask(CLARIFY, {**evidence, 'humanNote': note}, accept=lambda reply: _usable('clarify', reply))

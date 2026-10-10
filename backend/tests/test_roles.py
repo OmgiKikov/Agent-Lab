@@ -144,7 +144,7 @@ class EachRoleTests(RoleCase):
         evidence = {'targetExcerpt': 'Оплатите 100 рублей до 5 октября.'}
         answer = await self.asked(
             advice.ADVICE,
-            lambda: advice.suggest(evidence, 'rewrite', ''),
+            lambda: advice.rewrite(evidence),
             {'text': 'Пожалуйста, оплатите 200 рублей до 5 октября.', 'explanation': 'Вежливее.'},
             {'text': 'Пожалуйста, оплатите 100 рублей до 5 октября.', 'explanation': 'Вежливее.'},
         )
@@ -248,9 +248,10 @@ class VersionTests(unittest.TestCase):
             customer.CUSTOMER,
             customer.OPENING,
             advice.ADVICE,
+            advice.CLARIFY,
         ]
-        self.assertEqual(len({role.name for role in every}), 11)
-        self.assertEqual(len({role.version for role in every}), 11)
+        self.assertEqual(len({role.name for role in every}), 12)
+        self.assertEqual(len({role.version for role in every}), 12)
         self.assertTrue(all(role.instructions.strip() and not role.instructions.endswith('\n') for role in every))
 
 

@@ -1,9 +1,9 @@
 """Tone of voice: the person's rules of communication (written, read from a file or taken from another agent), the
-criteria collected from them and clarified, the check of the conversations by them, its history and a suggestion on an
-error it found."""
+criteria collected from them and clarified, the check of the conversations by them, its history, and the model's
+suggestions: a better reply where it found an error, a clarification of a criterion people corrected it by."""
 
 import asyncio
-from typing import Literal
+from collections.abc import Awaitable, Callable
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -37,10 +37,19 @@ class ToneCheckCommand(BaseModel):
 
 
 class ToneAdviceCommand(BaseModel):
+    """«Как ответить правильно» on an error of the result the person saw (finishedAt)."""
+
     finishedAt: str = Field(min_length=1)
     dialogueId: str = Field(min_length=1)
     ruleId: str = Field(min_length=1)
-    mode: Literal['rewrite', 'clarify']
+
+
+class ToneClarifyCommand(BaseModel):
+    """«Уточнить критерий»: a clarification proposed from every case of the result the person saw (finishedAt) where
+    people corrected the model by the criterion, with the person's note on what it gets wrong (may be empty)."""
+
+    finishedAt: str = Field(min_length=1)
+    ruleId: str = Field(min_length=1)
     note: str = Field(default='', max_length=2000)
 
 
@@ -136,9 +145,20 @@ def tone_history_detail(check_id: str) -> dict:
 
 @router.post('/api/tone-of-voice/advice')
 async def tone_advice_command(jobs: Jobs, payload: ToneAdviceCommand) -> dict:
+    return await _proposed(jobs, lambda: advice.suggest(payload.finishedAt, payload.dialogueId, payload.ruleId))
+
+
+@router.post('/api/tone-of-voice/clarification/proposal')
+async def tone_clarification_proposal(jobs: Jobs, payload: ToneClarifyCommand) -> dict:
+    return await _proposed(jobs, lambda: advice.clarify(payload.finishedAt, payload.ruleId, payload.note))
+
+
+async def _proposed(jobs: Jobs, propose: Callable[[], Awaitable[dict]]) -> dict:
+    """A model's suggestion as one job: refused while other work runs, nothing kept when it is stopped."""
+
     async def work(progress: Progress) -> dict:
         progress(message='Готовим предложение')
-        return await advice.suggest(payload.finishedAt, payload.dialogueId, payload.ruleId, payload.mode, payload.note)
+        return await propose()
 
     try:
         return await jobs.perform('tone-advice', work)

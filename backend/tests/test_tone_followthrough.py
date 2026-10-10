@@ -9,6 +9,7 @@ from test_tone import POLICY
 
 from lab import models, storage
 from lab.domain.comparison import evaluation_fingerprint, fingerprint
+from lab.flows import advice as advising
 from lab.flows import answers as answering
 from lab.flows import checks as results_of
 from lab.flows import conversations, questions, simulation, tone
@@ -648,35 +649,115 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(note in data['expectations'][0]['text'] for data in seen))
         self.assertEqual(storage.history.lines('tone')[0]['comparison']['kind'], 'incompatible')
 
-    async def test_advice_is_grounded_optional_and_does_not_apply_changes(self):
-        result = await self.check()
-        draft = storage.documents.load(tone.DRAFT)
-        request = {'finishedAt': result['finishedAt'], 'dialogueId': 'd1', 'ruleId': 'pronouns', 'mode': 'clarify'}
-        proposal = {
-            'text': 'Допускается обращение на ты внутри прямой цитаты клиента.',
-            'explanation': 'Уточняет исключение.',
+    async def check_by(self, statuses: dict[str, str]) -> dict:
+        """A check whose judge gives each conversation its own verdict on every criterion (statuses by id)."""
+
+        async def judge(dialogue, topic):
+            return await judged(statuses[dialogue['id']])(dialogue, topic)
+
+        await self.start_check(judge, count=len(statuses))
+        self.assertIsNone(self.jobs.state['error'])
+        return results_of.current('tone')
+
+    def talk(self, n: int) -> dict:
+        return {
+            'id': f'c{n}',
+            'messages': [
+                {'role': 'user', 'content': f'Вопрос {n}: где мои документы?'},
+                {'role': 'assistant', 'content': f'Ответ {n}: пришли документы до 12 октября.'},
+            ],
         }
-        with patch.object(
-            models, 'chat', AsyncMock(return_value=models.Reply(json.dumps(proposal), 'model-a'))
-        ) as model:
-            response = await self.client.post('/api/tone-of-voice/advice', json={**request, 'note': '  '})
-            self.assertEqual(response.status_code, 400)
-            model.assert_not_awaited()
-            response = await self.client.post(
-                '/api/tone-of-voice/advice',
-                json={
-                    **request,
-                    'note': 'Здесь агент цитирует самого клиента.',
-                },
-            )
-            self.assertEqual(response.status_code, 200, response.text)
-            self.assertEqual(response.json(), proposal)
-            evidence = json.loads(model.call_args.args[1])
-            self.assertEqual(evidence['conversation'], self.dialogue['messages'])
-            self.assertEqual(evidence['targetExcerpt'], self.dialogue['messages'][1]['content'])
-            self.assertEqual(evidence['criterion']['quote'], draft['criteria'][0]['quote'])
+
+    async def test_a_clarification_is_proposed_from_every_case_people_corrected_and_changes_nothing(self):
+        """«Уточнить критерий» reads every case where people corrected the model by the criterion — an error it found
+        that is none, an error it missed — with the conversations the check showed the judge; nothing before the
+        first correction, and the rules, the criteria and the result stay as they are."""
+        await self.upload(self.talk(1), self.talk(2), self.talk(3))
+        result = await self.check_by({'c1': 'FAIL', 'c2': 'PASS', 'c3': 'FAIL'})
+        draft = storage.documents.load(tone.DRAFT)
+        request = {'finishedAt': result['finishedAt'], 'ruleId': 'pronouns'}
+        proposal = {
+            'text': 'Обращение на ты допустимо внутри прямой цитаты клиента.',
+            'explanation': 'Покрывает оба случая, где вы поправили модель.',
+        }
+        reply = AsyncMock(return_value=models.Reply(json.dumps(proposal), 'model-a'))
+        with patch.object(models, 'chat', reply):
+            response = await self.client.post('/api/tone-of-voice/clarification/proposal', json=request)
+            self.assertEqual((response.status_code, response.json()['detail']), (400, advising.NONE_CORRECTED))
+            reply.assert_not_awaited()
+            await self.answer(result, 'pronouns', 'agree', 'c1')
+            await self.answer(result, 'pronouns', 'disagree', 'c2')
+            await self.answer(result, 'pronouns', 'disagree', 'c3')
+            await self.answer(result, 'simple_language', 'disagree', 'c1')
+            answered = results_of.current('tone')
+            response = await self.client.post('/api/tone-of-voice/clarification/proposal', json=request)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), proposal)
+        evidence = json.loads(reply.call_args.args[1])
+        self.assertEqual(evidence['criterion']['id'], 'pronouns')
+        self.assertEqual(evidence['humanNote'], '')
+        self.assertEqual(
+            [(case['judged'], case['conversation']) for case in evidence['cases']],
+            [('FAIL', self.talk(3)['messages']), ('PASS', self.talk(2)['messages'])],
+        )
+        self.assertEqual(evidence['cases'][0]['agentQuote'], self.talk(3)['messages'][1]['content'])
         self.assertEqual(storage.documents.load(tone.DRAFT), draft)
-        self.assertEqual(storage.documents.load(tone.RESULT), result)
+        self.assertEqual(results_of.current('tone'), answered)
+
+    async def test_a_criterion_clarified_since_waits_for_the_next_check_and_leaves_the_others_open(self):
+        """A clarification saved for one criterion: the others are still clarified and asked about on the same result,
+        as the check read them; that one waits for the next check, which reads it with the clarification."""
+        await self.upload(self.talk(1), self.talk(2))
+        result = await self.check_by({'c1': 'FAIL', 'c2': 'FAIL'})
+        for rule_id in ('pronouns', 'simple_language'):
+            await self.answer(result, rule_id, 'disagree', 'c1')
+        revision = storage.documents.load(tone.DRAFT)['revision']
+        saved = await self.client.post(
+            '/api/tone-of-voice/clarification',
+            json={'revision': revision, 'ruleId': 'simple_language', 'text': 'Короткий ответ без точки допустим.'},
+        )
+        self.assertEqual(saved.status_code, 200, saved.text)
+        proposal = {'text': 'Цитата клиента не нарушает критерий.', 'explanation': 'Один случай.'}
+        reply = AsyncMock(return_value=models.Reply(json.dumps(proposal), 'model-a'))
+        asked = {'finishedAt': result['finishedAt']}
+        with patch.object(models, 'chat', reply):
+            other = await self.client.post(
+                '/api/tone-of-voice/clarification/proposal', json=asked | {'ruleId': 'pronouns'}
+            )
+            same = await self.client.post(
+                '/api/tone-of-voice/clarification/proposal', json=asked | {'ruleId': 'simple_language'}
+            )
+            rewrite = await self.client.post(
+                '/api/tone-of-voice/advice', json=asked | {'dialogueId': 'c1', 'ruleId': 'simple_language'}
+            )
+        self.assertEqual(other.status_code, 200, other.text)
+        self.assertEqual((same.status_code, rewrite.status_code), (400, 400))
+        self.assertEqual(
+            same.json()['detail'], 'Критерий изменился после этой проверки: следующая проверка прочитает его по-новому.'
+        )
+        self.assertEqual(reply.await_count, 1)
+
+    async def test_a_clarification_reads_at_most_ten_cases_the_two_kinds_in_turn(self):
+        talks = [self.talk(n) for n in range(1, 15)]
+        await self.upload(*talks)
+        statuses = {talk['id']: 'FAIL' if n <= 11 else 'PASS' for n, talk in enumerate(talks, 1)}
+        result = await self.check_by(statuses)
+        for talk in talks:
+            await self.answer(result, 'pronouns', 'disagree', talk['id'])
+        proposal = {'text': 'Цитата клиента не нарушает критерий.', 'explanation': 'По всем случаям.'}
+        reply = AsyncMock(return_value=models.Reply(json.dumps(proposal), 'model-a'))
+        with patch.object(models, 'chat', reply):
+            response = await self.client.post(
+                '/api/tone-of-voice/clarification/proposal',
+                json={'finishedAt': result['finishedAt'], 'ruleId': 'pronouns', 'note': ' Модель путает цитату. '},
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        evidence = json.loads(reply.call_args.args[1])
+        self.assertEqual(evidence['humanNote'], 'Модель путает цитату.')
+        self.assertEqual(
+            [case['judged'] for case in evidence['cases']],
+            ['FAIL', 'PASS', 'FAIL', 'PASS', 'FAIL', 'PASS', 'FAIL', 'FAIL', 'FAIL', 'FAIL'],
+        )
 
     async def test_advice_reads_a_reply_as_the_judge_saw_it(self):
         """A reply with an export control code: the error the judge found by the agent's words gets its suggestion,
@@ -708,7 +789,7 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         result = storage.documents.load(tone.RESULT)
         self.assertEqual(result['results'][0]['rules'][0]['status'], 'FAIL')
         proposal = {'text': 'Выберите способ оплаты и нажмите «Далее».', 'explanation': 'Короче.'}
-        request = {'finishedAt': result['finishedAt'], 'dialogueId': 'd1', 'ruleId': 'pronouns', 'mode': 'rewrite'}
+        request = {'finishedAt': result['finishedAt'], 'dialogueId': 'd1', 'ruleId': 'pronouns'}
         with patch.object(
             models, 'chat', AsyncMock(return_value=models.Reply(json.dumps(proposal), 'model-a'))
         ) as advice:
@@ -727,8 +808,11 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
                     'finishedAt': 'stale',
                     'dialogueId': 'd1',
                     'ruleId': 'pronouns',
-                    'mode': 'rewrite',
                 },
+            )
+            self.assertEqual(response.status_code, 400)
+            response = await self.client.post(
+                '/api/tone-of-voice/clarification/proposal', json={'finishedAt': 'stale', 'ruleId': 'pronouns'}
             )
             self.assertEqual(response.status_code, 400)
             response = await self.client.post(
@@ -751,7 +835,6 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
             'finishedAt': result['finishedAt'],
             'dialogueId': 'd1',
             'ruleId': 'pronouns',
-            'mode': 'rewrite',
         }
         for text, status in (
             ('Пришлите, пожалуйста, документы до 15 октября.', 502),
@@ -813,7 +896,6 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
                         'finishedAt': result['finishedAt'],
                         'dialogueId': 'd1',
                         'ruleId': 'pronouns',
-                        'mode': 'rewrite',
                     },
                 )
             )
