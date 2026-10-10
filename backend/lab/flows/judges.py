@@ -73,11 +73,11 @@ def activate(kind: str, version_id: str | None) -> dict:
 
 def _judged_alike(draft: dict, criteria: list[dict], source: dict) -> bool:
     """Whether the judge reads these criteria of these rules (source) as it reads the ones in force (draft): names
-    aside (domain.tone.criteria_fingerprint)."""
+    aside (domain.tone.read_alike)."""
     return (
         isinstance(draft.get('criteria'), list)
         and draft.get('sourceSha256') == source['sha256']
-        and tone.criteria_fingerprint(draft['criteria'], source) == tone.criteria_fingerprint(criteria, source)
+        and tone.read_alike(draft['criteria'], criteria)
     )
 
 

@@ -11,7 +11,7 @@ from lab import models, storage
 from lab.domain.comparison import evaluation_fingerprint, fingerprint
 from lab.flows import answers as answering
 from lab.flows import checks as results_of
-from lab.flows import conversations, simulation, tone
+from lab.flows import conversations, questions, simulation, tone
 from lab.flows import scenarios as cards
 from lab.roles import judge as judging
 
@@ -505,6 +505,15 @@ class ToneFollowthroughTests(unittest.IsolatedAsyncioTestCase):
         await self.save_rules(edited)
         self.assertIsNone((await self.client.get('/api/state')).json()['checks']['tone'])
         self.assertEqual(len(storage.history.lines('tone')), 2)
+
+    async def test_a_renamed_criterion_keeps_the_recorded_answers_the_baseline_of_the_live_questions(self):
+        """The live agent's new answers are compared with the recorded ones judged by the same criteria: a criterion
+        only renamed since reads the same to the judge, so the kept «Итог» stays their baseline."""
+        first = await self.check()
+        criteria = (await self.client.get('/api/judges/tone')).json()['versions'][-1]['criteria']
+        await self.save_rules([rule | {'name': 'Новое имя'} if rule['id'] == 'pronouns' else rule for rule in criteria])
+        record = await questions._new('tone', 'prod', 1, lambda **_: None, 'after-the-rename')
+        self.assertEqual(record['items'][0]['baseline']['status'], first['results'][0]['status'])
 
     async def test_a_check_judged_by_the_previous_instructions_is_not_compared_with_the_next(self):
         """The judge reads a criterion without its name and its instructions say so: another version of the judge, so

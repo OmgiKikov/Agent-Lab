@@ -146,9 +146,18 @@ def judged(snapshot: dict) -> tuple[dict, dict, dict]:
 
 
 def criteria_fingerprint(criteria: list[dict], source: dict) -> str:
-    """What the judge reads of these criteria (for_judging), in whatever order, and the rules they come from."""
-    read = sorted(map(for_judging, criteria), key=lambda rule: rule['id'])
-    return fingerprint({'source': source['sha256'], 'criteria': read})
+    """What the judge reads of these criteria (read_alike), and the rules they come from."""
+    return fingerprint({'source': source['sha256'], 'criteria': _read(criteria)})
+
+
+def read_alike(criteria: list[dict], others: list[dict]) -> bool:
+    """Whether the judge reads these criteria as it reads the others (for_judging), whatever their names and order:
+    a criterion renamed is the same criterion."""
+    return _read(criteria) == _read(others)
+
+
+def _read(criteria: list[dict]) -> list[dict]:
+    return sorted(map(for_judging, criteria), key=lambda rule: rule['id'])
 
 
 def named(result: dict, criteria: list[dict]) -> dict:
