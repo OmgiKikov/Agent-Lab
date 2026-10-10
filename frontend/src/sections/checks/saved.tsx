@@ -113,12 +113,19 @@ export function useSaved(check: Check, id: string | null) {
 
 const empty = (): Side => ({ failed: 0, passed: 0, unknown: 0, notApplicable: 0, examples: [], ruleIds: [] });
 /**
- * How a verdict ranks when several rules of one criterion judged a conversation: an error, then «без ошибки», then
- * not decided. A criterion that did not apply there has no verdict.
+ * How a verdict ranks: an error, then «без ошибки», then not decided — the one that stands for a conversation when
+ * several rules of one criterion judged it, and the order a criterion's examples are listed in. A criterion that did
+ * not apply in a conversation has no verdict there.
  */
 const RANK: Record<string, number> = { FAIL: 0, PASS: 1, UNKNOWN: 2 };
 /** A conversation the check counts as checked: an error found, or every criterion that applied decided. */
 const counted = (result: LogResult) => result.status === "PASS" || result.status === "FAIL";
+/**
+ * How well an error is backed, as the service orders a criterion's errors (backend domain/problems, reliability):
+ * confirmed by a person, both models agree, nobody answered, the models split, refuted by a person.
+ */
+const backing = (e: Example) =>
+  e.review === "disagree" ? 4 : e.review === "agree" ? 0 : e.second === "agree" ? 1 : e.second === "disagree" ? 3 : 2;
 
 /**
  * The customer's words a quoted reply answered, for an error saved without them: the customer's message right before
@@ -187,16 +194,27 @@ function savedCriteria(saved: Saved, check: Check): Criterion[] {
         secondScope: null,
         review: rule.review ?? null,
         reviewScope: rule.review ? "rule" : null,
+        counted: counted(result),
       };
       side.examples.push(example);
     }
   }
   return saved.criteria.map((criterion, i) => {
     const side = { ...sides[i], notApplicable: checked - sides[i].failed - sides[i].passed - sides[i].unknown };
+    const title = [...titles[i]].sort((a, b) => b[1] - a[1])[0]?.[0];
+    // In the service's order (domain/problems, verdicts and finish): first the errors the problem's most frequent title
+    // names and nobody refuted, then the errors by how well they are backed, then «без ошибки», then not decided.
+    const leads = (e: Example) => e.status === "FAIL" && e.title === title && e.review !== "disagree";
+    side.examples.sort(
+      (a, b) =>
+        Number(leads(b)) - Number(leads(a)) ||
+        RANK[a.status] - RANK[b.status] ||
+        (a.status === "FAIL" ? backing(a) - backing(b) : 0),
+    );
     const answered = side.examples.filter((e) => e.review);
     const r = {
       id: criterion.id,
-      title: [...titles[i]].sort((a, b) => b[1] - a[1])[0]?.[0] ?? criterion.name,
+      title: title ?? criterion.name,
       serious: false,
       severity: { by: null, proposed: null },
       rule: {
